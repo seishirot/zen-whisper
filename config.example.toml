@@ -1,0 +1,93 @@
+[hotkey]
+# Key combinations for toggling recording (string or list)
+# "win" is automatically interpreted as "cmd" on macOS
+toggle = ["shift+space"]
+# Key combination for switching language
+switch_lang = "shift+alt+space"
+
+[recognition]
+# Language for transcription ("ja", "en", etc.)
+language = "ja"
+# Engine: "whisper", "reazon-k2", or "qwen3-asr"
+engine = "whisper"
+# Whisper model size (e.g., "large-v3-turbo", "medium", "small", "base", "tiny")
+model_size = "large-v3-turbo"
+# Compute type ("float16", "int8", etc.)
+compute_type = "float16"
+beam_size = 5
+# CPU threads for faster-whisper when device resolves to CPU
+cpu_threads = 4
+model_load_timeout_sec = 300
+# ReazonSpeech K2 fast mode (requires: uv sync --extra reazon)
+reazon_language = "ja"
+reazon_precision = "fp32"
+reazon_chunk_sec = 25.0
+reazon_trailing_silence_sec = 0.5
+# Qwen3-ASR model name (requires: uv sync --extra qwen3)
+# Windows/Transformers バックエンドでの参考 RTF (CUDA GPU, bf16, sdpa, 19.6秒の合成音声):
+# "Qwen/Qwen3-ASR-1.7B" - 高精度・既定 (RTF ~0.30)
+# "Qwen/Qwen3-ASR-0.6B" - 1.7B とほぼ同速 (RTF ~0.28)。音声エンコードが支配的で大差なし
+# ※ 速度重視なら whisper エンジン (faster-whisper, RTF ~0.035) の方が約9倍高速
+# ※ さらなる高速化には vLLM バックエンドが必要だが Linux/WSL2 のみ対応
+# qwen3_model = "Qwen/Qwen3-ASR-1.7B"
+# Max tokens to generate (shorter = faster, 128 is enough for typical voice input)
+# qwen3_max_new_tokens = 128
+# Attention implementation: "auto" (FA2 があれば使用、無ければ sdpa) / "sdpa" / "flash_attention_2" / "eager"
+# qwen3_attn_implementation = "auto"
+# Enable torch.compile() for faster inference. triton 必須のため Windows では無効 (Linux/WSL2 のみ)
+# qwen3_torch_compile = false
+# Whisper device: "cuda" (Windows GPU), "cpu" (Windows CPU), or "mlx" (macOS)
+# The app default is "cuda" on Windows and "mlx" on macOS when omitted.
+# device = "cuda"
+# Hallucination suppression: skip hallucinated text after silence (seconds)
+hallucination_silence_threshold = 2.0
+# Threshold for "no speech" probability (0.0-1.0)
+no_speech_threshold = 0.6
+# Use previous segment text for next inference (false to prevent hallucination chains)
+condition_on_previous_text = false
+
+[recording]
+# Microphone device name (empty string = system default).
+# You can also select this from the tray menu. If the selected mic disappears,
+# ZenWhisper keeps this value and falls back to the system default at runtime.
+microphone = ""
+# App-internal ASR/VAD processing rate. Current ASR backends require 16kHz.
+# Devices that need 48kHz are opened at their stream rate and resampled to this.
+sample_rate = 16000
+# Stop recording after this many seconds of silence
+vad_silence_threshold_sec = 10.0
+# Minimum recording duration (seconds)
+min_recording_sec = 0.5
+# Discard near-silent recordings before ASR to prevent silence hallucinations
+min_audio_rms = 0.001
+min_audio_peak = 0.01
+# Maximum recording duration (seconds)
+max_recording_sec = 300.0
+max_recording_warning_pct = 80
+
+[output]
+# Restore clipboard contents after pasting
+restore_clipboard = false
+# Delay before pasting (milliseconds)
+paste_delay_ms = 100
+
+[feedback]
+sound_enabled = true
+# Sound type: "tone" (generated sine wave) or "custom" (file playback)
+sound_type = "tone"
+volume = 0.3
+# Custom sound files (used when sound_type = "custom")
+# Place your own audio files in assets/ directory
+custom_start_sound = "assets/start.flac"
+custom_stop_sound = "assets/stop.flac"
+
+[overlay]
+enabled = true
+# Position: "bottom-center", "top-center", "bottom-left", etc.
+position = "bottom-center"
+size = 48
+
+[logging]
+# Log level: "DEBUG", "INFO", "WARNING", "ERROR"
+level = "INFO"
+file = "zen-whisper.log"

@@ -1,0 +1,83 @@
+[project]
+name = "zen-whisper"
+version = "1.0.0"
+description = "Fully local voice-to-text input tool powered by Whisper"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "seishirot", email = "217049440+seishirot@users.noreply.github.com" },
+]
+requires-python = ">=3.11"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: MacOS",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "silero-vad>=5.1",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+    "pynput>=1.7.6",
+    "pyperclip>=1.8",
+    "pyautogui>=0.9.54",
+    "pystray>=0.19",
+    "Pillow>=10.0",
+    "scipy>=1.11",
+    "soundfile>=0.12",
+    "tomli-w>=1.0.0",
+    # Windows 専用
+    "faster-whisper>=1.0.0; sys_platform == 'win32'",
+    "nvidia-cublas-cu12>=12.4; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9.1; sys_platform == 'win32'",
+    "pywin32>=306; sys_platform == 'win32'",
+    # Mac 専用
+    "mlx-whisper>=0.4; sys_platform == 'darwin'",
+    "pyobjc-framework-Cocoa>=10.0; sys_platform == 'darwin'",
+    "pyobjc-framework-Quartz>=10.0; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+qwen3 = [
+    "qwen-asr>=0.0.6",
+    "torch>=2.0",
+]
+reazon = [
+    "reazonspeech-k2-asr",
+    # 1.13.2 Windows cp313 wheels currently require a newer ORT C API than onnxruntime 1.23.
+    "sherpa-onnx==1.13.1",
+    "sherpa-onnx-core==1.13.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/seishirot/zen-whisper"
+Repository = "https://github.com/seishirot/zen-whisper"
+Issues = "https://github.com/seishirot/zen-whisper/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[project.gui-scripts]
+zen-whisper = "src.main:main"
+
+[tool.uv]
+find-links = ["https://download.pytorch.org/whl/cu126"]
+
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }
+reazonspeech-k2-asr = { git = "https://github.com/reazon-research/ReazonSpeech", rev = "2d4d4762e7ee294ac8e47a177ac2e9b0e8d0d43f", subdirectory = "pkg/k2-asr" }
