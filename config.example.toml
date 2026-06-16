@@ -48,6 +48,7 @@ no_speech_threshold = 0.6
 condition_on_previous_text = false
 
 [recording]
+# Recording VAD uses a bundled Silero ONNX model through sherpa-onnx; Windows plain uv sync does not require PyTorch.
 # Microphone device name (empty string = system default).
 # You can also select this from the tray menu. If the selected mic disappears,
 # ZenWhisper keeps this value and falls back to the system default at runtime.

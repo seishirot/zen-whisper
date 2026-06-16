@@ -16,7 +16,6 @@ classifiers = [
     "Topic :: Utilities",
 ]
 dependencies = [
-    "silero-vad>=5.1",
     "sounddevice>=0.4.6",
     "numpy>=1.24",
     "pynput>=1.7.6",
@@ -27,8 +26,9 @@ dependencies = [
     "scipy>=1.11",
     "soundfile>=0.12",
     "tomli-w>=1.0.0",
-    "torch>=2.10,<2.11",
-    "torchaudio>=2.10,<2.11",
+    # VAD and Reazon use the validated sherpa-onnx pair.
+    "sherpa-onnx==1.13.1",
+    "sherpa-onnx-core==1.13.1",
     # Windows 専用
     "faster-whisper>=1.0.0; sys_platform == 'win32'",
     "pywin32>=306; sys_platform == 'win32'",
@@ -55,9 +55,6 @@ cuda = [
 ]
 reazon = [
     "reazonspeech-k2-asr",
-    # 1.13.2 Windows cp313 wheels currently require a newer ORT C API than onnxruntime 1.23.
-    "sherpa-onnx==1.13.1",
-    "sherpa-onnx-core==1.13.1",
 ]
 
 [project.urls]
@@ -76,6 +73,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
+force-include = { "assets/vad" = "assets/vad" }
 
 [project.gui-scripts]
 zen-whisper = "src.main:main"

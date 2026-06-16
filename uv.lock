@@ -361,7 +361,7 @@ name = "coloredlogs"
 version = "15.0.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "humanfriendly" },
+    { name = "humanfriendly", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/cc/c7/eed8f27100517e8c0e6b923d5f0845d0cb99763da6fdee00478f91db7325/coloredlogs-15.0.1.tar.gz", hash = "sha256:7c991aa71a4577af2f82600d8f8f3a89f936baeaf9b50a9c197da014e5bf16b0", size = 278520, upload-time = "2021-06-11T10:22:45.202Z" }
 wheels = [
@@ -1235,12 +1235,9 @@ name = "nvidia-cuda-cupti-cu12"
 version = "12.8.90"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/d5/1f/b3bd73445e5cb342727fd24fe1f7b748f690b460acadc27ea22f904502c8/nvidia_cuda_cupti_cu12-12.8.90-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:4412396548808ddfed3f17a467b104ba7751e6b58678a4b840675c56d21cf7ed", size = 9533318, upload-time = "2025-03-07T01:40:10.421Z" },
@@ -1268,12 +1265,9 @@ name = "nvidia-cuda-nvrtc-cu12"
 version = "12.8.93"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/05/6b/32f747947df2da6994e999492ab306a903659555dddc0fbdeb9d71f75e52/nvidia_cuda_nvrtc_cu12-12.8.93-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:a7756528852ef889772a84c6cd89d41dfa74667e24cca16bb31f8f061e3e9994", size = 88040029, upload-time = "2025-03-07T01:42:13.562Z" },
@@ -1303,12 +1297,9 @@ name = "nvidia-cuda-runtime-cu12"
 version = "12.8.90"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7c/75/f865a3b236e4647605ea34cc450900854ba123834a5f1598e160b9530c3a/nvidia_cuda_runtime_cu12-12.8.90-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:52bf7bbee900262ffefe5e9d5a2a69a30d97e2bc5bb6cc866688caa976966e3d", size = 965265, upload-time = "2025-03-07T01:39:43.533Z" },
@@ -1355,12 +1346,9 @@ name = "nvidia-cufft-cu12"
 version = "11.3.3.83"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
     { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'emscripten' and extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
@@ -1390,12 +1378,9 @@ name = "nvidia-cufile-cu12"
 version = "1.13.1.3"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/bb/fe/1bcba1dfbfb8d01be8d93f07bfc502c93fa23afa6fd5ab3fc7c1df71038a/nvidia_cufile_cu12-1.13.1.3-py3-none-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:1d069003be650e131b21c932ec3d8969c1715379251f8d23a1860554b1cb24fc", size = 1197834, upload-time = "2025-03-07T01:45:50.723Z" },
@@ -1424,12 +1409,9 @@ name = "nvidia-curand-cu12"
 version = "10.3.9.90"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/45/5e/92aa15eca622a388b80fbf8375d4760738df6285b1e92c43d37390a33a9a/nvidia_curand_cu12-10.3.9.90-py3-none-manylinux_2_27_aarch64.whl", hash = "sha256:dfab99248034673b779bc6decafdc3404a8a6f502462201f2f31f11354204acd", size = 63625754, upload-time = "2025-03-07T01:46:10.735Z" },
@@ -1464,12 +1446,9 @@ name = "nvidia-cusolver-cu12"
 version = "11.7.3.90"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
     { name = "nvidia-cublas-cu12", version = "12.8.4.1", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'emscripten' and extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
@@ -1507,12 +1486,9 @@ name = "nvidia-cusparse-cu12"
 version = "12.5.8.93"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 dependencies = [
     { name = "nvidia-nvjitlink-cu12", version = "12.8.93", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'emscripten' and extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
@@ -1562,12 +1538,9 @@ name = "nvidia-nvjitlink-cu12"
 version = "12.8.93"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f6/74/86a07f1d0f42998ca31312f998bd3b9a7eff7f52378f4f270c8679c77fb9/nvidia_nvjitlink_cu12-12.8.93-py3-none-manylinux2010_x86_64.manylinux_2_12_x86_64.whl", hash = "sha256:81ff63371a7ebd6e6451970684f916be2eab07321b73c9d244dc2b4da7f73b88", size = 39254836, upload-time = "2025-03-07T01:49:55.661Z" },
@@ -1606,12 +1579,9 @@ name = "nvidia-nvtx-cu12"
 version = "12.8.90"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/10/c0/1b303feea90d296f6176f32a2a70b5ef230f9bdeb3a72bddb0dc922dc137/nvidia_nvtx_cu12-12.8.90-py3-none-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d7ad891da111ebafbf7e015d34879f7112832fc239ff0d7d776b6cb685274615", size = 91161, upload-time = "2025-03-07T01:42:23.922Z" },
@@ -1624,12 +1594,12 @@ name = "onnxruntime"
 version = "1.23.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "coloredlogs" },
-    { name = "flatbuffers" },
-    { name = "numpy" },
-    { name = "packaging" },
-    { name = "protobuf" },
-    { name = "sympy" },
+    { name = "coloredlogs", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
+    { name = "flatbuffers", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
+    { name = "numpy", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
+    { name = "packaging", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
+    { name = "protobuf", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
+    { name = "sympy", marker = "sys_platform == 'win32' or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3') or (extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/44/be/467b00f09061572f022ffd17e49e49e5a7a789056bad95b54dfd3bee73ff/onnxruntime-1.23.2-cp311-cp311-macosx_13_0_arm64.whl", hash = "sha256:6f91d2c9b0965e86827a5ba01531d5b669770b01775b23199565d6c1f136616c", size = 17196113, upload-time = "2025-10-22T03:47:33.526Z" },
@@ -2654,23 +2624,6 @@ wheels = [
 ]
 
 [[package]]
-name = "silero-vad"
-version = "6.2.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "onnxruntime" },
-    { name = "packaging" },
-    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'win32' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
-    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "(sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
-    { name = "torchaudio", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'win32' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
-    { name = "torchaudio", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "(sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/00/4d/0a03f56a4946114c8fa25bd66cafe75bd5807fb73c3bfad2a7603597c4d1/silero_vad-6.2.0.tar.gz", hash = "sha256:27f90e994bc57fdf3d0d1a25f70f65d81854c11974a4f911f7e61792e7a893fd", size = 14569087, upload-time = "2025-11-06T08:39:09.333Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/9e/76/12cbd574562511a8914731436b6c584112186bb6bf149e9f952af4940146/silero_vad-6.2.0-py3-none-any.whl", hash = "sha256:8a31f1e58e73cdc20820d842f757e678e0ae1b0ee1cb7b8aa50f20f8fd7f7638", size = 6118499, upload-time = "2025-11-06T08:39:07.856Z" },
-]
-
-[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3040,24 +2993,12 @@ name = "torchaudio"
 version = "2.10.0"
 source = { registry = "https://pypi.org/simple" }
 resolution-markers = [
-    "python_full_version >= '3.13' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'linux' and sys_platform != 'win32' and extra != 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and sys_platform == 'emscripten' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform == 'emscripten' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32' and extra == 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version >= '3.13' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version == '3.12.*' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
-    "python_full_version < '3.12' and extra != 'extra-11-zen-whisper-qwen3' and extra != 'extra-11-zen-whisper-qwen3-cuda'",
+    "python_full_version >= '3.13' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform != 'linux' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'linux' and sys_platform != 'win32'",
 ]
 dependencies = [
-    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'win32' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
+    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "sys_platform != 'linux' and sys_platform != 'win32'" },
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/5c/e7/401fe1d024bf9352371d854be6f339ad9928669e6bc8a5ba08e9dbce81cf/torchaudio-2.10.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:bcab0e39eb18da84cba1a0c87f600abb6ce97c882200cb46e841caea106f037f", size = 736373, upload-time = "2026-01-21T16:28:41.589Z" },
@@ -3088,7 +3029,7 @@ resolution-markers = [
     "(python_full_version < '3.12' and sys_platform == 'linux') or (python_full_version < '3.12' and sys_platform == 'win32')",
 ]
 dependencies = [
-    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "(sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
+    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
 ]
 wheels = [
     { url = "https://download-r2.pytorch.org/whl/cu126/torchaudio-2.10.0%2Bcu126-cp311-cp311-manylinux_2_28_aarch64.whl", hash = "sha256:8c00808970e3270893092d6712c2377f17fff95923b53be17a5a570b83bf44ae", upload-time = "2026-01-21T15:05:46Z" },
@@ -3249,14 +3190,11 @@ dependencies = [
     { name = "pystray" },
     { name = "pywin32", marker = "sys_platform == 'win32' or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
     { name = "scipy" },
-    { name = "silero-vad" },
+    { name = "sherpa-onnx" },
+    { name = "sherpa-onnx-core" },
     { name = "sounddevice" },
     { name = "soundfile" },
     { name = "tomli-w" },
-    { name = "torch", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'win32' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
-    { name = "torch", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "(sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
-    { name = "torchaudio", version = "2.10.0", source = { registry = "https://pypi.org/simple" }, marker = "(sys_platform != 'linux' and sys_platform != 'win32') or (sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'linux' and extra != 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3') or (sys_platform == 'win32' and extra != 'extra-11-zen-whisper-qwen3-cuda')" },
-    { name = "torchaudio", version = "2.10.0+cu126", source = { registry = "https://download.pytorch.org/whl/cu126" }, marker = "(sys_platform == 'linux' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (sys_platform == 'win32' and extra == 'extra-11-zen-whisper-qwen3-cuda') or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },
 ]
 
 [package.optional-dependencies]
@@ -3278,8 +3216,6 @@ qwen3-cuda = [
 ]
 reazon = [
     { name = "reazonspeech-k2-asr" },
-    { name = "sherpa-onnx" },
-    { name = "sherpa-onnx-core" },
 ]
 
 [package.dev-dependencies]
@@ -3306,17 +3242,14 @@ requires-dist = [
     { name = "qwen-asr", marker = "extra == 'qwen3-cuda'", specifier = ">=0.0.6" },
     { name = "reazonspeech-k2-asr", marker = "extra == 'reazon'", git = "https://github.com/reazon-research/ReazonSpeech?subdirectory=pkg%2Fk2-asr&rev=2d4d4762e7ee294ac8e47a177ac2e9b0e8d0d43f" },
     { name = "scipy", specifier = ">=1.11" },
-    { name = "sherpa-onnx", marker = "extra == 'reazon'", specifier = "==1.13.1" },
-    { name = "sherpa-onnx-core", marker = "extra == 'reazon'", specifier = "==1.13.1" },
-    { name = "silero-vad", specifier = ">=5.1" },
+    { name = "sherpa-onnx", specifier = "==1.13.1" },
+    { name = "sherpa-onnx-core", specifier = "==1.13.1" },
     { name = "sounddevice", specifier = ">=0.4.6" },
     { name = "soundfile", specifier = ">=0.12" },
     { name = "tomli-w", specifier = ">=1.0.0" },
-    { name = "torch", specifier = ">=2.10,<2.11" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'qwen3-cuda') or (sys_platform == 'win32' and extra == 'qwen3-cuda')", specifier = ">=2.10,<2.11", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "zen-whisper", extra = "qwen3-cuda" } },
     { name = "torch", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'qwen3-cuda'", specifier = ">=2.10,<2.11" },
     { name = "torch", marker = "extra == 'qwen3'", specifier = ">=2.10,<2.11" },
-    { name = "torchaudio", specifier = ">=2.10,<2.11" },
     { name = "torchaudio", marker = "(sys_platform == 'linux' and extra == 'qwen3-cuda') or (sys_platform == 'win32' and extra == 'qwen3-cuda')", specifier = ">=2.10,<2.11", index = "https://download.pytorch.org/whl/cu126", conflict = { package = "zen-whisper", extra = "qwen3-cuda" } },
     { name = "torchaudio", marker = "sys_platform != 'linux' and sys_platform != 'win32' and extra == 'qwen3-cuda'", specifier = ">=2.10,<2.11" },
 ]

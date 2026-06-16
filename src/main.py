@@ -6,7 +6,7 @@ import os
 import sys
 
 # pythonw.exe (GUI モード) では sys.stdout/stderr が None になる。
-# torch.hub 等が sys.stderr.write() を呼ぶためクラッシュを防止する。
+# 一部ライブラリが sys.stderr.write() を呼ぶためクラッシュを防止する。
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:

@@ -1,4 +1,4 @@
-"""録音 + VAD モジュール。sounddevice で録音し、silero-vad で無音検知する。"""
+"""録音 + VAD モジュール。sounddevice で録音し、sherpa-onnx VAD で無音検知する。"""
 
 from __future__ import annotations
 
@@ -6,47 +6,83 @@ import logging
 import math
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
 from threading import Event, Lock
 
 import numpy as np
 import sounddevice as sd
-import torch
 from scipy.signal import resample_poly
 
 from src.audio_devices import list_input_devices, resolve_input_device
-from src.config import RecordingConfig
+from src.config import ASR_SAMPLE_RATE, RecordingConfig
 
 logger = logging.getLogger(__name__)
 
-# silero-vad のチャンクサイズ（512 samples @ 16kHz = 32ms）
-_VAD_CHUNK_SAMPLES = 512
+_ROOT_DIR = Path(__file__).resolve().parent.parent
+_VAD_MODEL_PATH = _ROOT_DIR / "assets" / "vad" / "silero_vad_16k_op15.onnx"
+
+# Silero VAD config. sherpa-onnx reports the actual runtime window via window_size().
+_VAD_CONFIG_WINDOW_SAMPLES = 512
+_VAD_THRESHOLD = 0.5
+_VAD_MIN_SILENCE_DURATION_SEC = 0.5
+_VAD_MIN_SPEECH_DURATION_SEC = 0.25
 _LEADING_SILENCE_PAD_SEC = 0.3
 _TRAILING_SILENCE_PAD_SEC = 0.5
 
 # VAD モデルキャッシュ（初回ロード後は再利用）
 _vad_cache_lock = Lock()
 _vad_model = None
-_vad_utils = None
+_vad_sample_rate: int | None = None
 
 
-def _get_vad_model_and_utils():
-    """VAD モデルとユーティリティをキャッシュ付きで取得する。"""
-    global _vad_model, _vad_utils
+@dataclass(frozen=True)
+class _VadUpdate:
+    in_speech: bool
+    first_speech_sample: int | None
+    last_speech_sample: int | None
+    started: bool
+    ended: bool
+    active: bool
+
+
+def _get_vad_model(sample_rate: int):
+    """sherpa-onnx VAD モデルをキャッシュ付きで取得する。"""
+    global _vad_model, _vad_sample_rate
     with _vad_cache_lock:
-        if _vad_model is None:
-            logger.info("silero-vad モデルをロード中...")
-            _vad_model, _vad_utils = torch.hub.load(
-                repo_or_dir="snakers4/silero-vad",
-                model="silero_vad",
-                trust_repo=True,
+        if _vad_model is None or _vad_sample_rate != sample_rate:
+            import sherpa_onnx
+
+            if not _VAD_MODEL_PATH.exists():
+                raise FileNotFoundError(f"VAD model file not found: {_VAD_MODEL_PATH}")
+
+            logger.info("sherpa-onnx VAD モデルをロード中: %s", _VAD_MODEL_PATH)
+            config = sherpa_onnx.VadModelConfig(
+                silero_vad=sherpa_onnx.SileroVadModelConfig(
+                    model=str(_VAD_MODEL_PATH),
+                    threshold=_VAD_THRESHOLD,
+                    min_silence_duration=_VAD_MIN_SILENCE_DURATION_SEC,
+                    min_speech_duration=_VAD_MIN_SPEECH_DURATION_SEC,
+                    window_size=_VAD_CONFIG_WINDOW_SAMPLES,
+                ),
+                sample_rate=sample_rate,
+                num_threads=1,
+                provider="cpu",
             )
-            logger.info("silero-vad モデルのロードが完了しました")
-        return _vad_model, _vad_utils
+            if not config.validate():
+                raise ValueError(f"Invalid sherpa-onnx VAD config: {config}")
+            _vad_model = sherpa_onnx.VadModel.create(config)
+            _vad_sample_rate = sample_rate
+            logger.info(
+                "sherpa-onnx VAD モデルのロードが完了しました (window=%d)",
+                _vad_model.window_size(),
+            )
+        return _vad_model
 
 
 def preload_vad() -> None:
     """VAD モデルを事前にロードする。アプリ起動時に呼び出すことで、初回録音時の遅延を防ぐ。"""
-    _get_vad_model_and_utils()
+    _get_vad_model(ASR_SAMPLE_RATE)
 
 
 def _resolve_device(mic: str, sample_rate: int) -> int | None:
@@ -163,17 +199,13 @@ def _finalize_recording_audio(
     return finalized
 
 
-def _speech_event_sample(value: object, sample_rate: int, fallback: int) -> int:
-    """VADIterator の秒単位イベント値をサンプル位置へ変換する。"""
-    try:
-        return int(round(float(value) * sample_rate))
-    except (TypeError, ValueError):
-        return fallback
-
-
-def _stream_block_samples(stream_sample_rate: int, target_sample_rate: int) -> int:
+def _stream_block_samples(
+    stream_sample_rate: int,
+    target_sample_rate: int,
+    target_samples: int = _VAD_CONFIG_WINDOW_SAMPLES,
+) -> int:
     """Return stream frames that correspond to one VAD chunk after resampling."""
-    return max(1, int(round(_VAD_CHUNK_SAMPLES * stream_sample_rate / target_sample_rate)))
+    return max(1, int(round(target_samples * stream_sample_rate / target_sample_rate)))
 
 
 def _resample_chunk(chunk: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
@@ -213,6 +245,42 @@ def _is_audio_too_quiet(audio: np.ndarray, min_rms: float, min_peak: float) -> b
     return rms < min_rms and peak < min_peak
 
 
+def _update_vad_state(
+    *,
+    is_speech: bool,
+    in_speech: bool,
+    first_speech_sample: int | None,
+    last_speech_sample: int | None,
+    processed_samples: int,
+    window_size: int,
+) -> _VadUpdate:
+    started = is_speech and not in_speech
+    ended = not is_speech and in_speech
+    next_first = first_speech_sample
+    next_last = last_speech_sample
+
+    if started:
+        next_first = (
+            max(0, processed_samples - window_size)
+            if next_first is None
+            else next_first
+        )
+        next_last = processed_samples
+    elif is_speech:
+        next_last = processed_samples
+    elif ended:
+        next_last = processed_samples
+
+    return _VadUpdate(
+        in_speech=is_speech,
+        first_speech_sample=next_first,
+        last_speech_sample=next_last,
+        started=started,
+        ended=ended,
+        active=is_speech or ended,
+    )
+
+
 def record(
     cfg: RecordingConfig,
     stop_event: Event,
@@ -245,31 +313,25 @@ def record(
         if on_warning is not None and resolved_device.warning_message is not None:
             on_warning(resolved_device.warning_message)
 
-    # silero-vad モデルのロード（キャッシュ済み）
-    vad_model, vad_utils = _get_vad_model_and_utils()
-    # VADIterator の取得
-    # silero-vad v5+ の API: (get_speech_timestamps, _, read_audio, VADIterator, _)
-    VADIterator = vad_utils[3]
-    vad_iter = VADIterator(
-        vad_model,
-        threshold=0.5,
-        sampling_rate=cfg.sample_rate,
-        min_silence_duration_ms=500,
-        speech_pad_ms=30,
-    )
+    vad_model = _get_vad_model(cfg.sample_rate)
+    vad_window_size = vad_model.window_size()
 
     audio_chunks: list[np.ndarray] = []
     samples_read = 0
     first_speech_sample: int | None = None
     last_speech_sample: int | None = None
     last_speech_time = time.monotonic()
-    in_speech = False  # VADIterator の音声区間内かどうか
+    in_speech = False  # sherpa-onnx VAD の音声区間内かどうか
     start_time = time.monotonic()
     warning_fired = False
     warning_threshold_sec = cfg.max_recording_sec * cfg.max_recording_warning_pct / 100.0
     vad_buffer = np.empty(0, dtype=np.float32)
     vad_processed_samples = 0
-    stream_blocksize = _stream_block_samples(resolved_device.stream_sample_rate, cfg.sample_rate)
+    stream_blocksize = _stream_block_samples(
+        resolved_device.stream_sample_rate,
+        cfg.sample_rate,
+        vad_window_size,
+    )
 
     logger.info(
         "録音を開始します (configured=%s, actual_device=%s, name=%s, hostapi=%s, "
@@ -309,39 +371,31 @@ def record(
 
                 # VAD で音声区間を検知
                 vad_buffer = _append_for_vad(vad_buffer, chunk)
-                while len(vad_buffer) >= _VAD_CHUNK_SAMPLES:
-                    vad_chunk = vad_buffer[:_VAD_CHUNK_SAMPLES]
-                    vad_buffer = vad_buffer[_VAD_CHUNK_SAMPLES:]
+                while len(vad_buffer) >= vad_window_size:
+                    vad_chunk = vad_buffer[:vad_window_size]
+                    vad_buffer = vad_buffer[vad_window_size:]
                     vad_processed_samples += len(vad_chunk)
 
-                    vad_tensor = torch.from_numpy(vad_chunk)
-                    speech_dict = vad_iter(vad_tensor, return_seconds=True)
-                    if speech_dict:
-                        if "start" in speech_dict:
-                            in_speech = True
-                            speech_start_sample = _speech_event_sample(
-                                speech_dict["start"],
-                                cfg.sample_rate,
-                                vad_processed_samples,
+                    update = _update_vad_state(
+                        is_speech=bool(
+                            vad_model.is_speech(
+                                vad_chunk.astype(np.float32, copy=False)
                             )
-                            if first_speech_sample is None:
-                                first_speech_sample = speech_start_sample
-                            last_speech_sample = vad_processed_samples
-                            if on_speech_change is not None:
-                                on_speech_change(True)
-                        if "end" in speech_dict:
-                            in_speech = False
-                            last_speech_sample = _speech_event_sample(
-                                speech_dict["end"],
-                                cfg.sample_rate,
-                                vad_processed_samples,
-                            )
-                            if on_speech_change is not None:
-                                on_speech_change(False)
-                        last_speech_time = time.monotonic()
-                    elif in_speech:
-                        # 音声区間の途中 → 喋り続けているので無音タイマーをリセット
-                        last_speech_sample = vad_processed_samples
+                        ),
+                        in_speech=in_speech,
+                        first_speech_sample=first_speech_sample,
+                        last_speech_sample=last_speech_sample,
+                        processed_samples=vad_processed_samples,
+                        window_size=vad_window_size,
+                    )
+                    in_speech = update.in_speech
+                    first_speech_sample = update.first_speech_sample
+                    last_speech_sample = update.last_speech_sample
+                    if update.started and on_speech_change is not None:
+                        on_speech_change(True)
+                    if update.ended and on_speech_change is not None:
+                        on_speech_change(False)
+                    if update.active:
                         last_speech_time = time.monotonic()
 
                 # 無音タイムアウト
@@ -366,7 +420,7 @@ def record(
         logger.exception("録音中にエラーが発生しました")
         return None
     finally:
-        vad_iter.reset_states()
+        vad_model.reset()
 
     if not audio_chunks:
         return None
