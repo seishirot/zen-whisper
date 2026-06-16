@@ -17,7 +17,7 @@ Fully local voice-to-text input tool. Toggle recording with a hotkey, transcribe
 
 ## Requirements
 
-- **Python 3.11+**
+- **Python 3.11-3.13**
 - **Windows**: CPU supported; NVIDIA GPU optional for faster-whisper CUDA
 - **macOS**: Apple Silicon M1+ (for mlx-whisper / Metal)
 
@@ -41,6 +41,12 @@ cd zen-whisper
 uv sync
 ```
 
+For Windows NVIDIA CUDA support with faster-whisper:
+
+```bash
+uv sync --extra cuda
+```
+
 For the Windows fast CPU backend powered by ReazonSpeech K2:
 
 ```bash
@@ -50,6 +56,13 @@ uv sync --extra reazon
 This extra pins the tested ReazonSpeech K2 commit and a Windows-compatible
 `sherpa-onnx` / `sherpa-onnx-core` pair. The first Reazon run downloads the ASR
 model from Hugging Face.
+
+For Qwen3-ASR experiments:
+
+```bash
+uv sync --extra qwen3       # CPU PyTorch for manual config experiments
+uv sync --extra qwen3-cuda  # CUDA 12.6 PyTorch on Windows/Linux
+```
 
 ### 3. Create your config file
 
@@ -117,7 +130,7 @@ All settings are in `config.toml`. See `config.example.toml` for defaults and de
 - `engine = "whisper"` uses faster-whisper on Windows. When the resolved device is CPU, ZenWhisper forces `compute_type = "int8"` and passes `cpu_threads`.
 - `device = "cuda"` is the Windows default, `device = "mlx"` is the macOS default. Select `Whisper > CPU (int8)` when you want the CPU Whisper path.
 - `engine = "reazon-k2"` uses the fast Japanese CPU backend. Long audio is split into `reazon_chunk_sec` chunks with `reazon_trailing_silence_sec` silence appended to each chunk.
-- `engine = "qwen3-asr"` keeps the existing Qwen3-ASR path for quality-focused experiments.
+- `engine = "qwen3-asr"` keeps the existing Qwen3-ASR path for quality-focused experiments. The tray Qwen3-ASR entries target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3` installs the CPU PyTorch variant for manual `config.toml` experiments with `device = "cpu"`.
 
 The tray menu intentionally does not include an automatic ASR fallback mode. Unavailable backends such as Reazon K2 without the optional extra or CUDA without a visible GPU are disabled in the menu.
 
@@ -151,7 +164,8 @@ To use custom start/stop sounds instead of generated tones:
 
 ### Windows
 
-- **CUDA errors**: CUDA libraries are installed automatically via `uv sync`. Ensure your NVIDIA GPU drivers are up to date.
+- **CPU-only install**: plain `uv sync` installs CPU PyTorch and does not install CUDA DLL packages. Select `Whisper > CPU (int8)` or set `device = "cpu"`.
+- **CUDA errors**: install the CUDA extra with `uv sync --extra cuda` for faster-whisper CUDA, and ensure your NVIDIA GPU drivers are up to date.
 - **Reazon K2 is disabled**: run `uv sync --extra reazon`, then restart ZenWhisper. The tray menu disables Reazon when the optional extra is unavailable.
 - **ONNX Runtime API mismatch with Reazon**: use the locked dependencies from this repo. In particular, do not upgrade `sherpa-onnx` independently unless the Reazon path is re-tested on Windows.
 - **No audio input**: Check that your microphone is set as the default recording device, or select it from the tray `マイク` menu.

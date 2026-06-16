@@ -7,7 +7,7 @@ license = "MIT"
 authors = [
     { name = "seishirot", email = "217049440+seishirot@users.noreply.github.com" },
 ]
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 classifiers = [
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
@@ -27,10 +27,10 @@ dependencies = [
     "scipy>=1.11",
     "soundfile>=0.12",
     "tomli-w>=1.0.0",
+    "torch>=2.10,<2.11",
+    "torchaudio>=2.10,<2.11",
     # Windows 専用
     "faster-whisper>=1.0.0; sys_platform == 'win32'",
-    "nvidia-cublas-cu12>=12.4; sys_platform == 'win32'",
-    "nvidia-cudnn-cu12>=9.1; sys_platform == 'win32'",
     "pywin32>=306; sys_platform == 'win32'",
     # Mac 専用
     "mlx-whisper>=0.4; sys_platform == 'darwin'",
@@ -41,7 +41,17 @@ dependencies = [
 [project.optional-dependencies]
 qwen3 = [
     "qwen-asr>=0.0.6",
-    "torch>=2.0",
+    "torch>=2.10,<2.11",
+]
+qwen3-cuda = [
+    "qwen-asr>=0.0.6",
+    "torch>=2.10,<2.11",
+    "torchaudio>=2.10,<2.11",
+]
+cuda = [
+    # Optional faster-whisper CUDA DLLs for Windows GPU installs.
+    "nvidia-cublas-cu12>=12.4; sys_platform == 'win32'",
+    "nvidia-cudnn-cu12>=9.1; sys_platform == 'win32'",
 ]
 reazon = [
     "reazonspeech-k2-asr",
@@ -71,7 +81,12 @@ packages = ["src"]
 zen-whisper = "src.main:main"
 
 [tool.uv]
-find-links = ["https://download.pytorch.org/whl/cu126"]
+conflicts = [
+    [
+        { extra = "qwen3" },
+        { extra = "qwen3-cuda" },
+    ],
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu126"
@@ -79,5 +94,10 @@ url = "https://download.pytorch.org/whl/cu126"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu126" }
+torch = [
+    { index = "pytorch-cu126", extra = "qwen3-cuda", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
+torchaudio = [
+    { index = "pytorch-cu126", extra = "qwen3-cuda", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
+]
 reazonspeech-k2-asr = { git = "https://github.com/reazon-research/ReazonSpeech", rev = "2d4d4762e7ee294ac8e47a177ac2e9b0e8d0d43f", subdirectory = "pkg/k2-asr" }
