@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sys
 import threading
+import time
 import tkinter as tk
 from collections.abc import Callable
 
@@ -37,9 +38,22 @@ _HEIGHT = _TITLEBAR_HEIGHT + _BODY_HEIGHT
 _MIC_CX = 18
 _CONTENT_CY = 20
 _TEXT_X = 75
+_TIMER_UPDATE_MS = 250
 
 # プラットフォーム別フォント
 _FONT_FAMILY = "Helvetica Neue" if sys.platform == "darwin" else "Segoe UI"
+
+
+def _is_recording_state(state: TrayState) -> bool:
+    """録音タイマーを表示する状態かどうかを返す。"""
+    return state in (TrayState.RECORDING, TrayState.SPEECH_DETECTED)
+
+
+def _format_elapsed_seconds(elapsed_seconds: float) -> str:
+    """経過秒数を MM:SS 形式に整形する。"""
+    total_seconds = max(0, int(elapsed_seconds))
+    minutes, seconds = divmod(total_seconds, 60)
+    return f"{minutes:02d}:{seconds:02d}"
 
 
 def _get_active_monitor_rect() -> tuple[int, int, int, int]:
@@ -83,6 +97,8 @@ class OverlayIndicator:
         self._ready = threading.Event()
         self._current_state = TrayState.IDLE
         self._positioned = False
+        self._recording_started_at: float | None = None
+        self._timer_after_id: str | None = None
         # ドラッグ用
         self._drag_x = 0
         self._drag_y = 0
@@ -212,6 +228,46 @@ class OverlayIndicator:
         y = bottom - _HEIGHT - 60  # タスクバー/Dock の少し上
         self._root.geometry(f"{_WIDTH}x{_HEIGHT}+{x}+{y}")
 
+    def _start_recording_timer(self) -> None:
+        """録音経過タイマーを開始する。"""
+        if self._root is None or self._body_canvas is None or self._label_id is None:
+            return
+        if self._recording_started_at is None:
+            self._recording_started_at = time.monotonic()
+        if self._timer_after_id is None:
+            self._update_recording_timer()
+
+    def _stop_recording_timer(self) -> None:
+        """録音経過タイマーを停止して開始時刻をリセットする。"""
+        if self._root is not None and self._timer_after_id is not None:
+            try:
+                self._root.after_cancel(self._timer_after_id)
+            except tk.TclError:
+                logger.debug("録音タイマーのキャンセルに失敗しました", exc_info=True)
+        self._timer_after_id = None
+        self._recording_started_at = None
+
+    def _update_recording_timer(self) -> None:
+        """録音経過タイマーの表示を更新し、次回更新を予約する。"""
+        self._timer_after_id = None
+        if (
+            self._root is None
+            or self._body_canvas is None
+            or self._label_id is None
+            or not _is_recording_state(self._current_state)
+        ):
+            return
+        if self._recording_started_at is None:
+            self._recording_started_at = time.monotonic()
+
+        elapsed = time.monotonic() - self._recording_started_at
+        self._body_canvas.itemconfig(
+            self._label_id,
+            text=_format_elapsed_seconds(elapsed),
+            fill="#FFFFFF",
+        )
+        self._timer_after_id = self._root.after(_TIMER_UPDATE_MS, self._update_recording_timer)
+
     def set_state(self, state: TrayState) -> None:
         """ウィジェットの状態を変更する。"""
         if not self._cfg.enabled or self._root is None:
@@ -226,7 +282,16 @@ class OverlayIndicator:
             color = _STATE_COLORS.get(state, "#808080")
             label = _STATE_LABELS.get(state, "")
 
-            if state == TrayState.IDLE:
+            if _is_recording_state(state):
+                if not self._positioned:
+                    self._position_on_active_monitor()
+                    self._positioned = True
+                self._draw_mic_icon(_MIC_CX, _CONTENT_CY, color)
+                self._start_recording_timer()
+                self._root.deiconify()
+                self._root.lift()
+            elif state == TrayState.IDLE:
+                self._stop_recording_timer()
                 self._draw_mic_icon(_MIC_CX, _CONTENT_CY, color)
                 self._body_canvas.itemconfig(self._label_id, text=label, fill="#AAAAAA")
                 # LOADING → IDLE 遷移時はオーバーレイを自動で非表示にする
@@ -234,6 +299,7 @@ class OverlayIndicator:
                     self._root.withdraw()
                     self._positioned = False
             else:
+                self._stop_recording_timer()
                 if not self._positioned:
                     self._position_on_active_monitor()
                     self._positioned = True
@@ -257,6 +323,11 @@ class OverlayIndicator:
         """オーバーレイを停止する。"""
         if self._root is not None:
             try:
-                self._root.after(0, self._root.destroy)
+                def _destroy() -> None:
+                    self._stop_recording_timer()
+                    if self._root is not None:
+                        self._root.destroy()
+
+                self._root.after(0, _destroy)
             except Exception:
                 pass
