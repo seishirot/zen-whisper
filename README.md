@@ -41,6 +41,9 @@ cd zen-whisper
 uv sync
 ```
 
+`uv sync` creates the local `.venv` environment and the launcher used by
+`start.vbs` on Windows.
+
 On Windows, plain `uv sync` does not install PyTorch. The default recording VAD
 uses a bundled Silero ONNX model through `sherpa-onnx`, so Windows CPU-only
 installs avoid Torch DLL initialization issues.
@@ -81,7 +84,8 @@ Edit `config.toml` to customize hotkeys, model size, language, and other setting
 ### Starting zen-whisper
 
 **Windows** (no console window):
-- Double-click `start.vbs`, or:
+- Double-click `start.vbs` (uses `.venv\Scripts\zen-whisper.exe` after
+  `uv sync`, with `uv run zen-whisper` as a fallback), or:
   ```bash
   uv run zen-whisper
   ```
