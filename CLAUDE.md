@@ -96,7 +96,7 @@ Windows CUDA GPU 環境・19.6秒の合成音声での参考実測:
 
 | セクション | 主な設定 |
 |---|---|
-| `[hotkey]` | `toggle`（文字列 or リスト）、`switch_lang` |
+| `[hotkey]` | `toggle`（文字列 or リスト）、`submit_toggle`（停止時に貼り付け後 Enter）、`switch_lang` |
 | `[recognition]` | `engine` (`whisper`/`reazon-k2`/`qwen3-asr`), `language`, `model_size`, `device` (`cuda`/`cpu`/`mlx`), `cpu_threads`, Reazon/Qwen設定 |
 | `[recording]` | `microphone`, `vad_silence_threshold_sec`, `max_recording_sec` |
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |

@@ -9,6 +9,7 @@ from src.config import (
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
     AppConfig,
+    HotkeyConfig,
     RecognitionConfig,
     load_config,
     save_config,
@@ -57,6 +58,14 @@ class TestRecognitionConfig:
         assert cfg.language == "ja"
 
 
+class TestHotkeyConfig:
+    """HotkeyConfig のテスト。"""
+
+    def test_submit_toggle_default_is_disabled(self):
+        cfg = HotkeyConfig()
+        assert cfg.submit_toggle == ""
+
+
 class TestAppConfig:
     """AppConfig のテスト。"""
 
@@ -65,6 +74,7 @@ class TestAppConfig:
         assert cfg.recognition.device == _expected_default_device()
         assert cfg.recognition.engine == ENGINE_WHISPER
         assert cfg.hotkey.toggle == "shift+space"
+        assert cfg.hotkey.submit_toggle == ""
         assert cfg.output.restore_clipboard is True
 
     def test_validate_default_has_no_warnings(self):
@@ -87,6 +97,20 @@ class TestLoadConfig:
         toml_path.write_text('[recognition]\ndevice = "mlx"\n')
         cfg = load_config(toml_path)
         assert cfg.recognition.device == "mlx"
+
+    def test_load_submit_toggle_string(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text('[hotkey]\nsubmit_toggle = "ctrl+shift+space"\n')
+        cfg = load_config(toml_path)
+        assert cfg.hotkey.submit_toggle == "ctrl+shift+space"
+
+    def test_load_submit_toggle_list(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text(
+            '[hotkey]\nsubmit_toggle = ["ctrl+shift+space", "win+enter"]\n'
+        )
+        cfg = load_config(toml_path)
+        assert cfg.hotkey.submit_toggle == ["ctrl+shift+space", "win+enter"]
 
     def test_load_legacy_auto_normalizes_to_explicit_defaults(self, tmp_path):
         toml_path = tmp_path / "config.toml"

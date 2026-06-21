@@ -36,6 +36,7 @@ def _default_recognition_device() -> str:
 @dataclass
 class HotkeyConfig:
     toggle: str | list[str] = "shift+space"
+    submit_toggle: str | list[str] = ""
     switch_lang: str = "shift+alt+space"
 
 

@@ -108,6 +108,10 @@ uv run python src/main.py
 4. Press the hotkey again to **stop recording** (or wait for silence auto-stop)
 5. Transcribed text is automatically pasted into the active window
 
+Set `[hotkey] submit_toggle` to add an alternate toggle that presses Enter after
+pasting when it is used to stop recording. For chat boxes, `ctrl+shift+space`
+keeps the normal `Shift+Space` paste-only workflow while making submit explicit.
+
 ### Tray menu
 
 Right-click the tray icon to:
@@ -124,7 +128,7 @@ All settings are in `config.toml`. See `config.example.toml` for defaults and de
 
 | Section | Key settings |
 |---|---|
-| `[hotkey]` | `toggle` — recording hotkey (string or list), `switch_lang` — language switch hotkey |
+| `[hotkey]` | `toggle` — recording hotkey (string or list), `submit_toggle` — stop, paste, then press Enter, `switch_lang` — language switch hotkey |
 | `[recognition]` | `engine` (`whisper`/`reazon-k2`/`qwen3-asr`), `language`, `model_size`, `compute_type`, `device` (`cuda`/`cpu`/`mlx`) |
 | `[recording]` | `microphone`, `vad_silence_threshold_sec`, `min_audio_rms`, `min_audio_peak`, `max_recording_sec` |
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |
@@ -159,6 +163,7 @@ ZenWhisper does not run LLM cleanup or punctuation rewriting internally. It past
 - Modifier keys: `win` (= `cmd` on macOS), `shift`, `ctrl`, `alt`
 - Examples: `"shift+space"`, `"win+j"`, `"ctrl+alt+r"`
 - Multiple hotkeys: `toggle = ["shift+space", "win+j"]`
+- Submit-after-paste toggle: `submit_toggle = "ctrl+shift+space"`; it only sends Enter when the key press stops an active recording
 
 ### Custom sound files
 

@@ -29,14 +29,33 @@ else:
     from src.platform.darwin import set_clipboard_text as _set_clipboard_text
 
 
-def paste(text: str, cfg: OutputConfig, on_error: Callable[[str], None] | None = None) -> None:
+def _press_enter() -> None:
+    try:
+        pyautogui.press("enter")
+    except Exception:
+        if is_mac():
+            logger.debug("pyautogui Enter 送信失敗、AppleScript にフォールバック")
+            from src.platform.darwin import press_enter_via_applescript
+
+            if press_enter_via_applescript():
+                return
+        raise
+
+
+def paste(
+    text: str,
+    cfg: OutputConfig,
+    on_error: Callable[[str], None] | None = None,
+    submit_after_paste: bool = False,
+) -> None:
     """
     テキストをアクティブウィンドウにペーストする。
 
     1. クリップボード退避
     2. テキストをコピー
     3. Ctrl+V (Windows) / Cmd+V (Mac) でペースト
-    4. クリップボード復元
+    4. 必要なら Enter 送信
+    5. クリップボード復元
     """
     saved_text: str | None = None
     delay_sec = cfg.paste_delay_ms / 1000.0
@@ -59,10 +78,16 @@ def paste(text: str, cfg: OutputConfig, on_error: Callable[[str], None] | None =
             if is_mac():
                 logger.debug("pyautogui ペースト失敗、AppleScript にフォールバック")
                 from src.platform.darwin import paste_via_applescript
-                paste_via_applescript()
+
+                if not paste_via_applescript():
+                    raise RuntimeError("AppleScript によるペーストに失敗しました")
             else:
                 raise
         time.sleep(delay_sec)
+
+        if submit_after_paste:
+            _press_enter()
+            logger.info("ペースト後に Enter を送信しました")
 
         logger.info("ペースト完了: %d文字", len(text))
 
@@ -70,7 +95,7 @@ def paste(text: str, cfg: OutputConfig, on_error: Callable[[str], None] | None =
         logger.exception("ペースト処理中にエラーが発生しました")
 
     finally:
-        # 4. 復元
+        # 5. 復元
         if cfg.restore_clipboard and saved_text is not None:
             time.sleep(delay_sec)
             if _set_clipboard_text(saved_text):

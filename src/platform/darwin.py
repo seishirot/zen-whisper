@@ -247,3 +247,21 @@ def paste_via_applescript() -> bool:
     except Exception:
         logger.warning("AppleScript によるペーストに失敗しました", exc_info=True)
         return False
+
+
+def press_enter_via_applescript() -> bool:
+    """AppleScript 経由で Enter キーを送信する。フォールバック用。"""
+    try:
+        subprocess.run(
+            [
+                "osascript",
+                "-e",
+                'tell application "System Events" to key code 36',
+            ],
+            check=True,
+            timeout=5,
+        )
+        return True
+    except Exception:
+        logger.warning("AppleScript による Enter 送信に失敗しました", exc_info=True)
+        return False

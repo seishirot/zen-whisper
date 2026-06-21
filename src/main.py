@@ -118,6 +118,8 @@ class App:
 
         self._language = self.cfg.recognition.language
         self._is_recording = False
+        self._is_capturing = False
+        self._submit_after_paste = False
         self._stop_event = threading.Event()
         self._exit_event = threading.Event()
         self._lock = threading.Lock()
@@ -226,23 +228,31 @@ class App:
 
     # ── 録音トグル ────────────────────────────────────
 
-    def _on_toggle(self) -> None:
+    def _on_toggle(self, submit_after_paste: bool = False) -> None:
         with self._lock:
             if self._is_recording:
-                logger.info("トグルキー: 録音を停止します")
+                if submit_after_paste and self._is_capturing and not self._stop_event.is_set():
+                    self._submit_after_paste = True
+                    logger.info("送信付きトグルキー: 録音を停止します")
+                elif submit_after_paste:
+                    logger.info("送信付きトグルキー: 録音停止後のため Enter 送信は行いません")
+                else:
+                    logger.info("トグルキー: 録音を停止します")
                 self._stop_event.set()
                 return
             if not self.transcriber.is_ready:
                 self.tray.notify("モデルを準備中です。しばらくお待ちください。")
                 return
+            self._stop_event.clear()
             self._is_recording = True
+            self._is_capturing = True
+            self._submit_after_paste = False
 
         t = threading.Thread(target=self._pipeline, daemon=True)
         t.start()
 
     def _pipeline(self) -> None:
         """録音 → 文字起こし → ペースト の一連の処理。"""
-        self._stop_event.clear()
         self._set_state(TrayState.RECORDING)
 
         try:
@@ -260,6 +270,8 @@ class App:
                 on_warning=lambda msg: self.tray.notify(msg),
                 on_speech_change=on_speech_change,
             )
+            with self._lock:
+                self._is_capturing = False
             self.sound.play_stop()
 
             if audio is None:
@@ -282,7 +294,15 @@ class App:
                 logger.info("認識結果が空です。スキップします。")
                 return
 
-            paste(text, self.cfg.output, on_error=lambda msg: self.tray.notify(msg))
+            with self._lock:
+                submit_after_paste = self._submit_after_paste
+
+            paste(
+                text,
+                self.cfg.output,
+                on_error=lambda msg: self.tray.notify(msg),
+                submit_after_paste=submit_after_paste,
+            )
 
         except Exception:
             logger.exception("パイプライン処理中にエラーが発生しました")
@@ -292,6 +312,8 @@ class App:
             self._set_state(TrayState.IDLE)
             with self._lock:
                 self._is_recording = False
+                self._is_capturing = False
+                self._submit_after_paste = False
 
     # ── 終了 ──────────────────────────────────────────
 
@@ -328,6 +350,7 @@ class App:
                 self.cfg.hotkey,
                 on_toggle=self._on_toggle,
                 on_switch_lang=self._on_switch_lang,
+                on_submit_toggle=lambda: self._on_toggle(submit_after_paste=True),
             )
             logger.info("ホットキーリスナーを起動しました")
 

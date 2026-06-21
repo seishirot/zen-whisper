@@ -2,6 +2,9 @@
 # Key combinations for toggling recording (string or list)
 # "win" is automatically interpreted as "cmd" on macOS
 toggle = ["shift+space"]
+# Optional: alternate toggle. When this stops recording, ZenWhisper pastes and presses Enter.
+# Recommended for chat boxes: "ctrl+shift+space"
+# submit_toggle = "ctrl+shift+space"
 # Key combination for switching language
 switch_lang = "shift+alt+space"
 

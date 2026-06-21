@@ -238,6 +238,10 @@ VK_LWIN = 0x5B
 VK_RWIN = 0x5C
 VK_LSHIFT = 0xA0
 VK_RSHIFT = 0xA1
+VK_LCONTROL = 0xA2
+VK_RCONTROL = 0xA3
+VK_LMENU = 0xA4
+VK_RMENU = 0xA5
 
 _user32 = ctypes.windll.user32
 
@@ -253,3 +257,11 @@ def is_win_down() -> bool:
 
 def is_shift_down() -> bool:
     return is_key_down(VK_LSHIFT) or is_key_down(VK_RSHIFT)
+
+
+def is_ctrl_down() -> bool:
+    return is_key_down(VK_LCONTROL) or is_key_down(VK_RCONTROL)
+
+
+def is_alt_down() -> bool:
+    return is_key_down(VK_LMENU) or is_key_down(VK_RMENU)
