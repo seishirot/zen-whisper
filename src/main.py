@@ -62,8 +62,14 @@ class _PrivateRotatingFileHandler(RotatingFileHandler):
             if os.path.exists(path):
                 try:
                     os.chmod(path, 0o600)
-                except OSError:
-                    pass
+                except OSError as exc:
+                    os.write(
+                        2,
+                        f"zen-whisper: failed to chmod log file {path}: {exc}\n".encode(
+                            "utf-8",
+                            errors="replace",
+                        ),
+                    )
 
     def emit(self, record: logging.LogRecord) -> None:
         super().emit(record)

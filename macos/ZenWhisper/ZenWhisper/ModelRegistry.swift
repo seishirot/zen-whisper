@@ -68,12 +68,21 @@ struct ModelRegistry: Decodable, Equatable {
         }
         let engineIDs = Set(engines.map(\.id))
         for engine in engines {
+            guard !engine.label.isEmpty else {
+                throw RegistryError.invalidLabel("engine", engine.id)
+            }
             try requireUniqueIDs(engine.models.map(\.id), label: "\(engine.id) model")
             guard engine.models.contains(where: { $0.id == engine.defaultModel }) else {
                 throw RegistryError.invalidDefaultModel(engine.id)
             }
+            for model in engine.models where model.label.isEmpty {
+                throw RegistryError.invalidLabel("\(engine.id) model", model.id)
+            }
         }
         for (languageID, language) in languages {
+            guard !language.label.isEmpty else {
+                throw RegistryError.invalidLabel("language", languageID)
+            }
             for (engineID, backendLanguage) in language.engines {
                 guard engineIDs.contains(engineID) else {
                     throw RegistryError.invalidLanguageEngine(languageID, engineID)
@@ -173,4 +182,5 @@ enum RegistryError: Error, Equatable {
     case invalidDefaultModel(String)
     case duplicateID(String, String)
     case invalidLanguageEngine(String, String)
+    case invalidLabel(String, String)
 }

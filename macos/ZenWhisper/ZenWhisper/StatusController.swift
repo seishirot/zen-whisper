@@ -469,6 +469,9 @@ final class StatusController: NSObject, NSMenuDelegate {
                 return "Paste sent\(enterText)"
             }
             if let reason, !reason.isEmpty {
+                if reason.lowercased().contains("diagnostics") {
+                    return "Diagnostics copied"
+                }
                 return "Copied; paste skipped: \(reason)"
             }
             return "Copied"

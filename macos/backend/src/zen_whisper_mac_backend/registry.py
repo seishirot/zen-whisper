@@ -140,7 +140,7 @@ def _require_non_empty_string(value: object, label: str) -> str:
 
 def _freeze(value: object) -> object:
     if isinstance(value, dict):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
     if isinstance(value, list):
         return tuple(_freeze(item) for item in value)
     return value

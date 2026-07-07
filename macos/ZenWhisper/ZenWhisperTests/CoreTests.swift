@@ -232,6 +232,15 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(unknownLanguageEngine: true))) { error in
             XCTAssertEqual(error as? RegistryError, .invalidLanguageEngine("ja", "missing"))
         }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(blankEngineLabel: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .invalidLabel("engine", "mlx-whisper"))
+        }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(blankModelLabel: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .invalidLabel("mlx-whisper model", "model-a"))
+        }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(blankLanguageLabel: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .invalidLabel("language", "ja"))
+        }
     }
 
     func testBackendErrorPreservesRecoverableFlag() throws {
@@ -716,7 +725,10 @@ final class CoreTests: XCTestCase {
         version: Int = 1,
         duplicateEngine: Bool = false,
         duplicateModel: Bool = false,
-        unknownLanguageEngine: Bool = false
+        unknownLanguageEngine: Bool = false,
+        blankEngineLabel: Bool = false,
+        blankModelLabel: Bool = false,
+        blankLanguageLabel: Bool = false
     ) throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("zen-whisper-registry-\(UUID().uuidString)", isDirectory: true)
@@ -729,21 +741,24 @@ final class CoreTests: XCTestCase {
             : ""
         let secondModel = duplicateModel ? #",{"id":"model-a","label":"Duplicate A"}"# : ""
         let languageEngine = unknownLanguageEngine ? "missing" : "mlx-whisper"
+        let engineLabel = blankEngineLabel ? "" : "MLX Whisper"
+        let modelLabel = blankModelLabel ? "" : "A"
+        let languageLabel = blankLanguageLabel ? "" : "Japanese"
         let json = """
         {
           "version": \(version),
           "default_engine": "mlx-whisper",
           "default_language": "ja",
           "languages": {
-            "ja": {"label": "Japanese", "engines": {"\(languageEngine)": "ja"}}
+            "ja": {"label": "\(languageLabel)", "engines": {"\(languageEngine)": "ja"}}
           },
           "engines": [
             {
               "id": "mlx-whisper",
-              "label": "MLX Whisper",
+              "label": "\(engineLabel)",
               "default_model": "model-a",
               "models": [
-                {"id": "model-a", "label": "A"}\(secondModel)
+                {"id": "model-a", "label": "\(modelLabel)"}\(secondModel)
               ]
             }
             \(secondEngine)

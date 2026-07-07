@@ -93,6 +93,7 @@ def test_root_logger_uses_private_rotating_file_handler() -> None:
     assert "maxBytes=5 * 1024 * 1024" in main
     assert "backupCount=5" in main
     assert "os.chmod(path, 0o600)" in main
+    assert "os.write(" in main
 
 
 def test_repo_source_tree_has_no_python_bytecode_artifacts() -> None:
@@ -116,5 +117,7 @@ def test_legacy_macos_helpers_use_absolute_system_tools() -> None:
 
     assert '["/bin/launchctl", "load", str(_PLIST_PATH)]' in darwin
     assert '["/bin/launchctl", "unload", str(_PLIST_PATH)]' in darwin
+    assert "capture_output=True" in darwin
+    assert "_is_benign_launchctl_unload_failure(output)" in darwin
     assert '"/usr/bin/osascript"' in darwin
     assert '"osascript"' not in darwin.replace('"/usr/bin/osascript"', "")

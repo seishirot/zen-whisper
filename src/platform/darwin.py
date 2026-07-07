@@ -104,6 +104,19 @@ def _is_local_trust_only_codesign_failure(output: str) -> bool:
     return not any(term in lowered for term in integrity_terms)
 
 
+def _is_benign_launchctl_unload_failure(output: str) -> bool:
+    lowered = output.lower()
+    benign_terms = (
+        "no such process",
+        "no such file",
+        "not found",
+        "not loaded",
+        "could not find specified service",
+        "bootstrap failed: 3",
+    )
+    return any(term in lowered for term in benign_terms)
+
+
 def _native_app_matches_signing_baseline() -> bool:
     try:
         baseline = json.loads(_SIGNING_JSON.read_text(encoding="utf-8"))
@@ -191,7 +204,17 @@ def unregister_startup() -> bool:
     """LaunchAgents から plist を削除してスタートアップ解除する。"""
     try:
         if _PLIST_PATH.exists():
-            subprocess.run(["/bin/launchctl", "unload", str(_PLIST_PATH)], check=False)
+            result = subprocess.run(
+                ["/bin/launchctl", "unload", str(_PLIST_PATH)],
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=5,
+            )
+            output = f"{result.stdout}\n{result.stderr}"
+            if result.returncode != 0 and not _is_benign_launchctl_unload_failure(output):
+                logger.error("スタートアップ解除の launchctl unload に失敗しました: %s", output.strip())
+                return False
             _PLIST_PATH.unlink()
             logger.info("スタートアップから解除しました")
             return True

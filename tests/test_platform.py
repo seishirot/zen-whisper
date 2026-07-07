@@ -140,3 +140,44 @@ def test_mac_legacy_startup_removes_plist_when_launchctl_load_fails(tmp_path, mo
 
     assert darwin.register_startup() is False
     assert not plist_path.exists()
+
+
+def test_mac_legacy_startup_does_not_remove_plist_when_unload_fails(tmp_path, monkeypatch) -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    from src.platform import darwin
+
+    plist_path = tmp_path / "com.zen-whisper.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+
+    def fake_run(args, **kwargs):
+        assert args == ["/bin/launchctl", "unload", str(plist_path)]
+        assert kwargs["capture_output"] is True
+        return SimpleNamespace(returncode=1, stdout="", stderr="permission denied")
+
+    monkeypatch.setattr(darwin, "_PLIST_PATH", plist_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert darwin.unregister_startup() is False
+    assert plist_path.exists()
+
+
+def test_mac_legacy_startup_removes_plist_when_unload_failure_is_benign(tmp_path, monkeypatch) -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    from src.platform import darwin
+
+    plist_path = tmp_path / "com.zen-whisper.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+
+    def fake_run(args, **kwargs):
+        assert args == ["/bin/launchctl", "unload", str(plist_path)]
+        return SimpleNamespace(returncode=3, stdout="", stderr="Could not find specified service")
+
+    monkeypatch.setattr(darwin, "_PLIST_PATH", plist_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert darwin.unregister_startup() is True
+    assert not plist_path.exists()
