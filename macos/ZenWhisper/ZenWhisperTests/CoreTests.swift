@@ -283,6 +283,13 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try decodeBackendResponse(malformed)) { error in
             XCTAssertEqual(error as? BackendProtocolError, .invalidBackendError("missing code"))
         }
+
+        let missingRecoverable = """
+        {"type":"error","request_id":"r4","code":"BACKEND_ERROR","message":"crashed"}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try decodeBackendResponse(missingRecoverable)) { error in
+            XCTAssertEqual(error as? BackendProtocolError, .invalidBackendError("missing recoverable"))
+        }
     }
 
     func testBackendResponseValidationChecksErrorRequestIDAndSchema() throws {

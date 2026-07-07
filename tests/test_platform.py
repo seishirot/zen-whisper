@@ -66,6 +66,7 @@ def test_mac_legacy_startup_validates_native_app_bundle() -> None:
     assert '_NATIVE_APP_PATH = Path("/Applications/zen-whisper.app")' in source
     assert '_NATIVE_BUNDLE_ID = "com.seishirot.zenwhisper"' in source
     assert "def _native_app_is_installed() -> bool:" in source
+    assert "def _native_app_installation_issue() -> str | None:" in source
     assert 'data.get("CFBundleIdentifier") != _NATIVE_BUNDLE_ID' in source
     assert '"/usr/bin/codesign", "--verify", "--strict"' in source
     assert '"/usr/bin/codesign", "-dr", "-"' in source
@@ -120,6 +121,23 @@ def test_mac_legacy_startup_requires_matching_codesign_baseline(tmp_path, monkey
 
     assert darwin._native_app_is_installed() is True
     assert ["/usr/bin/codesign", "--verify", "--strict", str(app_path)] in calls
+
+
+def test_mac_legacy_startup_reports_native_app_validation_reason(tmp_path, monkeypatch, caplog) -> None:
+    from src.platform import darwin
+
+    app_path = tmp_path / "zen-whisper.app"
+    plist_path = tmp_path / "com.zen-whisper.plist"
+
+    monkeypatch.setattr(darwin, "_NATIVE_APP_PATH", app_path)
+    monkeypatch.setattr(darwin, "_PLIST_PATH", plist_path)
+
+    assert darwin._native_app_installation_issue() == f"native app Info.plist not found: {app_path / 'Contents/Info.plist'}"
+    with caplog.at_level("WARNING", logger="src.platform.darwin"):
+        assert darwin.register_startup() is False
+
+    assert "native macOS app の検証に失敗" in caplog.text
+    assert "Info.plist not found" in caplog.text
 
 
 def test_mac_legacy_startup_removes_plist_when_launchctl_load_fails(tmp_path, monkeypatch) -> None:

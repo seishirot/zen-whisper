@@ -53,21 +53,31 @@ def _get_launch_command() -> list[str]:
 
 
 def _native_app_is_installed() -> bool:
+    return _native_app_installation_issue() is None
+
+
+def _native_app_installation_issue() -> str | None:
     plist_path = _NATIVE_APP_PATH / "Contents" / "Info.plist"
     if not plist_path.is_file():
-        return False
+        return f"native app Info.plist not found: {plist_path}"
     try:
         with plist_path.open("rb") as f:
             data = plistlib.load(f)
         if data.get("CFBundleIdentifier") != _NATIVE_BUNDLE_ID:
-            return False
-    except Exception:
-        logger.warning("native macOS app の Info.plist を確認できませんでした", exc_info=True)
-        return False
-    return _native_app_signature_is_valid() and _native_app_matches_signing_baseline()
+            return f"native app bundle id mismatch: {data.get('CFBundleIdentifier')!r}"
+    except Exception as exc:
+        return f"native app Info.plist unreadable: {exc}"
+    signature_issue = _native_app_signature_issue()
+    if signature_issue is not None:
+        return signature_issue
+    return _native_app_signing_baseline_issue()
 
 
 def _native_app_signature_is_valid() -> bool:
+    return _native_app_signature_issue() is None
+
+
+def _native_app_signature_issue() -> str | None:
     try:
         result = subprocess.run(
             ["/usr/bin/codesign", "--verify", "--strict", str(_NATIVE_APP_PATH)],
@@ -76,13 +86,14 @@ def _native_app_signature_is_valid() -> bool:
             capture_output=True,
             timeout=5,
         )
-    except Exception:
-        logger.warning("native macOS app の署名検証に失敗しました", exc_info=True)
-        return False
+    except Exception as exc:
+        return f"native app signature verification failed: {exc}"
     if result.returncode == 0:
-        return True
+        return None
     output = f"{result.stdout}\n{result.stderr}"
-    return _is_local_trust_only_codesign_failure(output)
+    if _is_local_trust_only_codesign_failure(output):
+        return None
+    return f"native app signature invalid: {output.strip() or f'codesign exited {result.returncode}'}"
 
 
 def _is_local_trust_only_codesign_failure(output: str) -> bool:
@@ -118,19 +129,25 @@ def _is_benign_launchctl_unload_failure(output: str) -> bool:
 
 
 def _native_app_matches_signing_baseline() -> bool:
+    return _native_app_signing_baseline_issue() is None
+
+
+def _native_app_signing_baseline_issue() -> str | None:
     try:
         baseline = json.loads(_SIGNING_JSON.read_text(encoding="utf-8"))
         if baseline.get("app_path") != str(_NATIVE_APP_PATH):
-            return False
+            return "native app signing baseline app_path mismatch"
         expected_hash = baseline.get("executable_sha256")
         if not isinstance(expected_hash, str) or not expected_hash:
-            return False
+            return "native app signing baseline missing executable_sha256"
         executable = _NATIVE_APP_PATH / "Contents" / "MacOS" / "zen-whisper"
-        if not executable.is_file() or _sha256_hex(executable) != expected_hash:
-            return False
+        if not executable.is_file():
+            return f"native app executable not found: {executable}"
+        if _sha256_hex(executable) != expected_hash:
+            return "native app executable hash mismatch"
         expected_requirement = baseline.get("designated_requirement")
         if not isinstance(expected_requirement, str) or not expected_requirement:
-            return False
+            return "native app signing baseline missing designated_requirement"
         result = subprocess.run(
             ["/usr/bin/codesign", "-dr", "-", str(_NATIVE_APP_PATH)],
             check=False,
@@ -138,9 +155,8 @@ def _native_app_matches_signing_baseline() -> bool:
             capture_output=True,
             timeout=5,
         )
-    except Exception:
-        logger.warning("native macOS app の署名 baseline を確認できませんでした", exc_info=True)
-        return False
+    except Exception as exc:
+        return f"native app signing baseline check failed: {exc}"
     output = f"{result.stdout}\n{result.stderr}"
     prefix = "designated => "
     actual = ""
@@ -148,7 +164,9 @@ def _native_app_matches_signing_baseline() -> bool:
         if prefix in line:
             actual = line.split(prefix, 1)[1].strip()
             break
-    return actual == expected_requirement
+    if actual != expected_requirement:
+        return "native app signing requirement mismatch"
+    return None
 
 
 def _sha256_hex(path: Path) -> str:
@@ -167,8 +185,9 @@ def is_startup_registered() -> bool:
 def register_startup() -> bool:
     """LaunchAgents に plist を作成してスタートアップ登録する。"""
     try:
-        if not _native_app_is_installed():
-            logger.warning("native macOS app が未インストールのためスタートアップ登録を中止します: %s", _NATIVE_APP_PATH)
+        native_app_issue = _native_app_installation_issue()
+        if native_app_issue is not None:
+            logger.warning("native macOS app の検証に失敗したためスタートアップ登録を中止します: %s", native_app_issue)
             return False
         cmd = _get_launch_command()
 

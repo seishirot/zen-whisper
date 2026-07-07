@@ -25,5 +25,7 @@ def test_backend_health_timeout_reports_context_when_startup_log_is_empty_or_mis
     assert "private func processExitSummary() -> String" in text
     assert "backend exited before health check status=" in text
     assert "private func startupFailureDetail(prefix: String) -> String" in text
-    assert "backend health timed out with no startup log output" in text
+    assert "private func healthTimeoutDetail(startupLogTail tail: String, lastError: Error?) -> String" in text
+    assert 'parts.append("last error: \\(String(describing: lastError))")' in text
+    assert 'parts.append("startup log: <empty>")' in text
     assert "[backend startup log unavailable:" in text

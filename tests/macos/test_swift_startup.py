@@ -165,7 +165,8 @@ def test_backend_process_output_is_redirected_to_private_startup_log() -> None:
     assert "private func startupLogTail" in client
     assert "case healthTimeout(String)" in client
     assert "startupFailureDetail(prefix: processExitSummary())" in client
-    assert 'throw BackendClientError.healthTimeout("backend health timed out with no startup log output")' in client
+    assert "healthTimeoutDetail(startupLogTail: tail, lastError: lastError)" in client
+    assert 'parts.append("startup log: <empty>")' in client
 
 
 def test_unix_socket_client_caps_response_size() -> None:
@@ -174,5 +175,7 @@ def test_unix_socket_client_caps_response_size() -> None:
     assert "static let maxResponseBytes = 1_048_576" in socket_client
     assert "case responseTooLarge" in socket_client
     assert "case timeoutSetupFailed(Int32)" in socket_client
-    assert "throw UnixSocketError.timeoutSetupFailed(errno)" in socket_client
+    assert "guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else" in socket_client
+    assert "guard setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else" in socket_client
+    assert socket_client.count("throw UnixSocketError.timeoutSetupFailed(errno)") == 2
     assert "response.count <= Self.maxResponseBytes" in socket_client

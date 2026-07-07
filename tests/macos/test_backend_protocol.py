@@ -768,6 +768,29 @@ def test_audio_read_error_is_not_reported_as_model_unavailable(tmp_path: Path) -
     assert str(tmp_path) not in result["message"]
 
 
+def test_missing_audio_path_is_nonrecoverable_without_private_path(tmp_path: Path) -> None:
+    audio = tmp_path / "secret-missing.wav"
+    service = BackendService()
+
+    result = service.handle(
+        {
+            "type": "transcribe",
+            "request_id": "missing-audio",
+            "audio_path": str(audio),
+            "engine": "mlx-whisper",
+            "model": "mlx-community/whisper-large-v3-turbo",
+            "language": "ja",
+        }
+    )
+
+    assert result["type"] == "error"
+    assert result["code"] == "AUDIO_NOT_FOUND"
+    assert result["recoverable"] is False
+    assert result["message"] == "Audio file not found"
+    assert "secret-missing" not in result["message"]
+    assert str(tmp_path) not in result["message"]
+
+
 def test_backend_os_error_is_nonrecoverable_without_private_paths(tmp_path: Path) -> None:
     audio = tmp_path / "private-os-error.wav"
     sf.write(audio, np.zeros(1600, dtype=np.float32), 16000)

@@ -132,13 +132,9 @@ final class BackendClient: @unchecked Sendable {
             }
         }
         let tail = startupLogTail()
-        if tail.isEmpty, let lastError {
-            throw BackendClientError.healthTimeout("backend health timed out: \(String(describing: lastError))")
-        }
-        if tail.isEmpty {
-            throw BackendClientError.healthTimeout("backend health timed out with no startup log output")
-        }
-        throw BackendClientError.healthTimeout(tail)
+        throw BackendClientError.healthTimeout(
+            healthTimeoutDetail(startupLogTail: tail, lastError: lastError)
+        )
     }
 
     func preload(engine: String, model: String, language: String) throws {
@@ -207,6 +203,19 @@ final class BackendClient: @unchecked Sendable {
             return prefix
         }
         return "\(prefix)\n\(tail)"
+    }
+
+    private func healthTimeoutDetail(startupLogTail tail: String, lastError: Error?) -> String {
+        var parts = ["backend health timed out"]
+        if let lastError {
+            parts.append("last error: \(String(describing: lastError))")
+        }
+        if tail.isEmpty {
+            parts.append("startup log: <empty>")
+        } else {
+            parts.append("startup log:\n\(tail)")
+        }
+        return parts.joined(separator: "\n")
     }
 
     private func startupLogTail(maxBytes: UInt64 = 8_192) -> String {
