@@ -40,7 +40,7 @@ else:
 
 
 def toggle() -> bool:
-    """スタートアップ登録をトグルし、新しい状態（登録済み=True）を返す。"""
+    """スタートアップ登録をトグルし、操作後の現在状態（登録済み=True）を返す。"""
     if is_registered():
         return True if not unregister() else False
     else:

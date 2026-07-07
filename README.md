@@ -17,9 +17,8 @@ Fully local voice-to-text input tool. Toggle recording with a hotkey, transcribe
 
 ## Requirements
 
-- **Python 3.11-3.13**
-- **Windows**: CPU supported; NVIDIA GPU optional for faster-whisper CUDA
-- **macOS native app**: Apple Silicon M1+, `mise`, Xcode Command Line Tools or Xcode, and a local code signing identity
+- **Windows / Python CLI**: Python 3.11-3.13; CPU supported; NVIDIA GPU optional for faster-whisper CUDA
+- **macOS native app**: Apple Silicon M1+, `mise`-managed Python 3.12 from `.mise.toml`, Xcode Command Line Tools or Xcode, and a local code signing identity
 
 ## Installation
 
@@ -203,9 +202,8 @@ To use custom start/stop sounds instead of generated tones:
 
 ### macOS
 
-- **Accessibility permission**: macOS requires accessibility permission for global hotkeys. Grant it in System Preferences > Privacy & Security > Accessibility.
+- **Accessibility permission**: Required for automatic paste target inspection and paste event dispatch. Open it from `Troubleshooting > Open Accessibility Settings` if paste is unavailable.
 - **Microphone permission**: Grant microphone access when prompted.
-- **Input monitoring permission**: Required for keyboard event monitoring.
 
 ### General
 

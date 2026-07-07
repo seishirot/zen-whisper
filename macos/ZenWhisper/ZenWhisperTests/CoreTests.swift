@@ -71,6 +71,37 @@ final class CoreTests: XCTestCase {
             AppState.copied(pasteDispatched: true, reason: "clipboard restored; enter sent").title,
             "Paste + Enter"
         )
+        XCTAssertEqual(
+            AppState.copied(pasteDispatched: true, reason: "clipboard kept").title,
+            "Paste kept"
+        )
+        XCTAssertEqual(StatusText.copyOnlyReason("paste event unavailable"), "No paste")
+    }
+
+    func testSocketPathUsesShortPrivateRuntimeDirectory() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("zen-whisper-paths-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        let paths = AppPaths(
+            appSupport: root.appendingPathComponent("support", isDirectory: true),
+            logs: root.appendingPathComponent("logs", isDirectory: true)
+        )
+
+        XCTAssertTrue(paths.socketPath.path.hasPrefix("/tmp/zen-whisper-\(getuid())/"))
+        XCTAssertEqual(paths.socketPath.lastPathComponent, "b.sock")
+        XCTAssertLessThanOrEqual(
+            paths.socketPath.path.utf8CString.count,
+            MemoryLayout.size(ofValue: sockaddr_un().sun_path)
+        )
+
+        try paths.prepare()
+        var metadata = stat()
+        XCTAssertEqual(lstat(paths.runtimeDirectory.path, &metadata), 0)
+        XCTAssertEqual(metadata.st_uid, getuid())
+        XCTAssertEqual(metadata.st_mode & S_IFMT, S_IFDIR)
+        XCTAssertEqual(metadata.st_mode & 0o777, 0o700)
     }
 
     func testSettingsStoreDropsDuplicateSubmitHotkey() throws {
@@ -134,6 +165,10 @@ final class CoreTests: XCTestCase {
     }
 
     func testBackendErrorPreservesRecoverableFlag() throws {
+        XCTAssertThrowsError(try decodeBackendResponse(Data("not json".utf8))) { error in
+            XCTAssertEqual(error as? BackendProtocolError, .invalidJSON)
+        }
+
         let recoverable = """
         {"type":"error","request_id":"r1","code":"MODEL_NOT_AVAILABLE","message":"offline","recoverable":true}
         """.data(using: .utf8)!
@@ -379,6 +414,37 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try manager.setEnabled(true))
         XCTAssertFalse(manager.isEnabled())
         XCTAssertFalse(FileManager.default.fileExists(atPath: manager.plistURL.path))
+    }
+
+    func testLoginItemManagerSurfacesBootstrapCleanupFailure() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: home)
+        }
+        let manager = LoginItemManager(
+            homeDirectory: home,
+            appExists: { _ in true },
+            launchctlRunner: { arguments in
+                if arguments.first == "bootstrap" {
+                    throw LoginItemError.launchctlFailed("boom")
+                }
+            },
+            removeItem: { _ in
+                throw CocoaError(.fileWriteNoPermission)
+            }
+        )
+
+        XCTAssertThrowsError(try manager.setEnabled(true)) { error in
+            guard case LoginItemError.bootstrapCleanupFailed(let bootstrap, let cleanup, let plistPath) = error else {
+                XCTFail("Expected bootstrap cleanup failure, got \(error)")
+                return
+            }
+            XCTAssertTrue(bootstrap.contains("boom"))
+            XCTAssertTrue(cleanup.contains("CocoaError"))
+            XCTAssertEqual(plistPath, manager.plistURL.path)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manager.plistURL.path))
     }
 
     func testPasteDecisionRequiresCompleteStableTargetHistory() {

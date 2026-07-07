@@ -1,7 +1,7 @@
 """クリップボード経由ペーストモジュール。
 
 Windows CLI では退避→コピー→ペースト→任意 Enter→復元を行う。
-macOS CLI では自動コピー/ペーストを行わず、native menu bar app に委譲する。
+macOS CLI では自動コピー/ペーストを行わず、native menu bar app の利用を案内する。
 """
 
 from __future__ import annotations
@@ -93,7 +93,6 @@ def paste(
         try:
             pyautogui.hotkey(mod, key)
         except Exception:
-            # Mac では pyautogui が失敗する場合がある → AppleScript フォールバック
             if is_mac():
                 logger.debug("pyautogui ペースト失敗、AppleScript にフォールバック")
                 from src.platform.darwin import paste_via_applescript

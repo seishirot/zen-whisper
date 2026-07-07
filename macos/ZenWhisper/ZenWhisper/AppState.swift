@@ -38,7 +38,7 @@ enum AppState: Equatable {
                     return "Paste + Enter"
                 }
                 if reason?.lowercased().contains("kept") == true {
-                    return "Paste + copy"
+                    return "Paste kept"
                 }
                 return "Paste sent"
             }
@@ -118,7 +118,7 @@ enum StatusText {
             return "No target"
         }
         if lower.contains("event") {
-            return "Paste"
+            return "No paste"
         }
         if lower.contains("output mode") {
             return "Copy only"

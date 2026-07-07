@@ -40,7 +40,12 @@ enum BackendProtocolError: Error, Equatable {
 }
 
 func decodeBackendResponse(_ data: Data) throws -> [String: Any] {
-    let object = try JSONSerialization.jsonObject(with: data)
+    let object: Any
+    do {
+        object = try JSONSerialization.jsonObject(with: data)
+    } catch {
+        throw BackendProtocolError.invalidJSON
+    }
     guard let dict = object as? [String: Any], let type = dict["type"] as? String else {
         throw BackendProtocolError.invalidJSON
     }

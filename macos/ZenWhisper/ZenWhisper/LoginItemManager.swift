@@ -12,19 +12,24 @@ struct LoginItemManager {
     private let appPath: String
     private let appExists: (String) -> Bool
     private let launchctlRunner: LaunchctlRunner?
+    private let removeItem: (URL) throws -> Void
 
     init(
         fileManager: FileManager = .default,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
         appPath: String = LoginItemManager.appPath,
         appExists: @escaping (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
-        launchctlRunner: LaunchctlRunner? = nil
+        launchctlRunner: LaunchctlRunner? = nil,
+        removeItem: ((URL) throws -> Void)? = nil
     ) {
         self.fileManager = fileManager
         self.homeDirectory = homeDirectory
         self.appPath = appPath
         self.appExists = appExists
         self.launchctlRunner = launchctlRunner
+        self.removeItem = removeItem ?? { url in
+            try fileManager.removeItem(at: url)
+        }
     }
 
     var plistURL: URL {
@@ -85,7 +90,17 @@ struct LoginItemManager {
         do {
             try launchctl(["bootstrap", launchDomain(), plistURL.path])
         } catch {
-            try? fileManager.removeItem(at: plistURL)
+            do {
+                if fileManager.fileExists(atPath: plistURL.path) {
+                    try removeItem(plistURL)
+                }
+            } catch let cleanupError {
+                throw LoginItemError.bootstrapCleanupFailed(
+                    bootstrap: String(describing: error),
+                    cleanup: String(describing: cleanupError),
+                    plistPath: plistURL.path
+                )
+            }
             throw error
         }
     }
@@ -93,7 +108,7 @@ struct LoginItemManager {
     private func disable() throws {
         _ = try? launchctl(["bootout", launchDomain(), plistURL.path])
         if fileManager.fileExists(atPath: plistURL.path) {
-            try fileManager.removeItem(at: plistURL)
+            try removeItem(plistURL)
         }
     }
 
@@ -132,6 +147,7 @@ enum LoginItemError: Error, LocalizedError {
     case unsupportedAppPath(String)
     case launchctlFailed(String)
     case permissionFailed(Int32)
+    case bootstrapCleanupFailed(bootstrap: String, cleanup: String, plistPath: String)
 
     var errorDescription: String? {
         switch self {
@@ -143,6 +159,8 @@ enum LoginItemError: Error, LocalizedError {
             return "launchctl failed: \(message)"
         case .permissionFailed(let code):
             return "Could not set LaunchAgent permissions: errno \(code)"
+        case .bootstrapCleanupFailed(let bootstrap, let cleanup, let plistPath):
+            return "launchctl bootstrap failed and cleanup also failed for \(plistPath). bootstrap=\(bootstrap); cleanup=\(cleanup)"
         }
     }
 }

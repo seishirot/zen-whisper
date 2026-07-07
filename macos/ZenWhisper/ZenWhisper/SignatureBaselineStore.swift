@@ -6,6 +6,7 @@ enum SignatureBaselineStoreError: Error {
     case invalidBundleSignature
     case missingDesignatedRequirement
     case missingExecutableHash
+    case rollbackFailed(original: String, rollback: String, backupPath: String)
 }
 
 enum SignatureBaselineStore {
@@ -63,12 +64,38 @@ enum SignatureBaselineStore {
             try fm.moveItem(at: temporaryURL, to: signingURL)
             try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: signingURL.path)
             if movedExisting {
-                try? fm.removeItem(at: backupURL)
+                do {
+                    try fm.removeItem(at: backupURL)
+                } catch {
+                    NSLog(
+                        "zen-whisper: accepted signature but could not remove previous baseline backup %@: %@",
+                        backupURL.path,
+                        String(describing: error)
+                    )
+                }
             }
         } catch {
-            try? fm.removeItem(at: temporaryURL)
+            do {
+                if fm.fileExists(atPath: temporaryURL.path) {
+                    try fm.removeItem(at: temporaryURL)
+                }
+            } catch {
+                NSLog(
+                    "zen-whisper: could not remove failed signature baseline temp file %@: %@",
+                    temporaryURL.path,
+                    String(describing: error)
+                )
+            }
             if movedExisting {
-                try? fm.moveItem(at: backupURL, to: signingURL)
+                do {
+                    try fm.moveItem(at: backupURL, to: signingURL)
+                } catch let rollbackError {
+                    throw SignatureBaselineStoreError.rollbackFailed(
+                        original: String(describing: error),
+                        rollback: String(describing: rollbackError),
+                        backupPath: backupURL.path
+                    )
+                }
             }
             throw error
         }

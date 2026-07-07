@@ -38,6 +38,7 @@ def test_status_title_surfaces_short_copy_only_reason() -> None:
     assert 'return "No start"' in app_state
     assert 'return "No stop"' in app_state
     assert 'return "No current"' in app_state
+    assert 'return "No paste"' in app_state
     assert '"Copied: \\(StatusText.copyOnlyReason($0))"' in app_state
 
 
