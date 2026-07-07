@@ -46,13 +46,18 @@ struct BackendRepairRunner {
         try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: logURL.path)
         let logHandle = try FileHandle(forWritingTo: logURL)
         defer {
-            try? logHandle.close()
+            do {
+                try logHandle.close()
+            } catch {
+                NSLog("zen-whisper: could not close backend repair log %@: %@", logURL.path, String(describing: error))
+            }
         }
         try logHandle.seekToEnd()
-        if let header = "\n=== backend repair \(ISO8601DateFormatter().string(from: Date())) ===\n"
-            .data(using: .utf8) {
-            try? logHandle.write(contentsOf: header)
-        }
+        writeRepairLog(
+            "\n=== backend repair \(ISO8601DateFormatter().string(from: Date())) ===\n",
+            to: logHandle,
+            logURL: logURL
+        )
 
         let process = Process()
         process.executableURL = installer
@@ -67,13 +72,13 @@ struct BackendRepairRunner {
         }
         try process.run()
         if finished.wait(timeout: .now() + .seconds(timeoutSeconds)) == .timedOut {
-            try? logHandle.write(contentsOf: Data("backend repair timed out; terminating installer\n".utf8))
+            writeRepairLog("backend repair timed out; terminating installer\n", to: logHandle, logURL: logURL)
             process.terminate()
             if finished.wait(timeout: .now() + .seconds(10)) == .timedOut {
-                try? logHandle.write(contentsOf: Data("installer ignored terminate; sending SIGKILL\n".utf8))
+                writeRepairLog("installer ignored terminate; sending SIGKILL\n", to: logHandle, logURL: logURL)
                 kill(process.processIdentifier, SIGKILL)
                 if finished.wait(timeout: .now() + .seconds(5)) == .timedOut {
-                    try? logHandle.write(contentsOf: Data("installer did not exit after SIGKILL\n".utf8))
+                    writeRepairLog("installer did not exit after SIGKILL\n", to: logHandle, logURL: logURL)
                     throw BackendRepairRunnerError.didNotExitAfterTimeout
                 }
             }
@@ -81,6 +86,14 @@ struct BackendRepairRunner {
         }
         guard process.terminationStatus == 0 else {
             throw BackendRepairRunnerError.failed(process.terminationStatus)
+        }
+    }
+
+    private func writeRepairLog(_ message: String, to handle: FileHandle, logURL: URL) {
+        do {
+            try handle.write(contentsOf: Data(message.utf8))
+        } catch {
+            NSLog("zen-whisper: could not write backend repair log %@: %@", logURL.path, String(describing: error))
         }
     }
 }

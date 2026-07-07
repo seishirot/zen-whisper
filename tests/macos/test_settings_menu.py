@@ -83,7 +83,8 @@ def test_app_delegate_wires_settings_menu_to_saved_settings() -> None:
     assert "backend-startup.log:" in app_delegate
     assert "private var appLogger: AppLogger?" in app_delegate
     assert "private func logInfo(_ message: String)" in app_delegate
-    assert "appLogger?.info(message)" in app_delegate
+    assert "appLogger.info(message)" in app_delegate
+    assert 'NSLog("zen-whisper: %@", message)' in app_delegate
     assert "private func saveSettingsOnly()" in app_delegate
     assert "settingsStore.save(settings)" in app_delegate
     assert "private func saveSettingsAndPreloadSelectedModel()" in app_delegate

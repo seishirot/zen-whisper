@@ -115,7 +115,8 @@ final class AudioRecorder {
         )
     }
 
-    func cancel() {
+    @discardableResult
+    func cancel() -> String? {
         let url = outputURL
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
@@ -129,8 +130,9 @@ final class AudioRecorder {
         startDate = nil
         outputURL = nil
         if let url {
-            try? FileManager.default.removeItem(at: url)
+            return paths.removeRecording(url, context: "cancelled recording cleanup")
         }
+        return nil
     }
 
     func levelSnapshot() -> RecordingLevelSnapshot {

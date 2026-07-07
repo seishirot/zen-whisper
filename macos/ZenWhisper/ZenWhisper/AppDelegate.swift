@@ -31,8 +31,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         do {
-            try paths.prepare()
+            let preparationWarnings = try paths.prepare()
             appLogger = AppLogger(logsDirectory: paths.logs)
+            startupDiagnostics.append(contentsOf: preparationWarnings)
+            for warning in preparationWarnings {
+                logInfo(warning)
+            }
             registry = try ModelRegistry.loadDefault()
             settingsStore = SettingsStore(registry: registry)
             settings = settingsStore.load()
@@ -68,7 +72,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer?.invalidate()
         statusResetTimer?.invalidate()
         pasteTargetCacheTimer?.invalidate()
-        recorder?.cancel()
+        if let warning = recorder?.cancel() {
+            startupDiagnostics.append(warning)
+            logInfo(warning)
+        }
         backend?.stop()
     }
 
@@ -291,7 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let recording = try recorder.stop()
             if recording.isEmptyAudio {
                 logInfo("recording skipped as empty audio rms=\(recording.rms) peak=\(recording.peak)")
-                try? FileManager.default.removeItem(at: recording.url)
+                removeRecordingFile(recording.url, context: "empty recording cleanup")
                 setCopySkippedTransient("empty audio")
                 return
             }
@@ -310,8 +317,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         model: model,
                         language: language
                     )
-                    try? FileManager.default.removeItem(at: audioURL)
                     DispatchQueue.main.async {
+                        self.removeRecordingFile(audioURL, context: "post-transcription recording cleanup")
                         self.handleTranscript(
                             text,
                             startTarget: startTarget,
@@ -320,8 +327,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         )
                     }
                 } catch {
-                    try? FileManager.default.removeItem(at: audioURL)
                     DispatchQueue.main.async {
+                        self.removeRecordingFile(audioURL, context: "failed transcription recording cleanup")
                         self.setBackendOperationError(error)
                     }
                 }
@@ -378,8 +385,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 copyTranscriptWithoutPaste(trimmed, reason: "paste event unavailable")
                 return
             }
-            guard let restoreToken = pasteController.copyForAutoPaste(trimmed) else {
-                setCopyFailedTransient("pasteboard write failed")
+            let pasteboardWrite = pasteController.prepareAutoPaste(trimmed)
+            guard case .success(let restoreToken) = pasteboardWrite else {
+                if case .writeFailed(let restoreSucceeded) = pasteboardWrite, !restoreSucceeded {
+                    setCopyFailedTransient("pasteboard write failed; clipboard restore failed")
+                } else {
+                    setCopyFailedTransient("pasteboard write failed")
+                }
                 return
             }
             if let pid = current?.pid, pasteController.paste(to: pid) {
@@ -392,11 +404,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         }
                         if restored {
                             self.logInfo("clipboard restored after paste")
+                            self.updateClipboardRestoreStatus(restored: true)
                         } else {
                             self.logInfo("clipboard restore failed after paste")
-                            if case .copied = self.state {
-                                self.setCopiedTransient(pasteDispatched: true, reason: "clipboard restore failed")
-                            }
+                            self.updateClipboardRestoreStatus(restored: false)
                         }
                     }
                 } else {
@@ -461,12 +472,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func updateClipboardRestoreStatus(restored: Bool) {
+        guard case .copied(let pasteDispatched, let reason) = state, pasteDispatched else {
+            return
+        }
+        let current = reason ?? ""
+        let replacement = restored ? "clipboard restored" : "clipboard restore failed"
+        let nextReason: String
+        if current.localizedCaseInsensitiveContains("clipboard restore pending") {
+            nextReason = current.replacingOccurrences(
+                of: "clipboard restore pending",
+                with: replacement,
+                options: [.caseInsensitive]
+            )
+        } else if current.isEmpty {
+            nextReason = replacement
+        } else {
+            nextReason = "\(replacement); \(current)"
+        }
+        setCopiedTransient(pasteDispatched: true, reason: nextReason)
+    }
+
     private func copyTranscriptWithoutPaste(_ text: String, reason: String) {
-        guard pasteController.copy(text) else {
-            setCopyFailedTransient("pasteboard write failed")
+        guard copyToPasteboardOrFail(text) else {
             return
         }
         setCopiedTransient(pasteDispatched: false, reason: reason)
+    }
+
+    private func copyToPasteboardOrFail(_ text: String) -> Bool {
+        switch pasteController.prepareAutoPaste(text) {
+        case .success:
+            return true
+        case .writeFailed(let restoreSucceeded):
+            if restoreSucceeded {
+                setCopyFailedTransient("pasteboard write failed")
+            } else {
+                setCopyFailedTransient("pasteboard write failed; clipboard restore failed")
+            }
+            return false
+        }
     }
 
     private func setCopiedTransient(pasteDispatched: Bool, reason: String?) {
@@ -487,6 +532,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusResetTimer = resetTimer
         RunLoop.main.add(resetTimer, forMode: .common)
+    }
+
+    private func removeRecordingFile(_ url: URL, context: String) {
+        if let warning = paths.removeRecording(url, context: context) {
+            startupDiagnostics.append(warning)
+            logInfo(warning)
+        }
     }
 
     private func setCopySkippedTransient(_ reason: String) {
@@ -811,7 +863,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshLaunchAtLoginState() {
-        statusController?.updateLaunchAtLogin(enabled: loginItemManager.isEnabled())
+        switch loginItemManager.status() {
+        case .enabled:
+            statusController?.updateLaunchAtLogin(enabled: true)
+        case .disabled:
+            statusController?.updateLaunchAtLogin(enabled: false)
+        case .invalid(let reason):
+            statusController?.updateLaunchAtLogin(enabled: false)
+            logInfo("launch at login status unavailable: \(reason)")
+        }
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
@@ -921,8 +981,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "backend-startup.log:",
             Self.processOutput(from: paths.backendStartupLog)
         ].joined(separator: "\n")
-        guard pasteController.copy(diagnostics) else {
-            setCopyFailedTransient("diagnostics pasteboard write failed")
+        guard copyToPasteboardOrFail(diagnostics) else {
             return
         }
         logInfo("diagnostics copied to pasteboard")
@@ -997,7 +1056,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func logInfo(_ message: String) {
-        appLogger?.info(message)
+        if let appLogger {
+            appLogger.info(message)
+        } else {
+            NSLog("zen-whisper: %@", message)
+        }
     }
 
     private func readyState() -> AppState {

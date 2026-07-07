@@ -30,7 +30,13 @@ final class AppLogger {
                 try Self.rotateIfNeeded(logURL: logURL)
                 if FileManager.default.fileExists(atPath: logURL.path) {
                     let handle = try FileHandle(forWritingTo: logURL)
-                    defer { try? handle.close() }
+                    defer {
+                        do {
+                            try handle.close()
+                        } catch {
+                            Self.reportLogFailure("app log close failed at \(logURL.path)", error)
+                        }
+                    }
                     try FileManager.default.setAttributes(
                         [.posixPermissions: 0o600],
                         ofItemAtPath: logURL.path

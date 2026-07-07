@@ -251,6 +251,10 @@ def test_native_installer_removes_legacy_python_launch_agent() -> None:
     assert '"/usr/bin/open" && "$second_arg" == "/Applications/zen-whisper.app"' in install_app
     assert "Preserved existing LaunchAgent" in install_app
     assert "/bin/launchctl bootout" in install_app
+    assert "launchctl_failure_is_benign()" in install_app
+    assert "legacy LaunchAgent bootout failed" in install_app
+    assert "legacy LaunchAgent remove failed" in install_app
+    assert "removed legacy Python LaunchAgent plist but launchd cleanup may still be pending" in install_app
     assert "/bin/rm -f \"$plist\"" in install_app
     assert "src/main.py|zen_whisper|zen-whisper\\.py" in install_app
     assert 'basename "$first_arg")" == "uv"' in install_app

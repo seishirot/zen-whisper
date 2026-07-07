@@ -40,6 +40,11 @@ enum PasteDecision: Equatable {
     case skipCopy(String)
 }
 
+enum PasteboardWriteResult {
+    case success(PasteboardRestoreToken)
+    case writeFailed(restoreSucceeded: Bool)
+}
+
 final class PasteController {
     func isAccessibilityTrusted() -> Bool {
         AXIsProcessTrusted()
@@ -56,18 +61,24 @@ final class PasteController {
     }
 
     func copyForAutoPaste(_ text: String) -> PasteboardRestoreToken? {
+        guard case .success(let token) = prepareAutoPaste(text) else {
+            return nil
+        }
+        return token
+    }
+
+    func prepareAutoPaste(_ text: String) -> PasteboardWriteResult {
         let pasteboard = NSPasteboard.general
         let previous = PasteboardSnapshot(pasteboard: pasteboard)
         pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else {
-            _ = previous.restore(to: pasteboard)
-            return nil
+            return .writeFailed(restoreSucceeded: previous.restore(to: pasteboard))
         }
-        return PasteboardRestoreToken(
+        return .success(PasteboardRestoreToken(
             previous: previous,
             writtenChangeCount: pasteboard.changeCount,
             text: text
-        )
+        ))
     }
 
     func scheduleRestore(

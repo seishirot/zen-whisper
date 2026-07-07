@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +73,15 @@ class BackendService:
                 recoverable=True,
             )
         except Exception as exc:  # pragma: no cover - defensive crash boundary
-            logger.error("Unexpected backend error: %s", exc.__class__.__name__)
+            logger.error(
+                "Unexpected backend error: class=%s request_id=%s type=%s engine=%s model=%s stack=%s",
+                exc.__class__.__name__,
+                _public_request_field(request, "request_id"),
+                _public_request_field(request, "type"),
+                _public_request_field(request, "engine"),
+                _public_request_field(request, "model"),
+                _sanitized_stack(exc),
+            )
             return error_response(
                 request_id,
                 "BACKEND_ERROR",
@@ -178,6 +187,23 @@ def _optional_str_field(request: JsonDict, key: str) -> str | None:
     if not isinstance(value, str) or not value:
         raise InvalidRequestError(f"{key} must be a non-empty string")
     return value
+
+
+def _public_request_field(request: JsonDict, key: str) -> str:
+    value = request.get(key)
+    if not isinstance(value, str) or not value:
+        return "<missing>"
+    return value[:160]
+
+
+def _sanitized_stack(exc: BaseException) -> str:
+    frames = traceback.extract_tb(exc.__traceback__)
+    if not frames:
+        return "<none>"
+    return " > ".join(
+        f"{Path(frame.filename).name}:{frame.lineno}:{frame.name}"
+        for frame in frames[-8:]
+    )
 
 
 def _error_code_for(exc: Exception) -> str:

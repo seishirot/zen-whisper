@@ -24,6 +24,13 @@ enum AppPathsError: Error, LocalizedError {
 struct AppPaths {
     let appSupport: URL
     let logs: URL
+    let runtimeDirectoryOverride: URL?
+
+    init(appSupport: URL, logs: URL, runtimeDirectoryOverride: URL? = nil) {
+        self.appSupport = appSupport
+        self.logs = logs
+        self.runtimeDirectoryOverride = runtimeDirectoryOverride
+    }
 
     static var live: AppPaths {
         let fm = FileManager.default
@@ -39,7 +46,10 @@ struct AppPaths {
     }
 
     var runtimeDirectory: URL {
-        URL(fileURLWithPath: "/tmp", isDirectory: true)
+        if let runtimeDirectoryOverride {
+            return runtimeDirectoryOverride
+        }
+        return URL(fileURLWithPath: "/tmp", isDirectory: true)
             .appendingPathComponent("zen-whisper-\(getuid())", isDirectory: true)
     }
 
@@ -59,14 +69,15 @@ struct AppPaths {
         appSupport.appendingPathComponent("models/huggingface", isDirectory: true)
     }
 
-    func prepare() throws {
+    @discardableResult
+    func prepare() throws -> [String] {
         try createPrivateDirectory(appSupport)
         try createPrivateDirectory(logs)
         try createPrivateRuntimeDirectory(runtimeDirectory)
         try validateSocketPathLength()
         try createPrivateDirectory(recordings)
         try createPrivateDirectory(huggingFaceHome)
-        deleteStaleRecordings()
+        return deleteStaleRecordings()
     }
 
     func createPrivateDirectory(_ url: URL) throws {
@@ -121,15 +132,34 @@ struct AppPaths {
         }
     }
 
-    func deleteStaleRecordings() {
-        guard let files = try? FileManager.default.contentsOfDirectory(
-            at: recordings,
-            includingPropertiesForKeys: nil
-        ) else {
-            return
+    func deleteStaleRecordings() -> [String] {
+        let files: [URL]
+        do {
+            files = try FileManager.default.contentsOfDirectory(
+                at: recordings,
+                includingPropertiesForKeys: nil
+            )
+        } catch {
+            return ["recording cleanup failed listing stale files: \(error.localizedDescription)"]
         }
+        var warnings: [String] = []
         for file in files where file.lastPathComponent.hasPrefix("zw_tmp_") && file.pathExtension == "wav" {
-            try? FileManager.default.removeItem(at: file)
+            if let warning = removeRecording(file, context: "startup stale recording cleanup") {
+                warnings.append(warning)
+            }
+        }
+        return warnings
+    }
+
+    func removeRecording(_ url: URL, context: String) -> String? {
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            return nil
+        }
+        do {
+            try FileManager.default.removeItem(at: url)
+            return nil
+        } catch {
+            return "\(context) failed: \(url.path): \(error.localizedDescription)"
         }
     }
 }

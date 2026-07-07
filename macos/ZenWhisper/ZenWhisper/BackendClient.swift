@@ -6,6 +6,8 @@ enum BackendClientError: Error {
     case processNotRunning
     case missingText
     case healthTimeout(String)
+    case staleSocketRemovalFailed(String)
+    case authTokenWriteFailed(String)
 }
 
 final class BackendClient: @unchecked Sendable {
@@ -29,7 +31,13 @@ final class BackendClient: @unchecked Sendable {
         guard FileManager.default.isExecutableFile(atPath: python.path) else {
             throw BackendClientError.backendPythonMissing(python)
         }
-        try? FileManager.default.removeItem(at: paths.socketPath)
+        if FileManager.default.fileExists(atPath: paths.socketPath.path) {
+            do {
+                try FileManager.default.removeItem(at: paths.socketPath)
+            } catch {
+                throw BackendClientError.staleSocketRemovalFailed(String(describing: error))
+            }
+        }
 
         let process = Process()
         process.executableURL = python
@@ -57,10 +65,15 @@ final class BackendClient: @unchecked Sendable {
         process.standardOutput = startupLog
         process.standardError = startupLog
         try process.run()
-        if let token = "\(authToken)\n".data(using: .utf8) {
-            try? authPipe.fileHandleForWriting.write(contentsOf: token)
+        do {
+            if let token = "\(authToken)\n".data(using: .utf8) {
+                try authPipe.fileHandleForWriting.write(contentsOf: token)
+            }
+            try authPipe.fileHandleForWriting.close()
+        } catch {
+            process.terminate()
+            throw BackendClientError.authTokenWriteFailed(String(describing: error))
         }
-        try? authPipe.fileHandleForWriting.close()
         self.process = process
     }
 
@@ -180,10 +193,20 @@ final class BackendClient: @unchecked Sendable {
         guard let handle = try? FileHandle(forReadingFrom: paths.backendStartupLog) else {
             return ""
         }
-        defer { try? handle.close() }
+        defer {
+            do {
+                try handle.close()
+            } catch {
+                NSLog("zen-whisper: could not close backend startup log %@: %@", paths.backendStartupLog.path, String(describing: error))
+            }
+        }
         let size = (try? FileManager.default.attributesOfItem(atPath: paths.backendStartupLog.path)[.size] as? UInt64) ?? 0
         if size > maxBytes {
-            try? handle.seek(toOffset: size - maxBytes)
+            do {
+                try handle.seek(toOffset: size - maxBytes)
+            } catch {
+                NSLog("zen-whisper: could not seek backend startup log %@: %@", paths.backendStartupLog.path, String(describing: error))
+            }
         }
         let data = handle.readDataToEndOfFile()
         return String(data: data, encoding: .utf8)?

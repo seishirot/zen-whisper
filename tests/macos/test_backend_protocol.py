@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 import types
 import uuid
@@ -56,6 +57,11 @@ def test_protocol_rejects_empty_request_identity() -> None:
         decode_line(b'{"type":"","request_id":"r1"}\n')
 
 
+def test_protocol_rejects_invalid_utf8_as_protocol_error() -> None:
+    with pytest.raises(ProtocolError, match="Invalid UTF-8"):
+        decode_line(b"\xff\n")
+
+
 def test_swift_backend_client_uses_per_launch_auth_token() -> None:
     client = (SWIFT_SRC / "BackendClient.swift").read_text(encoding="utf-8")
     server = (BACKEND_SRC / "zen_whisper_mac_backend/server.py").read_text(encoding="utf-8")
@@ -65,6 +71,8 @@ def test_swift_backend_client_uses_per_launch_auth_token() -> None:
     assert "let authPipe = Pipe()" in client
     assert "process.standardInput = authPipe" in client
     assert "authPipe.fileHandleForWriting.write" in client
+    assert "case authTokenWriteFailed(String)" in client
+    assert "throw BackendClientError.authTokenWriteFailed" in client
     assert "ZEN_WHISPER_BACKEND_AUTH_TOKEN" not in client
     assert 'request["auth_token"] = authToken' in client
     assert "authorized(BackendRequest.shutdown())" in client
@@ -247,6 +255,53 @@ def test_registry_validation_rejects_unsupported_version_and_duplicates() -> Non
         _validate_registry(ModelRegistry(_freeze(unknown_language_engine), "hash"))
 
 
+def test_registry_validation_rejects_non_string_ids_defaults_and_labels() -> None:
+    base = {
+        "version": 1,
+        "default_engine": "mlx-whisper",
+        "default_language": "ja",
+        "languages": {"ja": {"label": "Japanese", "engines": {"mlx-whisper": "ja"}}},
+        "engines": [
+            {
+                "id": "mlx-whisper",
+                "label": "MLX Whisper",
+                "default_model": "model-a",
+                "models": [{"id": "model-a", "label": "A"}],
+            }
+        ],
+    }
+
+    invalid_default = dict(base, default_engine=123)
+    with pytest.raises(RegistryError, match="default_engine"):
+        _validate_registry(ModelRegistry(_freeze(invalid_default), "hash"))
+
+    invalid_engine_id = dict(
+        base,
+        engines=[dict(base["engines"][0], id=123)],
+    )
+    with pytest.raises(RegistryError, match="engine id"):
+        _validate_registry(ModelRegistry(_freeze(invalid_engine_id), "hash"))
+
+    invalid_model_id = dict(
+        base,
+        engines=[
+            dict(
+                base["engines"][0],
+                models=[{"id": 123, "label": "A"}],
+            )
+        ],
+    )
+    with pytest.raises(RegistryError, match="model id"):
+        _validate_registry(ModelRegistry(_freeze(invalid_model_id), "hash"))
+
+    invalid_label = dict(
+        base,
+        languages={"ja": {"label": "", "engines": {"mlx-whisper": "ja"}}},
+    )
+    with pytest.raises(RegistryError, match="label"):
+        _validate_registry(ModelRegistry(_freeze(invalid_label), "hash"))
+
+
 def test_registry_language_mapping() -> None:
     registry = load_registry()
     assert registry.language_for_engine("auto", "mlx-whisper") == "auto"
@@ -376,6 +431,83 @@ def test_service_health_and_dummy_transcribe(tmp_path: Path) -> None:
     )
     assert result["type"] == "result"
     assert result["text"] == "hello"
+
+
+def test_service_busy_guard_rejects_concurrent_work_then_recovers() -> None:
+    started = threading.Event()
+    release = threading.Event()
+    first_result: dict[str, object] = {}
+
+    class BlockingAdapter(DummyAdapter):
+        def preload(self, model_id: str, language: str) -> None:
+            started.set()
+            assert release.wait(timeout=5)
+            super().preload(model_id, language)
+
+    service = BackendService(
+        adapters={"mlx-whisper": BlockingAdapter("mlx-whisper", "hello")}
+    )
+    first_request = {
+        "type": "preload",
+        "request_id": "first",
+        "engine": "mlx-whisper",
+        "model": "mlx-community/whisper-large-v3-turbo",
+        "language": "ja",
+    }
+
+    worker = threading.Thread(
+        target=lambda: first_result.update(service.handle(first_request))
+    )
+    worker.start()
+    assert started.wait(timeout=5)
+
+    busy = service.handle(dict(first_request, request_id="busy"))
+    assert busy["type"] == "error"
+    assert busy["code"] == "BACKEND_BUSY"
+    assert busy["recoverable"] is True
+
+    release.set()
+    worker.join(timeout=5)
+    assert first_result["type"] == "ready"
+
+    recovered = service.handle(dict(first_request, request_id="recovered"))
+    assert recovered["type"] == "ready"
+
+
+def test_service_logs_sanitized_context_for_unexpected_errors(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    audio = tmp_path / "sample.wav"
+    sf.write(audio, np.zeros(1600, dtype=np.float32), 16000)
+
+    class ExplodingAdapter(DummyAdapter):
+        def transcribe(self, audio_path: Path, model_id: str, language: str) -> str:
+            raise RuntimeError(f"private audio path {audio_path}")
+
+    service = BackendService(
+        adapters={"mlx-whisper": ExplodingAdapter("mlx-whisper", "unused")}
+    )
+    with caplog.at_level(logging.ERROR, logger="zen_whisper_mac_backend.service"):
+        result = service.handle(
+            {
+                "type": "transcribe",
+                "request_id": "explode",
+                "audio_path": str(audio),
+                "engine": "mlx-whisper",
+                "model": "mlx-community/whisper-large-v3-turbo",
+                "language": "ja",
+            }
+        )
+
+    assert result["type"] == "error"
+    assert result["code"] == "BACKEND_ERROR"
+    assert result["message"] == "Unexpected backend error"
+    assert "class=RuntimeError" in caplog.text
+    assert "request_id=explode" in caplog.text
+    assert "engine=mlx-whisper" in caplog.text
+    assert "audio_path" not in caplog.text
+    assert str(audio) not in caplog.text
 
 
 def test_service_requires_auth_token_when_configured() -> None:

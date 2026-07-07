@@ -22,21 +22,24 @@ class ModelRegistry:
 
     @property
     def default_engine(self) -> str:
-        return str(self.data["default_engine"])
+        return _require_non_empty_string(self.data.get("default_engine"), "default_engine")
 
     @property
     def default_language(self) -> str:
-        return str(self.data["default_language"])
+        return _require_non_empty_string(self.data.get("default_language"), "default_language")
 
     def engine_ids(self) -> set[str]:
-        return {str(engine["id"]) for engine in self.data["engines"]}
+        return {_require_non_empty_string(engine.get("id"), "engine id") for engine in self.data["engines"]}
 
     def model_ids(self, engine_id: str) -> set[str]:
         engine = self.engine(engine_id)
-        return {str(model["id"]) for model in engine["models"]}
+        return {_require_non_empty_string(model.get("id"), f"{engine_id} model id") for model in engine["models"]}
 
     def default_model(self, engine_id: str) -> str:
-        return str(self.engine(engine_id)["default_model"])
+        return _require_non_empty_string(
+            self.engine(engine_id).get("default_model"),
+            f"{engine_id} default_model",
+        )
 
     def engine(self, engine_id: str) -> Mapping[str, Any]:
         for engine in self.data["engines"]:
@@ -88,9 +91,13 @@ def _validate_registry(registry: ModelRegistry) -> None:
     if registry.default_language not in registry.data.get("languages", {}):
         raise RegistryError("default_language is not listed in languages")
     for engine in registry.data["engines"]:
-        engine_id = str(engine["id"])
+        engine_id = _require_non_empty_string(engine.get("id"), "engine id")
+        _require_non_empty_string(engine.get("label"), f"{engine_id} label")
         _require_unique_ids(engine["models"], f"{engine_id} model")
-        default_model = str(engine["default_model"])
+        default_model = _require_non_empty_string(
+            engine.get("default_model"),
+            f"{engine_id} default_model",
+        )
         if default_model not in registry.model_ids(engine_id):
             raise RegistryError(f"default_model is not listed for {engine_id}")
     engine_ids = registry.engine_ids()
@@ -100,6 +107,7 @@ def _validate_registry(registry: ModelRegistry) -> None:
     for language_id, language in languages.items():
         if not isinstance(language, Mapping):
             raise RegistryError(f"language entry is not an object: {language_id}")
+        _require_non_empty_string(language.get("label"), f"language {language_id} label")
         engine_map = language.get("engines")
         if not isinstance(engine_map, Mapping):
             raise RegistryError(f"language entry missing engines: {language_id}")
@@ -117,12 +125,17 @@ def _require_unique_ids(items: object, label: str) -> None:
     for item in items:
         if not isinstance(item, Mapping):
             raise RegistryError(f"{label} entry is not an object")
-        item_id = str(item.get("id", ""))
-        if not item_id:
-            raise RegistryError(f"{label} entry missing id")
+        item_id = _require_non_empty_string(item.get("id"), f"{label} id")
+        _require_non_empty_string(item.get("label"), f"{label} label")
         if item_id in seen:
             raise RegistryError(f"duplicate {label} id: {item_id}")
         seen.add(item_id)
+
+
+def _require_non_empty_string(value: object, label: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise RegistryError(f"{label} must be a non-empty string")
+    return value
 
 
 def _freeze(value: object) -> object:

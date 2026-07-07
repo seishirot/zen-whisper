@@ -48,6 +48,9 @@ def test_paste_dispatch_reports_event_creation_failure() -> None:
     assert "func copy(_ text: String, restoreAfter delay: TimeInterval? = nil) -> Bool" in paste_controller
     assert "let previous = PasteboardSnapshot(pasteboard: pasteboard)" in paste_controller
     assert "guard pasteboard.setString(text, forType: .string) else" in paste_controller
+    assert "enum PasteboardWriteResult" in paste_controller
+    assert "case writeFailed(restoreSucceeded: Bool)" in paste_controller
+    assert "func prepareAutoPaste(_ text: String) -> PasteboardWriteResult" in paste_controller
     assert "writtenChangeCount: pasteboard.changeCount" in paste_controller
     assert "current.changeCount == token.writtenChangeCount" in paste_controller
     assert "current.string(forType: .string) == token.text" in paste_controller
@@ -73,7 +76,7 @@ def test_native_pasteboard_write_happens_only_after_paste_decision() -> None:
     decision_index = app_delegate.index("let decision = pasteController.decide(")
     paste_case_index = app_delegate.index("case .paste:")
     preflight_index = app_delegate.index("guard pasteController.canCreatePasteEvents() else")
-    copy_index = app_delegate.index("guard let restoreToken = pasteController.copyForAutoPaste(trimmed) else")
+    copy_index = app_delegate.index("let pasteboardWrite = pasteController.prepareAutoPaste(trimmed)")
     restore_index = app_delegate.index("pasteController.scheduleRestore(restoreToken, after: 1.0)")
     schedule_enter_index = app_delegate.index("scheduleSubmitReturn(to: current, pasteReason: pasteReason)")
     keep_index = app_delegate.index('pasteReason = "clipboard kept"')
@@ -86,6 +89,8 @@ def test_native_pasteboard_write_happens_only_after_paste_decision() -> None:
     assert copy_index < keep_index
     assert copy_index < failure_restore_index
     assert copy_only_index > copy_index
+    assert "self.updateClipboardRestoreStatus(restored: true)" in app_delegate
+    assert "private func updateClipboardRestoreStatus(restored: Bool)" in app_delegate
     assert 'copyTranscriptWithoutPaste(trimmed, reason: "Accessibility not allowed")' in app_delegate
     assert "guard settings.outputMode.shouldAttemptPaste else" in app_delegate
     assert 'copyTranscriptWithoutPaste(trimmed, reason: "output mode copy only")' in app_delegate
@@ -232,7 +237,8 @@ def test_copy_only_decisions_copy_without_auto_paste() -> None:
     assert 'setCopySkippedTransient("target is unsafe")' in app_delegate
     assert "paste decision skip-copy before AX check: target is unsafe" in app_delegate
     assert "private func copyTranscriptWithoutPaste(_ text: String, reason: String)" in app_delegate
-    assert "guard pasteController.copy(text) else" in app_delegate
+    assert "guard copyToPasteboardOrFail(text) else" in app_delegate
+    assert "private func copyToPasteboardOrFail(_ text: String) -> Bool" in app_delegate
     assert "setCopiedTransient(pasteDispatched: false, reason: reason)" in app_delegate
     assert "case skipCopy(String)" in paste_controller
     assert "func isUnsafeForClipboard(_ snapshot: PasteTargetSnapshot) -> Bool" in paste_controller

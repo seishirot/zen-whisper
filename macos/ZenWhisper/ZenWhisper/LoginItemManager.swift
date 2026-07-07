@@ -1,6 +1,19 @@
 import Foundation
 import Darwin
 
+enum LoginItemStatus: Equatable {
+    case enabled
+    case disabled
+    case invalid(String)
+
+    var isEnabled: Bool {
+        if case .enabled = self {
+            return true
+        }
+        return false
+    }
+}
+
 struct LoginItemManager {
     static let label = "com.seishirot.zenwhisper"
     static let appPath = "/Applications/zen-whisper.app"
@@ -40,13 +53,26 @@ struct LoginItemManager {
     }
 
     func isEnabled() -> Bool {
-        guard let data = try? Data(contentsOf: plistURL),
-              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              plist["Label"] as? String == Self.label,
-              let args = plist["ProgramArguments"] as? [String] else {
-            return false
+        status().isEnabled
+    }
+
+    func status() -> LoginItemStatus {
+        guard fileManager.fileExists(atPath: plistURL.path) else {
+            return .disabled
         }
-        return args == ["/usr/bin/open", appPath]
+        do {
+            let data = try Data(contentsOf: plistURL)
+            guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+                return .invalid("LaunchAgent plist is not a dictionary: \(plistURL.path)")
+            }
+            guard plist["Label"] as? String == Self.label,
+                  let args = plist["ProgramArguments"] as? [String] else {
+                return .disabled
+            }
+            return args == ["/usr/bin/open", appPath] ? .enabled : .disabled
+        } catch {
+            return .invalid("LaunchAgent plist is unreadable: \(plistURL.path): \(error.localizedDescription)")
+        }
     }
 
     func setEnabled(_ enabled: Bool) throws {
@@ -86,7 +112,7 @@ struct LoginItemManager {
         try data.write(to: plistURL, options: .atomic)
         try setPermissions(plistURL, mode: 0o644)
 
-        _ = try? launchctl(["bootout", launchDomain(), plistURL.path])
+        try bootoutIfLoaded()
         do {
             try launchctl(["bootstrap", launchDomain(), plistURL.path])
         } catch {
@@ -106,7 +132,7 @@ struct LoginItemManager {
     }
 
     private func disable() throws {
-        _ = try? launchctl(["bootout", launchDomain(), plistURL.path])
+        try bootoutIfLoaded()
         if fileManager.fileExists(atPath: plistURL.path) {
             try removeItem(plistURL)
         }
@@ -133,6 +159,24 @@ struct LoginItemManager {
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             throw LoginItemError.launchctlFailed(message ?? "launchctl exited \(process.terminationStatus)")
         }
+    }
+
+    private func bootoutIfLoaded() throws {
+        do {
+            try launchctl(["bootout", launchDomain(), plistURL.path])
+        } catch LoginItemError.launchctlFailed(let message) where Self.isBenignBootoutFailure(message) {
+            return
+        }
+    }
+
+    static func isBenignBootoutFailure(_ message: String) -> Bool {
+        let lower = message.lowercased()
+        return lower.contains("no such process")
+            || lower.contains("no such file")
+            || lower.contains("not found")
+            || lower.contains("not loaded")
+            || lower.contains("could not find specified service")
+            || lower.contains("bootstrap failed: 3")
     }
 
     private func setPermissions(_ url: URL, mode: mode_t) throws {

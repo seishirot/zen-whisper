@@ -327,10 +327,44 @@ remove_legacy_python_launch_agent() {
     echo "Preserved existing LaunchAgent: $plist"
     return 0
   fi
-  /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "$plist" >/dev/null 2>&1 || true
-  /bin/launchctl remove "$label" >/dev/null 2>&1 || true
-  /bin/rm -f "$plist"
-  echo "Removed legacy Python LaunchAgent: $plist"
+  local cleanup_ok=1
+  local bootout_error
+  bootout_error="$(mktemp "${TMPDIR:-/tmp}/zen-whisper-launchctl-bootout.XXXXXX")"
+  if ! /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "$plist" >/dev/null 2>"$bootout_error"; then
+    if ! launchctl_failure_is_benign "$(cat "$bootout_error")"; then
+      cleanup_ok=0
+      echo "install_app.sh: warning: legacy LaunchAgent bootout failed: $(cat "$bootout_error")" >&2
+    fi
+  fi
+  /bin/rm -f "$bootout_error"
+
+  local remove_error
+  remove_error="$(mktemp "${TMPDIR:-/tmp}/zen-whisper-launchctl-remove.XXXXXX")"
+  if ! /bin/launchctl remove "$label" >/dev/null 2>"$remove_error"; then
+    if ! launchctl_failure_is_benign "$(cat "$remove_error")"; then
+      cleanup_ok=0
+      echo "install_app.sh: warning: legacy LaunchAgent remove failed: $(cat "$remove_error")" >&2
+    fi
+  fi
+  /bin/rm -f "$remove_error"
+
+  if ! /bin/rm -f "$plist"; then
+    echo "install_app.sh: warning: could not remove legacy Python LaunchAgent plist: $plist" >&2
+    return 0
+  fi
+  if [[ "$cleanup_ok" == "1" ]]; then
+    echo "Removed legacy Python LaunchAgent: $plist"
+  else
+    echo "install_app.sh: warning: removed legacy Python LaunchAgent plist but launchd cleanup may still be pending: $plist" >&2
+  fi
+}
+
+launchctl_failure_is_benign() {
+  local message="$1"
+  if [[ -z "$message" ]]; then
+    return 1
+  fi
+  /usr/bin/grep -Eiq 'no such process|no such file|not found|not loaded|could not find specified service|bootstrap failed: 3' <<<"$message"
 }
 
 launch_agent_is_legacy_python() {

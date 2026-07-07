@@ -84,23 +84,93 @@ final class CoreTests: XCTestCase {
         defer {
             try? FileManager.default.removeItem(at: root)
         }
-        let paths = AppPaths(
-            appSupport: root.appendingPathComponent("support", isDirectory: true),
-            logs: root.appendingPathComponent("logs", isDirectory: true)
+        let runtimeRoot = URL(fileURLWithPath: "/tmp/zwrt-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: runtimeRoot)
+        }
+        let livePaths = AppPaths(
+            appSupport: root.appendingPathComponent("live-support", isDirectory: true),
+            logs: root.appendingPathComponent("live-logs", isDirectory: true)
         )
-
-        XCTAssertTrue(paths.socketPath.path.hasPrefix("/tmp/zen-whisper-\(getuid())/"))
-        XCTAssertEqual(paths.socketPath.lastPathComponent, "b.sock")
+        XCTAssertTrue(livePaths.socketPath.path.hasPrefix("/tmp/zen-whisper-\(getuid())/"))
+        XCTAssertEqual(livePaths.socketPath.lastPathComponent, "b.sock")
         XCTAssertLessThanOrEqual(
-            paths.socketPath.path.utf8CString.count,
+            livePaths.socketPath.path.utf8CString.count,
             MemoryLayout.size(ofValue: sockaddr_un().sun_path)
         )
+
+        let paths = AppPaths(
+            appSupport: root.appendingPathComponent("support", isDirectory: true),
+            logs: root.appendingPathComponent("logs", isDirectory: true),
+            runtimeDirectoryOverride: runtimeRoot
+        )
+
+        XCTAssertEqual(paths.socketPath.lastPathComponent, "b.sock")
 
         try paths.prepare()
         var metadata = stat()
         XCTAssertEqual(lstat(paths.runtimeDirectory.path, &metadata), 0)
         XCTAssertEqual(metadata.st_uid, getuid())
         XCTAssertEqual(metadata.st_mode & S_IFMT, S_IFDIR)
+        XCTAssertEqual(metadata.st_mode & 0o777, 0o700)
+    }
+
+    func testRuntimeDirectoryRejectsFileAndSymlinkAndRepairsPermissions() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("zen-whisper-runtime-\(UUID().uuidString)", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: root)
+        }
+        let runtimeRoot = URL(fileURLWithPath: "/tmp/zwrt-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: runtimeRoot)
+        }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+
+        let fileRuntime = runtimeRoot.appendingPathComponent("runtime-file")
+        try FileManager.default.createDirectory(at: runtimeRoot, withIntermediateDirectories: true)
+        try "not a directory".write(to: fileRuntime, atomically: true, encoding: .utf8)
+        let filePaths = AppPaths(
+            appSupport: root.appendingPathComponent("support-file", isDirectory: true),
+            logs: root.appendingPathComponent("logs-file", isDirectory: true),
+            runtimeDirectoryOverride: fileRuntime
+        )
+        XCTAssertThrowsError(try filePaths.prepare()) { error in
+            guard case AppPathsError.runtimePathNotDirectory(let path) = error else {
+                XCTFail("Expected runtimePathNotDirectory, got \(error)")
+                return
+            }
+            XCTAssertEqual(path, fileRuntime.path)
+        }
+
+        let target = runtimeRoot.appendingPathComponent("target", isDirectory: true)
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        let symlinkRuntime = runtimeRoot.appendingPathComponent("runtime-link")
+        try FileManager.default.createSymbolicLink(at: symlinkRuntime, withDestinationURL: target)
+        let symlinkPaths = AppPaths(
+            appSupport: root.appendingPathComponent("support-link", isDirectory: true),
+            logs: root.appendingPathComponent("logs-link", isDirectory: true),
+            runtimeDirectoryOverride: symlinkRuntime
+        )
+        XCTAssertThrowsError(try symlinkPaths.prepare()) { error in
+            guard case AppPathsError.runtimePathNotDirectory(let path) = error else {
+                XCTFail("Expected runtimePathNotDirectory, got \(error)")
+                return
+            }
+            XCTAssertEqual(path, symlinkRuntime.path)
+        }
+
+        let looseRuntime = runtimeRoot.appendingPathComponent("runtime-loose", isDirectory: true)
+        try FileManager.default.createDirectory(at: looseRuntime, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: looseRuntime.path)
+        let loosePaths = AppPaths(
+            appSupport: root.appendingPathComponent("support-loose", isDirectory: true),
+            logs: root.appendingPathComponent("logs-loose", isDirectory: true),
+            runtimeDirectoryOverride: looseRuntime
+        )
+        try loosePaths.prepare()
+        var metadata = stat()
+        XCTAssertEqual(lstat(looseRuntime.path, &metadata), 0)
         XCTAssertEqual(metadata.st_mode & 0o777, 0o700)
     }
 
@@ -318,6 +388,41 @@ final class CoreTests: XCTestCase {
         }
     }
 
+    func testBackendInstallValidatorRejectsExternalPythonRuntimeSymlinkEvenWhenManifestMatches() throws {
+        let fixture = try makePerUserBackendInstallFixture()
+        let installURL = fixture.paths.appSupport.appendingPathComponent("backend/install.json")
+        let data = try Data(contentsOf: installURL)
+        let install = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any]
+        )
+        let runtimeRoot = URL(fileURLWithPath: try XCTUnwrap(install["python_runtime_prefix"] as? String))
+        try FileManager.default.createSymbolicLink(
+            at: runtimeRoot.appendingPathComponent("external-runtime-link"),
+            withDestinationURL: URL(fileURLWithPath: "/tmp")
+        )
+        try rewriteRuntimeManifestAndInstallHash(fixture.paths)
+
+        if case .invalid(let reason) = fixture.validator.validateInstallMetadata() {
+            XCTAssertTrue(reason.contains("external Python runtime symlink"))
+        } else {
+            XCTFail("Expected external Python runtime symlink to invalidate install")
+        }
+    }
+
+    func testBackendInstallValidatorRejectsRuntimeManifestHashMismatch() throws {
+        let fixture = try makePerUserBackendInstallFixture()
+        try "\n ".append(
+            to: fixture.paths.appSupport
+                .appendingPathComponent("backend/python_runtime_manifest.json")
+        )
+
+        if case .invalid(let reason) = fixture.validator.validateInstallMetadata() {
+            XCTAssertTrue(reason.contains("Python runtime manifest"))
+        } else {
+            XCTFail("Expected runtime manifest mismatch to invalidate install")
+        }
+    }
+
     func testBackendInstallValidatorRejectsPythonSourceHashMismatch() throws {
         let fixture = try makePerUserBackendInstallFixture()
         try updateInstallRecord(fixture.paths) { install in
@@ -361,6 +466,14 @@ final class CoreTests: XCTestCase {
         let wrongData = try PropertyListSerialization.data(fromPropertyList: wrongPlist, format: .xml, options: 0)
         try wrongData.write(to: manager.plistURL, options: .atomic)
         XCTAssertFalse(manager.isEnabled())
+        XCTAssertEqual(manager.status(), .disabled)
+
+        try "not a plist".write(to: manager.plistURL, atomically: true, encoding: .utf8)
+        if case .invalid(let reason) = manager.status() {
+            XCTAssertTrue(reason.contains("LaunchAgent plist is unreadable"))
+        } else {
+            XCTFail("Expected malformed LaunchAgent plist to be invalid")
+        }
     }
 
     func testLoginItemManagerWritesAndRemovesLaunchAgent() throws {
@@ -414,6 +527,47 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try manager.setEnabled(true))
         XCTAssertFalse(manager.isEnabled())
         XCTAssertFalse(FileManager.default.fileExists(atPath: manager.plistURL.path))
+    }
+
+    func testLoginItemManagerTreatsOnlyBenignBootoutFailuresAsNonfatal() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: home)
+        }
+        var launchctlCalls: [[String]] = []
+        let manager = LoginItemManager(
+            homeDirectory: home,
+            appExists: { _ in true },
+            launchctlRunner: { arguments in
+                launchctlCalls.append(arguments)
+                if arguments.first == "bootout" {
+                    throw LoginItemError.launchctlFailed("Could not find specified service")
+                }
+            }
+        )
+
+        try manager.setEnabled(true)
+        XCTAssertTrue(manager.isEnabled())
+        XCTAssertEqual(launchctlCalls.map { $0.first }, ["bootout", "bootstrap"])
+
+        let failing = LoginItemManager(
+            homeDirectory: home,
+            appExists: { _ in true },
+            launchctlRunner: { arguments in
+                if arguments.first == "bootout" {
+                    throw LoginItemError.launchctlFailed("permission denied")
+                }
+            }
+        )
+        XCTAssertThrowsError(try failing.setEnabled(false)) { error in
+            guard case LoginItemError.launchctlFailed(let message) = error else {
+                XCTFail("Expected launchctl failure, got \(error)")
+                return
+            }
+            XCTAssertEqual(message, "permission denied")
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: manager.plistURL.path))
     }
 
     func testLoginItemManagerSurfacesBootstrapCleanupFailure() throws {
@@ -746,6 +900,22 @@ final class CoreTests: XCTestCase {
         let hash = try testSHA256(file: venvManifest)
         try updateInstallRecord(paths) { install in
             install["venv_manifest_hash"] = hash
+        }
+    }
+
+    private func rewriteRuntimeManifestAndInstallHash(_ paths: AppPaths) throws {
+        let installURL = paths.appSupport.appendingPathComponent("backend/install.json")
+        let data = try Data(contentsOf: installURL)
+        guard let install = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let runtimePrefix = install["python_runtime_prefix"] as? String else {
+            throw NSError(domain: "test", code: 3)
+        }
+        let runtimeRoot = URL(fileURLWithPath: runtimePrefix, isDirectory: true)
+        let runtimeManifest = paths.appSupport.appendingPathComponent("backend/python_runtime_manifest.json")
+        try writeManifest(entries: testManifestEntries(root: runtimeRoot), rootPath: runtimeRoot.path, to: runtimeManifest)
+        let hash = try testSHA256(file: runtimeManifest)
+        try updateInstallRecord(paths) { install in
+            install["python_runtime_manifest_hash"] = hash
         }
     }
 

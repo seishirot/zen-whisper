@@ -20,7 +20,10 @@ def decode_line(line: bytes | str) -> JsonDict:
     if isinstance(line, str) and len(line.encode("utf-8")) > MAX_LINE_BYTES:
         raise ProtocolError("Message is too large")
     if isinstance(line, bytes):
-        line = line.decode("utf-8")
+        try:
+            line = line.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ProtocolError("Invalid UTF-8") from exc
     try:
         message = json.loads(line)
     except json.JSONDecodeError as exc:
