@@ -27,6 +27,8 @@ def test_install_app_reopens_app_when_it_was_running() -> None:
     assert "reopen_app_if_needed()" in text
     assert "ZEN_WHISPER_REOPEN_AFTER_INSTALL" in text
     assert '/usr/bin/open "$APP_DEST"' in text
+    assert 'if ! /usr/bin/open "$APP_DEST" >/dev/null 2>&1; then' in text
+    assert 'install_app.sh: warning: could not reopen app: $APP_DEST' in text
     assert 'echo "Reopened app: $APP_DEST"' in text
     assert "echo \"Installed app: $APP_DEST\"\nreopen_app_if_needed" in text
 

@@ -38,7 +38,7 @@ class ModelRegistry:
     def default_model(self, engine_id: str) -> str:
         return str(self.engine(engine_id)["default_model"])
 
-    def engine(self, engine_id: str) -> dict[str, Any]:
+    def engine(self, engine_id: str) -> Mapping[str, Any]:
         for engine in self.data["engines"]:
             if engine["id"] == engine_id:
                 return engine
@@ -80,6 +80,8 @@ def load_registry() -> ModelRegistry:
 
 
 def _validate_registry(registry: ModelRegistry) -> None:
+    if registry.data.get("version") != 1:
+        raise RegistryError("unsupported registry version")
     _require_unique_ids(registry.data["engines"], "engine")
     if registry.default_engine not in registry.engine_ids():
         raise RegistryError("default_engine is not listed in engines")

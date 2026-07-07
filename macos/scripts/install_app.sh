@@ -153,7 +153,10 @@ reopen_app_if_needed() {
   if [[ ! -d "$APP_DEST" ]]; then
     return 0
   fi
-  /usr/bin/open "$APP_DEST" >/dev/null 2>&1 || true
+  if ! /usr/bin/open "$APP_DEST" >/dev/null 2>&1; then
+    echo "install_app.sh: warning: could not reopen app: $APP_DEST" >&2
+    return 0
+  fi
   APP_REOPENED=1
   echo "Reopened app: $APP_DEST"
 }

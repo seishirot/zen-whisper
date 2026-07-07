@@ -5,18 +5,26 @@ struct LoginItemManager {
     static let label = "com.seishirot.zenwhisper"
     static let appPath = "/Applications/zen-whisper.app"
 
+    typealias LaunchctlRunner = ([String]) throws -> Void
+
     private let fileManager: FileManager
     private let homeDirectory: URL
     private let appPath: String
+    private let appExists: (String) -> Bool
+    private let launchctlRunner: LaunchctlRunner?
 
     init(
         fileManager: FileManager = .default,
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser,
-        appPath: String = LoginItemManager.appPath
+        appPath: String = LoginItemManager.appPath,
+        appExists: @escaping (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        launchctlRunner: LaunchctlRunner? = nil
     ) {
         self.fileManager = fileManager
         self.homeDirectory = homeDirectory
         self.appPath = appPath
+        self.appExists = appExists
+        self.launchctlRunner = launchctlRunner
     }
 
     var plistURL: URL {
@@ -48,7 +56,7 @@ struct LoginItemManager {
         guard appPath == Self.appPath else {
             throw LoginItemError.unsupportedAppPath(appPath)
         }
-        guard fileManager.fileExists(atPath: appPath) else {
+        guard appExists(appPath) else {
             throw LoginItemError.appNotInstalled(appPath)
         }
 
@@ -74,7 +82,12 @@ struct LoginItemManager {
         try setPermissions(plistURL, mode: 0o644)
 
         _ = try? launchctl(["bootout", launchDomain(), plistURL.path])
-        try launchctl(["bootstrap", launchDomain(), plistURL.path])
+        do {
+            try launchctl(["bootstrap", launchDomain(), plistURL.path])
+        } catch {
+            try? fileManager.removeItem(at: plistURL)
+            throw error
+        }
     }
 
     private func disable() throws {
@@ -89,6 +102,10 @@ struct LoginItemManager {
     }
 
     private func launchctl(_ arguments: [String]) throws {
+        if let launchctlRunner {
+            try launchctlRunner(arguments)
+            return
+        }
         let process = Process()
         let error = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/launchctl")

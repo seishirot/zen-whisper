@@ -56,14 +56,44 @@ struct ModelRegistry: Decodable, Equatable {
     }
 
     func validate() throws {
+        guard version == 1 else {
+            throw RegistryError.unsupportedVersion(version)
+        }
+        try requireUniqueIDs(engines.map(\.id), label: "engine")
         guard engines.contains(where: { $0.id == defaultEngine }) else {
             throw RegistryError.invalidDefaultEngine(defaultEngine)
         }
         guard languages[defaultLanguage] != nil else {
             throw RegistryError.invalidDefaultLanguage(defaultLanguage)
         }
-        for engine in engines where !engine.models.contains(where: { $0.id == engine.defaultModel }) {
-            throw RegistryError.invalidDefaultModel(engine.id)
+        let engineIDs = Set(engines.map(\.id))
+        for engine in engines {
+            try requireUniqueIDs(engine.models.map(\.id), label: "\(engine.id) model")
+            guard engine.models.contains(where: { $0.id == engine.defaultModel }) else {
+                throw RegistryError.invalidDefaultModel(engine.id)
+            }
+        }
+        for (languageID, language) in languages {
+            for (engineID, backendLanguage) in language.engines {
+                guard engineIDs.contains(engineID) else {
+                    throw RegistryError.invalidLanguageEngine(languageID, engineID)
+                }
+                guard !backendLanguage.isEmpty else {
+                    throw RegistryError.invalidLanguageEngine(languageID, engineID)
+                }
+            }
+        }
+    }
+
+    private func requireUniqueIDs(_ ids: [String], label: String) throws {
+        var seen = Set<String>()
+        for id in ids {
+            guard !id.isEmpty else {
+                throw RegistryError.duplicateID(label, id)
+            }
+            guard seen.insert(id).inserted else {
+                throw RegistryError.duplicateID(label, id)
+            }
         }
     }
 
@@ -137,7 +167,10 @@ struct ModelRegistry: Decodable, Equatable {
 
 enum RegistryError: Error, Equatable {
     case missingResource
+    case unsupportedVersion(Int)
     case invalidDefaultEngine(String)
     case invalidDefaultLanguage(String)
     case invalidDefaultModel(String)
+    case duplicateID(String, String)
+    case invalidLanguageEngine(String, String)
 }

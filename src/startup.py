@@ -1,7 +1,7 @@
 """スタートアップ自動起動モジュール。プラットフォームに応じた実装に委譲する。
 
 Windows: レジストリ (HKCU\\...\\Run)
-macOS:   LaunchAgents plist (~/.Library/LaunchAgents/)
+macOS:   LaunchAgents plist (~/Library/LaunchAgents/)
 """
 
 from __future__ import annotations

@@ -109,6 +109,8 @@ final class BackendClient: @unchecked Sendable {
             }
             do {
                 return try health()
+            } catch let error as BackendProtocolError {
+                throw error
             } catch {
                 lastError = error
                 Thread.sleep(forTimeInterval: 0.1)

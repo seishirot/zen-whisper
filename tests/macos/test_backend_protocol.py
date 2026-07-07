@@ -29,7 +29,13 @@ from zen_whisper_mac_backend.adapters import (  # noqa: E402
     make_adapter,
 )
 from zen_whisper_mac_backend.protocol import MAX_LINE_BYTES, ProtocolError, decode_line, encode_message  # noqa: E402
-from zen_whisper_mac_backend.registry import RegistryError, load_registry  # noqa: E402
+from zen_whisper_mac_backend.registry import (  # noqa: E402
+    ModelRegistry,
+    RegistryError,
+    _freeze,
+    _validate_registry,
+    load_registry,
+)
 from zen_whisper_mac_backend.service import BackendService  # noqa: E402
 
 
@@ -41,6 +47,13 @@ def test_protocol_round_trip() -> None:
 def test_protocol_rejects_oversized_lines() -> None:
     with pytest.raises(ProtocolError, match="too large"):
         decode_line(b"x" * (MAX_LINE_BYTES + 1))
+
+
+def test_protocol_rejects_empty_request_identity() -> None:
+    with pytest.raises(ProtocolError, match="request_id"):
+        decode_line(b'{"type":"health","request_id":""}\n')
+    with pytest.raises(ProtocolError, match="type"):
+        decode_line(b'{"type":"","request_id":"r1"}\n')
 
 
 def test_swift_backend_client_uses_per_launch_auth_token() -> None:
@@ -138,6 +151,12 @@ def test_backend_socket_server_exits_when_parent_pid_is_gone(tmp_path: Path) -> 
         socket_path.unlink(missing_ok=True)
 
 
+def test_backend_socket_e2e_uses_cross_platform_short_socket_path() -> None:
+    source = Path(__file__).read_text(encoding="utf-8")
+
+    assert 'return Path("/tmp")' in source
+
+
 def test_service_invalid_request_fields_are_not_recoverable() -> None:
     service = BackendService()
     result = service.handle(
@@ -154,6 +173,32 @@ def test_service_invalid_request_fields_are_not_recoverable() -> None:
     assert result["code"] == "INVALID_REQUEST"
     assert result["recoverable"] is False
 
+    bad_model = service.handle(
+        {
+            "type": "preload",
+            "request_id": "bad-model",
+            "engine": "mlx-whisper",
+            "model": "",
+            "language": "ja",
+        }
+    )
+    assert bad_model["type"] == "error"
+    assert bad_model["code"] == "INVALID_REQUEST"
+    assert bad_model["recoverable"] is False
+
+    bad_language = service.handle(
+        {
+            "type": "preload",
+            "request_id": "bad-language",
+            "engine": "mlx-whisper",
+            "model": "mlx-community/whisper-large-v3-turbo",
+            "language": "",
+        }
+    )
+    assert bad_language["type"] == "error"
+    assert bad_language["code"] == "INVALID_REQUEST"
+    assert bad_language["recoverable"] is False
+
 
 def test_registry_data_is_immutable() -> None:
     registry = load_registry()
@@ -163,6 +208,43 @@ def test_registry_data_is_immutable() -> None:
 
     with pytest.raises(TypeError):
         registry.data["languages"]["ja"]["engines"]["mlx-whisper"] = "English"  # type: ignore[index]
+
+
+def test_registry_validation_rejects_unsupported_version_and_duplicates() -> None:
+    base = {
+        "version": 1,
+        "default_engine": "mlx-whisper",
+        "default_language": "ja",
+        "languages": {"ja": {"label": "Japanese", "engines": {"mlx-whisper": "ja"}}},
+        "engines": [
+            {
+                "id": "mlx-whisper",
+                "label": "MLX Whisper",
+                "default_model": "model-a",
+                "models": [{"id": "model-a", "label": "A"}],
+            }
+        ],
+    }
+    unsupported = dict(base, version=2)
+    with pytest.raises(RegistryError, match="version"):
+        _validate_registry(ModelRegistry(_freeze(unsupported), "hash"))
+
+    duplicate_engine = dict(
+        base,
+        engines=[
+            base["engines"][0],
+            base["engines"][0],
+        ],
+    )
+    with pytest.raises(RegistryError, match="duplicate engine"):
+        _validate_registry(ModelRegistry(_freeze(duplicate_engine), "hash"))
+
+    unknown_language_engine = dict(
+        base,
+        languages={"ja": {"label": "Japanese", "engines": {"missing": "ja"}}},
+    )
+    with pytest.raises(RegistryError, match="unknown engine"):
+        _validate_registry(ModelRegistry(_freeze(unknown_language_engine), "hash"))
 
 
 def test_registry_language_mapping() -> None:
@@ -254,7 +336,7 @@ def _terminate_process(process: subprocess.Popen[bytes]) -> None:
 
 
 def _short_socket_path() -> Path:
-    return Path("/private/tmp") / f"zwb-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+    return Path("/tmp") / f"zwb-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
 
 
 def _stderr_text(process: subprocess.Popen[bytes]) -> str:

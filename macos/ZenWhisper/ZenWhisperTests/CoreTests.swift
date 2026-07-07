@@ -118,6 +118,21 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testRegistryValidationRejectsUnsupportedVersionDuplicatesAndUnknownLanguageEngines() throws {
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(version: 2))) { error in
+            XCTAssertEqual(error as? RegistryError, .unsupportedVersion(2))
+        }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(duplicateEngine: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .duplicateID("engine", "mlx-whisper"))
+        }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(duplicateModel: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .duplicateID("mlx-whisper model", "model-a"))
+        }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(unknownLanguageEngine: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .invalidLanguageEngine("ja", "missing"))
+        }
+    }
+
     func testBackendErrorPreservesRecoverableFlag() throws {
         let recoverable = """
         {"type":"error","request_id":"r1","code":"MODEL_NOT_AVAILABLE","message":"offline","recoverable":true}
@@ -313,6 +328,59 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(manager.isEnabled())
     }
 
+    func testLoginItemManagerWritesAndRemovesLaunchAgent() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: home)
+        }
+        var launchctlCalls: [[String]] = []
+        let manager = LoginItemManager(
+            homeDirectory: home,
+            appExists: { $0 == LoginItemManager.appPath },
+            launchctlRunner: { arguments in launchctlCalls.append(arguments) }
+        )
+
+        try manager.setEnabled(true)
+
+        XCTAssertTrue(manager.isEnabled())
+        let data = try Data(contentsOf: manager.plistURL)
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+        )
+        XCTAssertEqual(plist["Label"] as? String, LoginItemManager.label)
+        XCTAssertEqual(plist["ProgramArguments"] as? [String], ["/usr/bin/open", LoginItemManager.appPath])
+        XCTAssertEqual(plist["RunAtLoad"] as? Bool, true)
+        XCTAssertEqual(launchctlCalls.map { $0.first }, ["bootout", "bootstrap"])
+
+        try manager.setEnabled(false)
+
+        XCTAssertFalse(manager.isEnabled())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.plistURL.path))
+        XCTAssertEqual(launchctlCalls.map { $0.first }, ["bootout", "bootstrap", "bootout"])
+    }
+
+    func testLoginItemManagerCleansUpPlistWhenBootstrapFails() throws {
+        let home = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer {
+            try? FileManager.default.removeItem(at: home)
+        }
+        let manager = LoginItemManager(
+            homeDirectory: home,
+            appExists: { _ in true },
+            launchctlRunner: { arguments in
+                if arguments.first == "bootstrap" {
+                    throw LoginItemError.launchctlFailed("boom")
+                }
+            }
+        )
+
+        XCTAssertThrowsError(try manager.setEnabled(true))
+        XCTAssertFalse(manager.isEnabled())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: manager.plistURL.path))
+    }
+
     func testPasteDecisionRequiresCompleteStableTargetHistory() {
         let controller = PasteController()
         let target = pasteTarget()
@@ -422,6 +490,48 @@ final class CoreTests: XCTestCase {
             searchableText: searchableText,
             discovery: discovery
         )
+    }
+
+    private func registryJSON(
+        version: Int = 1,
+        duplicateEngine: Bool = false,
+        duplicateModel: Bool = false,
+        unknownLanguageEngine: Bool = false
+    ) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+            .appendingPathComponent("zen-whisper-registry-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let url = root.appendingPathComponent("model_registry.json")
+        let secondEngine = duplicateEngine
+            ? """
+            ,{"id":"mlx-whisper","label":"Duplicate","default_model":"model-a","models":[{"id":"model-a","label":"A"}]}
+            """
+            : ""
+        let secondModel = duplicateModel ? #",{"id":"model-a","label":"Duplicate A"}"# : ""
+        let languageEngine = unknownLanguageEngine ? "missing" : "mlx-whisper"
+        let json = """
+        {
+          "version": \(version),
+          "default_engine": "mlx-whisper",
+          "default_language": "ja",
+          "languages": {
+            "ja": {"label": "Japanese", "engines": {"\(languageEngine)": "ja"}}
+          },
+          "engines": [
+            {
+              "id": "mlx-whisper",
+              "label": "MLX Whisper",
+              "default_model": "model-a",
+              "models": [
+                {"id": "model-a", "label": "A"}\(secondModel)
+              ]
+            }
+            \(secondEngine)
+          ]
+        }
+        """
+        try json.write(to: url, atomically: true, encoding: .utf8)
+        return url
     }
 
     private struct BackendInstallFixture {

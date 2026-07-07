@@ -19,7 +19,7 @@ Fully local voice-to-text input tool. Toggle recording with a hotkey, transcribe
 
 - **Python 3.11-3.13**
 - **Windows**: CPU supported; NVIDIA GPU optional for faster-whisper CUDA
-- **macOS**: Apple Silicon M1+ (for mlx-whisper / Metal)
+- **macOS native app**: Apple Silicon M1+, `mise`, Xcode Command Line Tools or Xcode, and a local code signing identity
 
 ## Installation
 
@@ -31,6 +31,12 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 
 # macOS / Linux
 curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+For the macOS native app, also install `mise` before running the app installer:
+
+```bash
+curl https://mise.run | sh
 ```
 
 ### 2. Clone and install dependencies
@@ -93,6 +99,7 @@ Edit `config.toml` to customize hotkeys, model size, language, and other setting
 **macOS**:
 ```bash
 mise trust .mise.toml
+mise install
 macos/scripts/create_local_codesign_cert.sh
 macos/scripts/install_app.sh
 open /Applications/zen-whisper.app
@@ -108,7 +115,7 @@ uv run python src/main.py
 
 ### Basic workflow
 
-1. Launch zen-whisper — it appears in the system tray
+1. Launch zen-whisper — it appears in the Windows tray or macOS menu bar
 2. Press the hotkey (default: `Shift+Space`) to **start recording**
 3. Speak into your microphone
 4. Press the hotkey again to **stop recording** (or wait for silence auto-stop)
@@ -118,14 +125,16 @@ Set `[hotkey] submit_toggle` to add an alternate toggle that presses Enter after
 pasting when it is used to stop recording. For chat boxes, `ctrl+shift+space`
 keeps the normal `Shift+Space` paste-only workflow while making submit explicit.
 
-### Tray menu
+On macOS, it appears in the menu bar instead of the Python tray.
 
-Right-click the tray icon to:
+### Tray / Menu Bar
+
+Use the Windows tray icon or macOS menu bar item to:
 - Switch transcription language
 - Select microphone input, or refresh the microphone list after devices change
-- Select ASR engine: Whisper (GPU/CPU/MLX), Reazon K2, or Qwen3-ASR
+- Select ASR engine/model. Windows Python supports Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and MLX Qwen3-ASR entries.
 - Toggle sound feedback
-- Register/unregister startup
+- Register/unregister startup or Launch at Login
 - Quit
 
 ## Configuration
@@ -148,7 +157,7 @@ All settings are in `config.toml`. See `config.example.toml` for defaults and de
 - `engine = "whisper"` uses faster-whisper on Windows. When the resolved device is CPU, ZenWhisper forces `compute_type = "int8"` and passes `cpu_threads`.
 - `device = "cuda"` is the Windows default, `device = "mlx"` is the macOS default. Select `Whisper > CPU (int8)` when you want the CPU Whisper path.
 - `engine = "reazon-k2"` uses the fast Japanese CPU backend without PyTorch. Long audio is split into `reazon_chunk_sec` chunks with `reazon_trailing_silence_sec` silence appended to each chunk.
-- `engine = "qwen3-asr"` keeps the existing Qwen3-ASR path for quality-focused experiments. The tray Qwen3-ASR entries target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3` installs the CPU PyTorch variant for manual `config.toml` experiments with `device = "cpu"`.
+- `engine = "qwen3-asr"` keeps the existing Python Qwen3-ASR path for quality-focused experiments. The Windows/Python tray Qwen3-ASR entries target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3` installs the CPU PyTorch variant for manual `config.toml` experiments with `device = "cpu"`. The macOS native app uses MLX Qwen3-ASR models from its own menu bar model list.
 
 The tray menu intentionally does not include an automatic ASR fallback mode. Unavailable backends such as Reazon K2 without the optional extra or CUDA without a visible GPU are disabled in the menu.
 
@@ -157,7 +166,7 @@ ZenWhisper does not run LLM cleanup or punctuation rewriting internally. It past
 ### Microphone selection
 
 - `recording.microphone = ""` uses the current OS default input.
-- Select `マイク` from the tray menu to save a specific microphone name to `config.toml`.
+- Select `マイク` from the Windows/Python tray menu to save a specific microphone name to `config.toml`. In the macOS native app, select `Microphone` from the menu bar item; the choice is stored in macOS app settings.
 - If the selected microphone is unavailable at startup or recording time, ZenWhisper keeps the saved setting and falls back to the OS default input.
 - The tray menu hides Windows low-level/pseudo inputs such as WDM-KS devices, Sound Mapper, and Primary Sound Capture Driver. On Windows, inactive capture endpoints are also filtered out when endpoint metadata is available.
 - `recording.sample_rate` is the app-internal ASR/VAD processing rate and is currently fixed to 16kHz. Devices such as NVIDIA Broadcast may be opened at 48kHz and resampled before ASR.

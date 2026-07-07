@@ -108,8 +108,9 @@ class BackendService:
         model_id = self.registry.validate_engine_model(
             engine_id, _optional_str_field(request, "model")
         )
+        language_id = _optional_str_field(request, "language")
         language = self.registry.language_for_engine(
-            _optional_str_field(request, "language") or self.registry.default_language,
+            language_id if language_id is not None else self.registry.default_language,
             engine_id,
         )
         adapter = self._adapter(engine_id)
@@ -130,8 +131,9 @@ class BackendService:
         model_id = self.registry.validate_engine_model(
             engine_id, _optional_str_field(request, "model")
         )
+        language_id = _optional_str_field(request, "language")
         language = self.registry.language_for_engine(
-            _optional_str_field(request, "language") or self.registry.default_language,
+            language_id if language_id is not None else self.registry.default_language,
             engine_id,
         )
         audio_path = Path(_required_str(request, "audio_path"))
@@ -173,8 +175,8 @@ def _optional_str_field(request: JsonDict, key: str) -> str | None:
     value = request.get(key)
     if value is None:
         return None
-    if not isinstance(value, str):
-        raise InvalidRequestError(f"{key} must be a string")
+    if not isinstance(value, str) or not value:
+        raise InvalidRequestError(f"{key} must be a non-empty string")
     return value
 
 
