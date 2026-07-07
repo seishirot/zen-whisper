@@ -853,6 +853,7 @@ def test_mlx_dependency_error_does_not_return_or_log_audio_path(
 
     assert result["type"] == "error"
     assert result["message"] == "MLX Whisper transcribe failed"
+    assert "RuntimeError: failed near <path>" in caplog.text
     assert "dependency-secret" not in result["message"]
     assert "dependency-secret" not in caplog.text
     assert str(tmp_path) not in caplog.text
@@ -893,8 +894,26 @@ def test_qwen_dependency_error_does_not_return_or_log_audio_path(
 
     assert result["type"] == "error"
     assert result["message"] == "Qwen3-ASR transcribe failed"
+    assert "RuntimeError: failed near <path>" in caplog.text
     assert "qwen-secret" not in result["message"]
     assert "qwen-secret" not in caplog.text
+    assert str(tmp_path) not in caplog.text
+
+
+def test_duration_metadata_failure_is_logged_without_audio_path(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    from zen_whisper_mac_backend.service import _duration_sec
+
+    audio = tmp_path / "duration-secret.wav"
+    audio.write_bytes(b"not a wav")
+
+    with caplog.at_level(logging.WARNING, logger="zen_whisper_mac_backend.service"):
+        assert _duration_sec(audio) == 0.0
+
+    assert "Could not read audio duration metadata" in caplog.text
+    assert "duration-secret" not in caplog.text
     assert str(tmp_path) not in caplog.text
 
 

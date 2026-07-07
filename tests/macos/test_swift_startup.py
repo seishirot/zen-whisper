@@ -164,8 +164,9 @@ def test_backend_process_output_is_redirected_to_private_startup_log() -> None:
     assert "process.standardError = startupLog" in client
     assert "private func startupLogTail" in client
     assert "case healthTimeout(String)" in client
-    assert "startupFailureDetail(prefix: processExitSummary())" in client
-    assert "healthTimeoutDetail(startupLogTail: tail, lastError: lastError)" in client
+    assert "healthFailureDetail(" in client
+    assert "prefix: processExitSummary()" in client
+    assert 'prefix: "backend health timed out"' in client
     assert 'parts.append("startup log: <empty>")' in client
 
 

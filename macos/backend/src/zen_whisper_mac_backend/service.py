@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 import traceback
@@ -15,6 +16,7 @@ from zen_whisper_mac_backend.protocol import JsonDict, error_response
 from zen_whisper_mac_backend.registry import ModelRegistry, RegistryError, load_registry
 
 logger = logging.getLogger(__name__)
+_PATH_RE = re.compile(r"(?:/[^\s'\"<>]+|[A-Za-z]:\\[^\s'\"<>]+)")
 
 
 class BackendService:
@@ -66,7 +68,13 @@ class BackendService:
             )
         except AdapterError as exc:
             code = _error_code_for(exc)
-            logger.info("Request failed: %s", _error_message_for(exc))
+            logger.info(
+                "Request failed: code=%s message=%s cause=%s stack=%s",
+                code,
+                _error_message_for(exc),
+                _sanitized_exception_chain(exc),
+                _sanitized_stack(exc),
+            )
             return error_response(
                 request_id,
                 code,
@@ -231,6 +239,31 @@ def _sanitized_stack(exc: BaseException) -> str:
     )
 
 
+def _sanitized_exception_chain(exc: BaseException) -> str:
+    parts: list[str] = []
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen and len(parts) < 5:
+        seen.add(id(current))
+        message = _sanitize_log_text(str(current))
+        if message:
+            parts.append(f"{current.__class__.__name__}: {message}")
+        else:
+            parts.append(current.__class__.__name__)
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif not current.__suppress_context__:
+            current = current.__context__
+        else:
+            current = None
+    return " <- ".join(parts) if parts else "<none>"
+
+
+def _sanitize_log_text(value: str) -> str:
+    value = _PATH_RE.sub("<path>", value)
+    return value[:240]
+
+
 def _error_code_for(exc: Exception) -> str:
     if isinstance(exc, RegistryError):
         return "INVALID_MODEL"
@@ -274,5 +307,9 @@ def _duration_sec(audio_path: Path) -> float:
 
         info = sf.info(audio_path)
         return round(float(info.frames) / float(info.samplerate), 3)
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "Could not read audio duration metadata: class=%s audio=<redacted>",
+            exc.__class__.__name__,
+        )
         return 0.0

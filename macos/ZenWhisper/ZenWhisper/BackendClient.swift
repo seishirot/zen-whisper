@@ -118,8 +118,13 @@ final class BackendClient: @unchecked Sendable {
         var lastError: Error?
         while Date() < deadline {
             if process?.isRunning == false {
+                let tail = startupLogTail()
                 throw BackendClientError.healthTimeout(
-                    startupFailureDetail(prefix: processExitSummary())
+                    healthFailureDetail(
+                        prefix: processExitSummary(),
+                        startupLogTail: tail,
+                        lastError: lastError
+                    )
                 )
             }
             do {
@@ -133,7 +138,11 @@ final class BackendClient: @unchecked Sendable {
         }
         let tail = startupLogTail()
         throw BackendClientError.healthTimeout(
-            healthTimeoutDetail(startupLogTail: tail, lastError: lastError)
+            healthFailureDetail(
+                prefix: "backend health timed out",
+                startupLogTail: tail,
+                lastError: lastError
+            )
         )
     }
 
@@ -197,16 +206,8 @@ final class BackendClient: @unchecked Sendable {
         return "backend exited before health check status=\(process.terminationStatus)"
     }
 
-    private func startupFailureDetail(prefix: String) -> String {
-        let tail = startupLogTail()
-        guard !tail.isEmpty else {
-            return prefix
-        }
-        return "\(prefix)\n\(tail)"
-    }
-
-    private func healthTimeoutDetail(startupLogTail tail: String, lastError: Error?) -> String {
-        var parts = ["backend health timed out"]
+    private func healthFailureDetail(prefix: String, startupLogTail tail: String, lastError: Error?) -> String {
+        var parts = [prefix]
         if let lastError {
             parts.append("last error: \(String(describing: lastError))")
         }
