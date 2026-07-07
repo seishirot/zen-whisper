@@ -330,6 +330,28 @@ def test_registry_validation_rejects_non_string_ids_defaults_and_labels() -> Non
     with pytest.raises(RegistryError, match="language id"):
         _validate_registry(ModelRegistry(_freeze(invalid_empty_key), "hash"))
 
+    default_language_missing_default_engine = dict(
+        base,
+        languages={"ja": {"label": "Japanese", "engines": {}}},
+    )
+    with pytest.raises(RegistryError, match="default_language.*default_engine"):
+        _validate_registry(ModelRegistry(_freeze(default_language_missing_default_engine), "hash"))
+
+    engine_without_language = dict(
+        base,
+        engines=[
+            base["engines"][0],
+            {
+                "id": "mlx-qwen3-asr",
+                "label": "MLX Qwen3-ASR",
+                "default_model": "model-q",
+                "models": [{"id": "model-q", "label": "Q"}],
+            },
+        ],
+    )
+    with pytest.raises(RegistryError, match="no language mapping"):
+        _validate_registry(ModelRegistry(_freeze(engine_without_language), "hash"))
+
 
 def test_registry_language_mapping() -> None:
     registry = load_registry()
@@ -721,7 +743,7 @@ def test_qwen_adapter_load_failure_is_recoverable_model_error(
     assert result["recoverable"] is True
 
 
-def test_corrupt_wav_error_does_not_return_audio_path(tmp_path: Path) -> None:
+def test_audio_read_error_is_not_reported_as_model_unavailable(tmp_path: Path) -> None:
     audio = tmp_path / "private-name.wav"
     audio.write_bytes(b"not a wav")
     adapter = MlxWhisperAdapter()
@@ -740,8 +762,38 @@ def test_corrupt_wav_error_does_not_return_audio_path(tmp_path: Path) -> None:
     )
 
     assert result["type"] == "error"
-    assert result["code"] == "MODEL_NOT_AVAILABLE"
+    assert result["code"] == "AUDIO_UNREADABLE"
+    assert result["recoverable"] is False
     assert "private-name" not in result["message"]
+    assert str(tmp_path) not in result["message"]
+
+
+def test_backend_os_error_is_nonrecoverable_without_private_paths(tmp_path: Path) -> None:
+    audio = tmp_path / "private-os-error.wav"
+    sf.write(audio, np.zeros(1600, dtype=np.float32), 16000)
+
+    class OSErrorAdapter(DummyAdapter):
+        def transcribe(self, audio_path: Path, model_id: str, language: str) -> str:
+            raise PermissionError(str(audio_path))
+
+    service = BackendService(
+        adapters={"mlx-whisper": OSErrorAdapter("mlx-whisper", "unused")}
+    )
+    result = service.handle(
+        {
+            "type": "transcribe",
+            "request_id": "io",
+            "audio_path": str(audio),
+            "engine": "mlx-whisper",
+            "model": "mlx-community/whisper-large-v3-turbo",
+            "language": "ja",
+        }
+    )
+
+    assert result["type"] == "error"
+    assert result["code"] == "AUDIO_UNREADABLE"
+    assert result["recoverable"] is False
+    assert "private-os-error" not in result["message"]
     assert str(tmp_path) not in result["message"]
 
 

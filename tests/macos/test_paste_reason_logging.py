@@ -16,15 +16,15 @@ def test_copy_only_reasons_are_user_visible_and_logged() -> None:
     assert 'copyTranscriptWithoutPaste(trimmed, reason: "paste event unavailable")' in app_delegate
     assert 'setCopyFailedTransient("pasteboard write failed")' in app_delegate
     assert 'logInfo("transcript copied; paste skipped: \\(reason ?? "unknown")")' in app_delegate
-    assert 'logInfo("transcript copied; paste sent: \\(reason ?? "unknown")")' in app_delegate
+    assert 'logInfo("transcript copied; paste attempted: \\(reason ?? "unknown")")' in app_delegate
     assert 'logInfo("transcript copy skipped: \\(reason)")' in app_delegate
     assert "Copy Skipped: \\(reason)" in status_controller
     assert "Copied; paste skipped: \\(reason)" in status_controller
-    assert '"Paste sent\\(enterText); clipboard restore pending"' in status_controller
-    assert '"Paste sent\\(enterText); clipboard restore failed"' in status_controller
-    assert '"Paste sent\\(enterText); clipboard restored"' in status_controller
-    assert 'enterText = "; Enter sent"' in status_controller
-    assert '"Paste sent\\(enterText); clipboard kept"' in status_controller
+    assert '"Paste attempted\\(enterText); clipboard restore pending"' in status_controller
+    assert '"Paste attempted\\(enterText); clipboard restore failed"' in status_controller
+    assert '"Paste attempted\\(enterText); clipboard restored"' in status_controller
+    assert 'enterText = "; Enter attempted"' in status_controller
+    assert '"Paste attempted\\(enterText); clipboard kept"' in status_controller
 
 
 def test_status_title_surfaces_short_copy_only_reason() -> None:
@@ -99,6 +99,7 @@ def test_native_pasteboard_write_happens_only_after_paste_decision() -> None:
     assert "pasteController.decide(" in app_delegate
     assert "pasteController.pressReturn(to: approvedTarget.pid)" in app_delegate
     assert '"\\(pasteReason); enter skipped"' in app_delegate
+    assert '"\\(pasteReason); enter attempted"' in app_delegate
 
 
 def test_pasteboard_write_failure_has_distinct_state_and_restore_attempt() -> None:

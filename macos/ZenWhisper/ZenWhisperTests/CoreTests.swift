@@ -68,12 +68,12 @@ final class CoreTests: XCTestCase {
 
     func testPasteEnterStatusText() {
         XCTAssertEqual(
-            AppState.copied(pasteDispatched: true, reason: "clipboard restored; enter sent").title,
-            "Paste + Enter"
+            AppState.copied(pasteDispatched: true, reason: "clipboard restored; enter attempted").title,
+            "Paste tried + Enter"
         )
         XCTAssertEqual(
             AppState.copied(pasteDispatched: true, reason: "clipboard kept").title,
-            "Paste kept"
+            "Paste tried"
         )
         XCTAssertEqual(StatusText.copyOnlyReason("paste event unavailable"), "No paste")
     }
@@ -244,6 +244,12 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(blankLanguageID: true))) { error in
             XCTAssertEqual(error as? RegistryError, .invalidLanguageID(""))
         }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(defaultLanguageMissingDefaultEngine: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .unsupportedDefaultLanguage("ja", "mlx-whisper"))
+        }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(engineWithoutLanguage: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .engineWithoutLanguage("mlx-qwen3-asr"))
+        }
     }
 
     func testBackendErrorPreservesRecoverableFlag() throws {
@@ -268,6 +274,62 @@ final class CoreTests: XCTestCase {
             XCTAssertEqual(
                 error as? BackendProtocolError,
                 .backendError(code: "BACKEND_ERROR", message: "crashed", recoverable: false)
+            )
+        }
+
+        let malformed = """
+        {"type":"error","request_id":"r3","message":"crashed","recoverable":false}
+        """.data(using: .utf8)!
+        XCTAssertThrowsError(try decodeBackendResponse(malformed)) { error in
+            XCTAssertEqual(error as? BackendProtocolError, .invalidBackendError("missing code"))
+        }
+    }
+
+    func testBackendResponseValidationChecksErrorRequestIDAndSchema() throws {
+        let request: [String: Any] = ["type": "preload", "request_id": "expected"]
+        XCTAssertThrowsError(try validateBackendResponse(
+            [
+                "type": "error",
+                "request_id": "other",
+                "code": "MODEL_NOT_AVAILABLE",
+                "message": "offline",
+                "recoverable": true
+            ],
+            request: request,
+            expectedType: "ready"
+        )) { error in
+            XCTAssertEqual(
+                error as? BackendProtocolError,
+                .requestIDMismatch(expected: "expected", actual: "other")
+            )
+        }
+        XCTAssertThrowsError(try validateBackendResponse(
+            [
+                "type": "error",
+                "request_id": "expected",
+                "code": "",
+                "message": "offline",
+                "recoverable": true
+            ],
+            request: request,
+            expectedType: "ready"
+        )) { error in
+            XCTAssertEqual(error as? BackendProtocolError, .invalidBackendError("missing code"))
+        }
+        XCTAssertThrowsError(try validateBackendResponse(
+            [
+                "type": "error",
+                "request_id": "expected",
+                "code": "MODEL_NOT_AVAILABLE",
+                "message": "offline",
+                "recoverable": true
+            ],
+            request: request,
+            expectedType: "ready"
+        )) { error in
+            XCTAssertEqual(
+                error as? BackendProtocolError,
+                .backendError(code: "MODEL_NOT_AVAILABLE", message: "offline", recoverable: true)
             )
         }
     }
@@ -732,7 +794,9 @@ final class CoreTests: XCTestCase {
         blankEngineLabel: Bool = false,
         blankModelLabel: Bool = false,
         blankLanguageLabel: Bool = false,
-        blankLanguageID: Bool = false
+        blankLanguageID: Bool = false,
+        defaultLanguageMissingDefaultEngine: Bool = false,
+        engineWithoutLanguage: Bool = false
     ) throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("zen-whisper-registry-\(UUID().uuidString)", isDirectory: true)
@@ -742,9 +806,15 @@ final class CoreTests: XCTestCase {
             ? """
             ,{"id":"mlx-whisper","label":"Duplicate","default_model":"model-a","models":[{"id":"model-a","label":"A"}]}
             """
+            : engineWithoutLanguage
+                ? """
+                ,{"id":"mlx-qwen3-asr","label":"MLX Qwen3-ASR","default_model":"model-q","models":[{"id":"model-q","label":"Q"}]}
+                """
             : ""
         let secondModel = duplicateModel ? #",{"id":"model-a","label":"Duplicate A"}"# : ""
-        let languageEngine = unknownLanguageEngine ? "missing" : "mlx-whisper"
+        let languageEngine = unknownLanguageEngine
+            ? "missing"
+            : defaultLanguageMissingDefaultEngine ? "" : "mlx-whisper"
         let engineLabel = blankEngineLabel ? "" : "MLX Whisper"
         let modelLabel = blankModelLabel ? "" : "A"
         let languageLabel = blankLanguageLabel ? "" : "Japanese"
@@ -757,7 +827,7 @@ final class CoreTests: XCTestCase {
           "default_engine": "mlx-whisper",
           "default_language": "ja",
           "languages": {
-            "ja": {"label": "\(languageLabel)", "engines": {"\(languageEngine)": "ja"}}\(extraLanguage)
+            "ja": {"label": "\(languageLabel)", "engines": {\(languageEngine.isEmpty ? "" : "\"\(languageEngine)\": \"ja\"")}}\(extraLanguage)
           },
           "engines": [
             {

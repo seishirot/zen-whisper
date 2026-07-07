@@ -79,6 +79,7 @@ struct ModelRegistry: Decodable, Equatable {
                 throw RegistryError.invalidLabel("\(engine.id) model", model.id)
             }
         }
+        var mappedEngineIDs = Set<String>()
         for (languageID, language) in languages {
             guard !languageID.isEmpty else {
                 throw RegistryError.invalidLanguageID(languageID)
@@ -93,7 +94,14 @@ struct ModelRegistry: Decodable, Equatable {
                 guard !backendLanguage.isEmpty else {
                     throw RegistryError.invalidLanguageEngine(languageID, engineID)
                 }
+                mappedEngineIDs.insert(engineID)
             }
+        }
+        guard languages[defaultLanguage]?.engines[defaultEngine] != nil else {
+            throw RegistryError.unsupportedDefaultLanguage(defaultLanguage, defaultEngine)
+        }
+        for engineID in engineIDs where !mappedEngineIDs.contains(engineID) {
+            throw RegistryError.engineWithoutLanguage(engineID)
         }
     }
 
@@ -186,5 +194,7 @@ enum RegistryError: Error, Equatable {
     case duplicateID(String, String)
     case invalidLanguageID(String)
     case invalidLanguageEngine(String, String)
+    case unsupportedDefaultLanguage(String, String)
+    case engineWithoutLanguage(String)
     case invalidLabel(String, String)
 }

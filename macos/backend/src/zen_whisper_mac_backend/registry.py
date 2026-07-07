@@ -104,6 +104,14 @@ def _validate_registry(registry: ModelRegistry) -> None:
     languages = registry.data.get("languages", {})
     if not isinstance(languages, Mapping):
         raise RegistryError("languages must be an object")
+    default_language = registry.default_language
+    default_language_entry = languages[default_language]
+    if not isinstance(default_language_entry, Mapping):
+        raise RegistryError("default_language entry is not an object")
+    default_language_engines = default_language_entry.get("engines")
+    if not isinstance(default_language_engines, Mapping):
+        raise RegistryError("default_language entry missing engines")
+    mapped_engine_ids: set[str] = set()
     for language_id, language in languages.items():
         if not isinstance(language_id, str) or not language_id:
             raise RegistryError("language id must be a non-empty string")
@@ -118,6 +126,12 @@ def _validate_registry(registry: ModelRegistry) -> None:
                 raise RegistryError(f"language {language_id} references unknown engine: {engine_id}")
             if not isinstance(engine_language, str) or not engine_language:
                 raise RegistryError(f"language {language_id} has invalid engine value for {engine_id}")
+            mapped_engine_ids.add(engine_id)
+    if registry.default_engine not in default_language_engines:
+        raise RegistryError("default_language does not support default_engine")
+    missing_engine_languages = sorted(engine_ids - mapped_engine_ids)
+    if missing_engine_languages:
+        raise RegistryError(f"engine has no language mapping: {missing_engine_languages[0]}")
 
 
 def _require_unique_ids(items: object, label: str) -> None:

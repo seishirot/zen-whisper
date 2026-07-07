@@ -5,6 +5,7 @@ enum UnixSocketError: Error {
     case pathTooLong
     case socketFailed(Int32)
     case connectFailed(Int32)
+    case timeoutSetupFailed(Int32)
     case writeFailed(Int32)
     case readFailed(Int32)
     case emptyResponse
@@ -24,8 +25,12 @@ struct UnixSocketClient {
         }
         defer { close(fd) }
         var timeout = timeval(tv_sec: max(1, Int(timeoutSeconds.rounded(.up))), tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
-        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw UnixSocketError.timeoutSetupFailed(errno)
+        }
+        guard setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            throw UnixSocketError.timeoutSetupFailed(errno)
+        }
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
@@ -96,6 +101,6 @@ struct UnixSocketClient {
         guard !response.isEmpty else {
             throw UnixSocketError.emptyResponse
         }
-        return try decodeBackendResponse(response)
+        return try decodeBackendResponseObject(response)
     }
 }

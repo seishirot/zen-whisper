@@ -445,8 +445,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
                 let enterText: String
-                if reason?.lowercased().contains("enter sent") == true {
-                    enterText = "; Enter sent"
+                if reason?.lowercased().contains("enter attempted") == true {
+                    enterText = "; Enter attempted"
                 } else if reason?.lowercased().contains("enter skipped") == true {
                     enterText = "; Enter skipped"
                 } else if reason?.lowercased().contains("enter unavailable") == true {
@@ -455,18 +455,18 @@ final class StatusController: NSObject, NSMenuDelegate {
                     enterText = ""
                 }
                 if reason?.lowercased().contains("kept") == true {
-                    return "Paste sent\(enterText); clipboard kept"
+                    return "Paste attempted\(enterText); clipboard kept"
                 }
                 if reason?.lowercased().contains("restore failed") == true {
-                    return "Paste sent\(enterText); clipboard restore failed"
+                    return "Paste attempted\(enterText); clipboard restore failed"
                 }
                 if reason?.lowercased().contains("restore pending") == true {
-                    return "Paste sent\(enterText); clipboard restore pending"
+                    return "Paste attempted\(enterText); clipboard restore pending"
                 }
                 if reason?.lowercased().contains("restored") == true {
-                    return "Paste sent\(enterText); clipboard restored"
+                    return "Paste attempted\(enterText); clipboard restored"
                 }
-                return "Paste sent\(enterText)"
+                return "Paste attempted\(enterText)"
             }
             if let reason, !reason.isEmpty {
                 if reason.lowercased().contains("diagnostics") {

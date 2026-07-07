@@ -173,4 +173,6 @@ def test_unix_socket_client_caps_response_size() -> None:
 
     assert "static let maxResponseBytes = 1_048_576" in socket_client
     assert "case responseTooLarge" in socket_client
+    assert "case timeoutSetupFailed(Int32)" in socket_client
+    assert "throw UnixSocketError.timeoutSetupFailed(errno)" in socket_client
     assert "response.count <= Self.maxResponseBytes" in socket_client

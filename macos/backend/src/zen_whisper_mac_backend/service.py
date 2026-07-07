@@ -64,13 +64,38 @@ class BackendService:
                 str(exc),
                 recoverable=False,
             )
-        except (AdapterError, RegistryError, OSError) as exc:
+        except AdapterError as exc:
+            code = _error_code_for(exc)
+            logger.info("Request failed: %s", _error_message_for(exc))
+            return error_response(
+                request_id,
+                code,
+                _error_message_for(exc),
+                recoverable=code == "MODEL_NOT_AVAILABLE",
+            )
+        except RegistryError as exc:
             logger.info("Request failed: %s", _error_message_for(exc))
             return error_response(
                 request_id,
                 _error_code_for(exc),
                 _error_message_for(exc),
                 recoverable=True,
+            )
+        except OSError as exc:
+            logger.info(
+                "Backend I/O error: class=%s errno=%s request_id=%s type=%s engine=%s model=%s",
+                exc.__class__.__name__,
+                getattr(exc, "errno", None),
+                _public_request_field(request, "request_id"),
+                _public_request_field(request, "type"),
+                _public_request_field(request, "engine"),
+                _public_request_field(request, "model"),
+            )
+            return error_response(
+                request_id,
+                _os_error_code_for(exc, request_type),
+                _os_error_message_for(exc, request_type),
+                recoverable=False,
             )
         except Exception as exc:  # pragma: no cover - defensive crash boundary
             logger.error(
@@ -207,23 +232,40 @@ def _sanitized_stack(exc: BaseException) -> str:
 
 
 def _error_code_for(exc: Exception) -> str:
-    if isinstance(exc, FileNotFoundError):
-        return "AUDIO_NOT_FOUND"
     if isinstance(exc, RegistryError):
         return "INVALID_MODEL"
     if isinstance(exc, AdapterError):
+        message = str(exc).lower()
+        if "audio" in message or "wav" in message:
+            return "AUDIO_UNREADABLE"
         return "MODEL_NOT_AVAILABLE"
     return "BACKEND_ERROR"
 
 
 def _error_message_for(exc: Exception) -> str:
-    if isinstance(exc, FileNotFoundError):
-        return "Audio file not found"
     if isinstance(exc, AdapterError):
+        if _error_code_for(exc) == "AUDIO_UNREADABLE":
+            return "Audio file could not be read"
         return str(exc) or "Model is not available"
     if isinstance(exc, RegistryError):
         return str(exc) or "Invalid model selection"
     return exc.__class__.__name__
+
+
+def _os_error_code_for(exc: OSError, request_type: str) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return "AUDIO_NOT_FOUND"
+    if request_type == "transcribe":
+        return "AUDIO_UNREADABLE"
+    return "BACKEND_IO_ERROR"
+
+
+def _os_error_message_for(exc: OSError, request_type: str) -> str:
+    if isinstance(exc, FileNotFoundError):
+        return "Audio file not found"
+    if request_type == "transcribe":
+        return "Audio file could not be read"
+    return "Backend I/O error"
 
 
 def _duration_sec(audio_path: Path) -> float:

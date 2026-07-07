@@ -34,13 +34,13 @@ enum AppState: Equatable {
             return "Processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
-                if reason?.lowercased().contains("enter sent") == true {
-                    return "Paste + Enter"
+                if reason?.lowercased().contains("enter attempted") == true {
+                    return "Paste tried + Enter"
                 }
                 if reason?.lowercased().contains("kept") == true {
-                    return "Paste kept"
+                    return "Paste tried"
                 }
-                return "Paste sent"
+                return "Paste tried"
             }
             return reason.map { "Copied: \(StatusText.copyOnlyReason($0))" } ?? "Copied"
         case .copySkipped(let reason):

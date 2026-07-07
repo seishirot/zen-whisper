@@ -33,6 +33,7 @@ struct BackendRequest {
 
 enum BackendProtocolError: Error, Equatable {
     case invalidJSON
+    case invalidBackendError(String)
     case backendError(code: String, message: String, recoverable: Bool)
     case unexpectedResponse(String)
     case requestIDMismatch(expected: String, actual: String?)
@@ -40,21 +41,23 @@ enum BackendProtocolError: Error, Equatable {
 }
 
 func decodeBackendResponse(_ data: Data) throws -> [String: Any] {
+    let dict = try decodeBackendResponseObject(data)
+    if dict["type"] as? String == "error" {
+        throw try backendError(from: dict)
+    }
+    return dict
+}
+
+func decodeBackendResponseObject(_ data: Data) throws -> [String: Any] {
     let object: Any
     do {
         object = try JSONSerialization.jsonObject(with: data)
     } catch {
         throw BackendProtocolError.invalidJSON
     }
-    guard let dict = object as? [String: Any], let type = dict["type"] as? String else {
+    guard let dict = object as? [String: Any],
+          (dict["type"] as? String)?.isEmpty == false else {
         throw BackendProtocolError.invalidJSON
-    }
-    if type == "error" {
-        throw BackendProtocolError.backendError(
-            code: dict["code"] as? String ?? "BACKEND_ERROR",
-            message: dict["message"] as? String ?? "Unknown backend error",
-            recoverable: dict["recoverable"] as? Bool ?? false
-        )
     }
     return dict
 }
@@ -72,8 +75,27 @@ func validateBackendResponse(
             actual: actualRequestID
         )
     }
-    guard response["type"] as? String == expectedType else {
-        throw BackendProtocolError.unexpectedResponse(response["type"] as? String ?? "<missing>")
+    guard let type = response["type"] as? String, !type.isEmpty else {
+        throw BackendProtocolError.unexpectedResponse("<missing>")
+    }
+    if type == "error" {
+        throw try backendError(from: response)
+    }
+    guard type == expectedType else {
+        throw BackendProtocolError.unexpectedResponse(type)
     }
     return response
+}
+
+private func backendError(from response: [String: Any]) throws -> BackendProtocolError {
+    guard let code = response["code"] as? String, !code.isEmpty else {
+        throw BackendProtocolError.invalidBackendError("missing code")
+    }
+    guard let message = response["message"] as? String, !message.isEmpty else {
+        throw BackendProtocolError.invalidBackendError("missing message")
+    }
+    guard let recoverable = response["recoverable"] as? Bool else {
+        throw BackendProtocolError.invalidBackendError("missing recoverable")
+    }
+    return .backendError(code: code, message: message, recoverable: recoverable)
 }

@@ -13,7 +13,7 @@ Fully local voice-to-text input tool. Toggle recording with a hotkey, transcribe
 - **Microphone selection** — pick the recording input from the Windows tray or macOS menu bar, including virtual mics like NVIDIA Broadcast
 - **Floating overlay** — Windows/Python draggable microphone widget with real-time VAD visual feedback
 - **Multi-language** — switch transcription language on the fly from the Windows tray or macOS menu bar
-- **Sound feedback** — configurable start/stop tones or custom sound files
+- **Python CLI sound feedback** — configurable start/stop tones or custom sound files
 
 ## Requirements
 
@@ -43,9 +43,12 @@ uv sync
 
 ### macOS Native App
 
-Install `mise`, then use the repo-managed Python/uv toolchain:
+Install `mise` with an official method for your environment, then use the
+repo-managed Python/uv toolchain. If you use the shell installer, inspect it
+before running it.
 
 ```bash
+# Example only; review the installer first.
 curl https://mise.run | sh
 git clone https://github.com/seishirot/zen-whisper.git
 cd zen-whisper
@@ -55,6 +58,12 @@ macos/scripts/create_local_codesign_cert.sh
 macos/scripts/install_app.sh
 open /Applications/zen-whisper.app
 ```
+
+`create_local_codesign_cert.sh` creates the local signing identity. If macOS
+does not list the identity as valid, either use an existing identity with
+`ZEN_WHISPER_CODE_SIGN_IDENTITY=...` or rerun the script with
+`ZEN_WHISPER_TRUST_LOCAL_CERT=1` after reviewing the local Code Signing trust
+change.
 
 On Windows, plain `uv sync` does not install PyTorch. The default recording VAD
 uses a bundled Silero ONNX model through `sherpa-onnx`, so Windows CPU-only
@@ -129,7 +138,9 @@ mise exec -- uv run python src/main.py
 2. Press the hotkey (default: `Shift+Space`) to **start recording**
 3. Speak into your microphone
 4. Press the hotkey again to **stop recording** (or wait for silence auto-stop)
-5. Transcribed text is automatically pasted into the active window
+5. If paste is allowed, transcribed text is pasted into the active window. On
+   macOS native, unsafe or unverifiable targets fall back to copy-only or skip
+   copying.
 
 For Python CLI, set `[hotkey] submit_toggle` in `config.toml` to add an alternate
 toggle that presses Enter after pasting when it is used to stop recording. In
@@ -161,15 +172,24 @@ Python CLI settings are in `config.toml`; see `config.example.toml` for defaults
 | `[overlay]` | `enabled`, `position`, `size` |
 | `[logging]` | `level`, `file` |
 
-### ASR engines
+### Python CLI ASR Engines
 
-- `engine = "whisper"` is the default. Select the engine and device explicitly from the Windows tray or macOS menu bar.
+- `engine = "whisper"` is the default. Select the engine and device explicitly from the Windows tray.
 - `engine = "whisper"` uses faster-whisper on Windows. When the resolved device is CPU, ZenWhisper forces `compute_type = "int8"` and passes `cpu_threads`.
-- `device = "cuda"` is the Windows default, `device = "mlx"` is the macOS default. Select `Whisper > CPU (int8)` when you want the CPU Whisper path.
+- `device = "cuda"` is the Windows default for the Python CLI. Select `Whisper > CPU (int8)` when you want the CPU Whisper path.
 - `engine = "reazon-k2"` uses the fast Japanese CPU backend without PyTorch. Long audio is split into `reazon_chunk_sec` chunks with `reazon_trailing_silence_sec` silence appended to each chunk.
-- `engine = "qwen3-asr"` keeps the existing Python Qwen3-ASR path for quality-focused experiments. The Windows/Python tray Qwen3-ASR entries target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3` installs the CPU PyTorch variant for manual `config.toml` experiments with `device = "cpu"`. The macOS native app uses MLX Qwen3-ASR models from its own menu bar model list.
+- `engine = "qwen3-asr"` keeps the existing Python Qwen3-ASR path for quality-focused experiments. The Windows/Python tray Qwen3-ASR entries target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3` installs the CPU PyTorch variant for manual `config.toml` experiments with `device = "cpu"`.
 
-The Windows tray and macOS menu bar intentionally do not include an automatic ASR fallback mode. Unavailable backends such as Reazon K2 without the optional extra or CUDA without a visible GPU are disabled in the menu.
+The Windows tray intentionally does not include an automatic ASR fallback mode.
+Unavailable backends such as Reazon K2 without the optional extra or CUDA
+without a visible GPU are disabled in the menu.
+
+### macOS Native Recognition Model Menu
+
+The macOS native app uses MLX models and stores its selection in macOS app
+settings instead of `config.toml`. Choose `Recognition Model` from the menu bar
+item to select MLX Whisper or MLX Qwen3-ASR. It intentionally does not include
+the Windows/Python CPU, CUDA, or Reazon K2 menu entries.
 
 ZenWhisper does not run LLM cleanup or punctuation rewriting internally. It pastes the raw ASR text.
 

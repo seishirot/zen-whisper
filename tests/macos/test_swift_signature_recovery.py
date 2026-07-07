@@ -42,6 +42,9 @@ def test_signature_validation_checks_executable_hash_baseline() -> None:
     validator = (SWIFT_SRC / "SignatureValidator.swift").read_text(encoding="utf-8")
     install_app = (REPO_ROOT / "macos/scripts/install_app.sh").read_text(encoding="utf-8")
 
+    assert "case invalidBaseline(String)" in validator
+    assert "Signing baseline is incomplete" in validator
+    assert "Signing baseline is not a JSON object" in validator
     assert 'let expectedExecutableHash = object["executable_sha256"] as? String' in validator
     assert "Self.executableHash(for: Bundle.main.bundleURL) == expectedExecutableHash" in validator
     assert "static func executableHash(for appURL: URL) -> String?" in validator

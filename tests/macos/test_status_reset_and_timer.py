@@ -14,7 +14,7 @@ def test_copied_status_is_transient_and_returns_ready() -> None:
     assert "private func setCopiedTransient(pasteDispatched: Bool, reason: String?)" in text
     assert "setState(.copied(pasteDispatched: pasteDispatched, reason: reason))" in text
     assert 'logInfo("transcript copied; paste skipped: \\(reason ?? "unknown")")' in text
-    assert 'logInfo("transcript copied; paste sent: \\(reason ?? "unknown")")' in text
+    assert 'logInfo("transcript copied; paste attempted: \\(reason ?? "unknown")")' in text
     assert "self.setState(self.readyState())" in text
     assert "RunLoop.main.add(resetTimer, forMode: .common)" in text
 

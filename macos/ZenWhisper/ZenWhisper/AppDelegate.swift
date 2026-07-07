@@ -168,6 +168,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             startBackend()
         case .missingBaseline, .changed:
             setState(.appSignatureChanged)
+        case .invalidBaseline(let reason):
+            logInfo("signature baseline invalid: \(reason)")
+            setState(.error("Signing baseline invalid. Reinstall app."))
         }
     }
 
@@ -464,7 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if self.pasteController.pressReturn(to: approvedTarget.pid) {
                 self.logInfo("submit return posted to target: \(approvedTarget.redactedDescription)")
-                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter sent")
+                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter attempted")
             } else {
                 self.logInfo("submit return unavailable for target: \(approvedTarget.redactedDescription)")
                 self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter unavailable")
@@ -516,7 +519,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func setCopiedTransient(pasteDispatched: Bool, reason: String?) {
         if pasteDispatched {
-            logInfo("transcript copied; paste sent: \(reason ?? "unknown")")
+            logInfo("transcript copied; paste attempted: \(reason ?? "unknown")")
         } else {
             logInfo("transcript copied; paste skipped: \(reason ?? "unknown")")
         }
@@ -1087,6 +1090,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         switch code.uppercased() {
         case "AUDIO_NOT_FOUND":
             return "Audio file missing. See logs."
+        case "AUDIO_UNREADABLE":
+            return "Audio file unreadable. See logs."
+        case "BACKEND_IO_ERROR":
+            return "Backend I/O error. See logs."
         case "MODEL_NOT_AVAILABLE", "MODEL_LOAD_FAILED":
             return "Model unavailable. See logs."
         default:

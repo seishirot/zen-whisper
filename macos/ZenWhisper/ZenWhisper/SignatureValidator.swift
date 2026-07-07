@@ -4,6 +4,7 @@ import Foundation
 enum SignatureStatus: Equatable {
     case valid
     case missingBaseline
+    case invalidBaseline(String)
     case changed
     case notDailyBundle
 }
@@ -22,12 +23,28 @@ struct SignatureValidator {
             return .changed
         }
         let signingJSON = appSupport.appendingPathComponent("install/signing.json")
-        guard let data = try? Data(contentsOf: signingJSON),
-              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let expected = object["designated_requirement"] as? String,
-              let expectedPath = object["app_path"] as? String,
-              let expectedExecutableHash = object["executable_sha256"] as? String else {
+        guard FileManager.default.fileExists(atPath: signingJSON.path) else {
             return .missingBaseline
+        }
+        let data: Data
+        do {
+            data = try Data(contentsOf: signingJSON)
+        } catch {
+            return .invalidBaseline("Could not read \(signingJSON.path): \(error.localizedDescription)")
+        }
+        let object: [String: Any]
+        do {
+            guard let decoded = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return .invalidBaseline("Signing baseline is not a JSON object: \(signingJSON.path)")
+            }
+            object = decoded
+        } catch {
+            return .invalidBaseline("Could not parse \(signingJSON.path): \(error.localizedDescription)")
+        }
+        guard let expected = object["designated_requirement"] as? String, !expected.isEmpty,
+              let expectedPath = object["app_path"] as? String, !expectedPath.isEmpty,
+              let expectedExecutableHash = object["executable_sha256"] as? String, !expectedExecutableHash.isEmpty else {
+            return .invalidBaseline("Signing baseline is incomplete: \(signingJSON.path)")
         }
         guard URL(fileURLWithPath: expectedPath).standardizedFileURL.path
             == AppRuntimeIdentity.currentBundlePath else {
