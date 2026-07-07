@@ -157,7 +157,10 @@ struct LoginItemManager {
         guard process.terminationStatus == 0 else {
             let message = String(data: error.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            throw LoginItemError.launchctlFailed(message ?? "launchctl exited \(process.terminationStatus)")
+            let detail = message?.isEmpty == false
+                ? message!
+                : "launchctl \(arguments.joined(separator: " ")) exited \(process.terminationStatus)"
+            throw LoginItemError.launchctlFailed(detail)
         }
     }
 

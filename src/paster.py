@@ -58,6 +58,7 @@ def paste(
     macOS CLI では安全な自動ペースト対象判定を native menu bar app に
     集約しているため、コピーもペーストも行わずエラー通知だけ返す。
 
+    Windows / non-macOS CLI の実行フロー:
     1. クリップボード退避
     2. テキストをコピー
     3. Ctrl+V でペースト

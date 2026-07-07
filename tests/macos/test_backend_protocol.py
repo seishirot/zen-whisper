@@ -301,14 +301,34 @@ def test_registry_validation_rejects_non_string_ids_defaults_and_labels() -> Non
     with pytest.raises(RegistryError, match="label"):
         _validate_registry(ModelRegistry(_freeze(invalid_label), "hash"))
 
-    invalid_key = dict(
+    invalid_only_key = dict(
         base,
         languages={123: {"label": "Japanese", "engines": {"mlx-whisper": "ja"}}},
     )
-    frozen = _freeze(invalid_key)
+    frozen = _freeze(invalid_only_key)
     assert 123 in frozen["languages"]
     with pytest.raises(RegistryError, match="default_language"):
         _validate_registry(ModelRegistry(frozen, "hash"))
+
+    invalid_extra_key = dict(
+        base,
+        languages={
+            "ja": {"label": "Japanese", "engines": {"mlx-whisper": "ja"}},
+            123: {"label": "Numeric", "engines": {"mlx-whisper": "ja"}},
+        },
+    )
+    with pytest.raises(RegistryError, match="language id"):
+        _validate_registry(ModelRegistry(_freeze(invalid_extra_key), "hash"))
+
+    invalid_empty_key = dict(
+        base,
+        languages={
+            "ja": {"label": "Japanese", "engines": {"mlx-whisper": "ja"}},
+            "": {"label": "Blank", "engines": {"mlx-whisper": "ja"}},
+        },
+    )
+    with pytest.raises(RegistryError, match="language id"):
+        _validate_registry(ModelRegistry(_freeze(invalid_empty_key), "hash"))
 
 
 def test_registry_language_mapping() -> None:

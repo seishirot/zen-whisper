@@ -330,20 +330,30 @@ remove_legacy_python_launch_agent() {
   local cleanup_ok=1
   local bootout_error
   bootout_error="$(mktemp "${TMPDIR:-/tmp}/zen-whisper-launchctl-bootout.XXXXXX")"
-  if ! /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "$plist" >/dev/null 2>"$bootout_error"; then
-    if ! launchctl_failure_is_benign "$(cat "$bootout_error")"; then
+  if /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "$plist" >/dev/null 2>"$bootout_error"; then
+    :
+  else
+    local bootout_status=$?
+    local bootout_output
+    bootout_output="$(cat "$bootout_error")"
+    if ! launchctl_failure_is_benign "$bootout_output"; then
       cleanup_ok=0
-      echo "install_app.sh: warning: legacy LaunchAgent bootout failed: $(cat "$bootout_error")" >&2
+      echo "install_app.sh: warning: legacy LaunchAgent bootout failed: $(launchctl_failure_detail bootout "$bootout_status" "$bootout_output" "gui/$(/usr/bin/id -u) $plist")" >&2
     fi
   fi
   /bin/rm -f "$bootout_error"
 
   local remove_error
   remove_error="$(mktemp "${TMPDIR:-/tmp}/zen-whisper-launchctl-remove.XXXXXX")"
-  if ! /bin/launchctl remove "$label" >/dev/null 2>"$remove_error"; then
-    if ! launchctl_failure_is_benign "$(cat "$remove_error")"; then
+  if /bin/launchctl remove "$label" >/dev/null 2>"$remove_error"; then
+    :
+  else
+    local remove_status=$?
+    local remove_output
+    remove_output="$(cat "$remove_error")"
+    if ! launchctl_failure_is_benign "$remove_output"; then
       cleanup_ok=0
-      echo "install_app.sh: warning: legacy LaunchAgent remove failed: $(cat "$remove_error")" >&2
+      echo "install_app.sh: warning: legacy LaunchAgent remove failed: $(launchctl_failure_detail remove "$remove_status" "$remove_output" "$label")" >&2
     fi
   fi
   /bin/rm -f "$remove_error"
@@ -365,6 +375,18 @@ launchctl_failure_is_benign() {
     return 1
   fi
   /usr/bin/grep -Eiq 'no such process|no such file|not found|not loaded|could not find specified service|bootstrap failed: 3' <<<"$message"
+}
+
+launchctl_failure_detail() {
+  local action="$1"
+  local status="$2"
+  local output="$3"
+  local target="$4"
+  if [[ -n "$output" ]]; then
+    printf '%s' "$output"
+    return 0
+  fi
+  printf 'launchctl %s %s exited %s; legacy plist was removed but launchd state may require logout, reboot, or manual cleanup' "$action" "$target" "$status"
 }
 
 launch_agent_is_legacy_python() {

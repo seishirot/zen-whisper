@@ -241,6 +241,9 @@ final class CoreTests: XCTestCase {
         XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(blankLanguageLabel: true))) { error in
             XCTAssertEqual(error as? RegistryError, .invalidLabel("language", "ja"))
         }
+        XCTAssertThrowsError(try ModelRegistry.load(from: registryJSON(blankLanguageID: true))) { error in
+            XCTAssertEqual(error as? RegistryError, .invalidLanguageID(""))
+        }
     }
 
     func testBackendErrorPreservesRecoverableFlag() throws {
@@ -728,7 +731,8 @@ final class CoreTests: XCTestCase {
         unknownLanguageEngine: Bool = false,
         blankEngineLabel: Bool = false,
         blankModelLabel: Bool = false,
-        blankLanguageLabel: Bool = false
+        blankLanguageLabel: Bool = false,
+        blankLanguageID: Bool = false
     ) throws -> URL {
         let root = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent("zen-whisper-registry-\(UUID().uuidString)", isDirectory: true)
@@ -744,13 +748,16 @@ final class CoreTests: XCTestCase {
         let engineLabel = blankEngineLabel ? "" : "MLX Whisper"
         let modelLabel = blankModelLabel ? "" : "A"
         let languageLabel = blankLanguageLabel ? "" : "Japanese"
+        let extraLanguage = blankLanguageID
+            ? #","": {"label": "Blank", "engines": {"mlx-whisper": "ja"}}"#
+            : ""
         let json = """
         {
           "version": \(version),
           "default_engine": "mlx-whisper",
           "default_language": "ja",
           "languages": {
-            "ja": {"label": "\(languageLabel)", "engines": {"\(languageEngine)": "ja"}}
+            "ja": {"label": "\(languageLabel)", "engines": {"\(languageEngine)": "ja"}}\(extraLanguage)
           },
           "engines": [
             {

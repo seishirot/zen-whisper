@@ -105,6 +105,8 @@ def _validate_registry(registry: ModelRegistry) -> None:
     if not isinstance(languages, Mapping):
         raise RegistryError("languages must be an object")
     for language_id, language in languages.items():
+        if not isinstance(language_id, str) or not language_id:
+            raise RegistryError("language id must be a non-empty string")
         if not isinstance(language, Mapping):
             raise RegistryError(f"language entry is not an object: {language_id}")
         _require_non_empty_string(language.get("label"), f"language {language_id} label")

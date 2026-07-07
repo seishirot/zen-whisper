@@ -116,7 +116,11 @@ for development and does not auto-copy or auto-paste on macOS.
 
 **Development** (with console output):
 ```bash
+# Windows / Python CLI
 uv run python src/main.py
+
+# macOS development
+mise exec -- uv run python src/main.py
 ```
 
 ### Basic workflow
@@ -127,9 +131,9 @@ uv run python src/main.py
 4. Press the hotkey again to **stop recording** (or wait for silence auto-stop)
 5. Transcribed text is automatically pasted into the active window
 
-Set `[hotkey] submit_toggle` to add an alternate toggle that presses Enter after
-pasting when it is used to stop recording. For chat boxes, `ctrl+shift+space`
-keeps the normal `Shift+Space` paste-only workflow while making submit explicit.
+For Python CLI, set `[hotkey] submit_toggle` in `config.toml` to add an alternate
+toggle that presses Enter after pasting when it is used to stop recording. In
+the macOS native app, choose `Submit Hotkey` from the menu bar item.
 
 On macOS, it appears in the menu bar instead of the Python tray.
 
@@ -139,7 +143,7 @@ Use the Windows tray icon or macOS menu bar item to:
 - Switch transcription language
 - Select microphone input, or refresh the microphone list after devices change
 - Select ASR engine/model. Windows Python supports Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and MLX Qwen3-ASR entries.
-- Toggle sound feedback
+- Toggle sound feedback (Windows/Python tray only)
 - Register/unregister startup or Launch at Login
 - Quit
 
@@ -186,7 +190,7 @@ ZenWhisper does not run LLM cleanup or punctuation rewriting internally. It past
 - Multiple hotkeys: `toggle = ["shift+space", "win+j"]`
 - Submit-after-paste toggle: `submit_toggle = "ctrl+shift+space"`; it only sends Enter when the key press stops an active recording
 
-### Custom sound files
+### Python CLI Custom Sound Files
 
 To use custom start/stop sounds instead of generated tones:
 

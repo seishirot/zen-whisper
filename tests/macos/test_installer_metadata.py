@@ -252,6 +252,8 @@ def test_native_installer_removes_legacy_python_launch_agent() -> None:
     assert "Preserved existing LaunchAgent" in install_app
     assert "/bin/launchctl bootout" in install_app
     assert "launchctl_failure_is_benign()" in install_app
+    assert "launchctl_failure_detail()" in install_app
+    assert "legacy plist was removed but launchd state may require logout, reboot, or manual cleanup" in install_app
     assert "legacy LaunchAgent bootout failed" in install_app
     assert "legacy LaunchAgent remove failed" in install_app
     assert "removed legacy Python LaunchAgent plist but launchd cleanup may still be pending" in install_app

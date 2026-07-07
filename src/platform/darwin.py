@@ -213,7 +213,8 @@ def unregister_startup() -> bool:
             )
             output = f"{result.stdout}\n{result.stderr}"
             if result.returncode != 0 and not _is_benign_launchctl_unload_failure(output):
-                logger.error("スタートアップ解除の launchctl unload に失敗しました: %s", output.strip())
+                detail = output.strip() or f"launchctl unload {_PLIST_PATH} exited {result.returncode}"
+                logger.error("スタートアップ解除の launchctl unload に失敗しました: %s", detail)
                 return False
             _PLIST_PATH.unlink()
             logger.info("スタートアップから解除しました")

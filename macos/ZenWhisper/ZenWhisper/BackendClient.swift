@@ -118,7 +118,9 @@ final class BackendClient: @unchecked Sendable {
         var lastError: Error?
         while Date() < deadline {
             if process?.isRunning == false {
-                throw BackendClientError.healthTimeout(startupLogTail())
+                throw BackendClientError.healthTimeout(
+                    startupFailureDetail(prefix: processExitSummary())
+                )
             }
             do {
                 return try health()
@@ -131,7 +133,10 @@ final class BackendClient: @unchecked Sendable {
         }
         let tail = startupLogTail()
         if tail.isEmpty, let lastError {
-            throw BackendClientError.healthTimeout(String(describing: lastError))
+            throw BackendClientError.healthTimeout("backend health timed out: \(String(describing: lastError))")
+        }
+        if tail.isEmpty {
+            throw BackendClientError.healthTimeout("backend health timed out with no startup log output")
         }
         throw BackendClientError.healthTimeout(tail)
     }
@@ -189,9 +194,27 @@ final class BackendClient: @unchecked Sendable {
         return logURL
     }
 
+    private func processExitSummary() -> String {
+        guard let process else {
+            return "backend process is not running"
+        }
+        return "backend exited before health check status=\(process.terminationStatus)"
+    }
+
+    private func startupFailureDetail(prefix: String) -> String {
+        let tail = startupLogTail()
+        guard !tail.isEmpty else {
+            return prefix
+        }
+        return "\(prefix)\n\(tail)"
+    }
+
     private func startupLogTail(maxBytes: UInt64 = 8_192) -> String {
-        guard let handle = try? FileHandle(forReadingFrom: paths.backendStartupLog) else {
-            return ""
+        let handle: FileHandle
+        do {
+            handle = try FileHandle(forReadingFrom: paths.backendStartupLog)
+        } catch {
+            return "[backend startup log unavailable: \(paths.backendStartupLog.path): \(error.localizedDescription)]"
         }
         defer {
             do {

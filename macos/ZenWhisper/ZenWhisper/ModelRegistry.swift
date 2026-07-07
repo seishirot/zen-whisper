@@ -80,6 +80,9 @@ struct ModelRegistry: Decodable, Equatable {
             }
         }
         for (languageID, language) in languages {
+            guard !languageID.isEmpty else {
+                throw RegistryError.invalidLanguageID(languageID)
+            }
             guard !language.label.isEmpty else {
                 throw RegistryError.invalidLabel("language", languageID)
             }
@@ -181,6 +184,7 @@ enum RegistryError: Error, Equatable {
     case invalidDefaultLanguage(String)
     case invalidDefaultModel(String)
     case duplicateID(String, String)
+    case invalidLanguageID(String)
     case invalidLanguageEngine(String, String)
     case invalidLabel(String, String)
 }
