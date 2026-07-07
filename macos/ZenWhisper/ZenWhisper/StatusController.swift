@@ -457,6 +457,12 @@ final class StatusController: NSObject, NSMenuDelegate {
                 if reason?.lowercased().contains("kept") == true {
                     return "Paste sent\(enterText); clipboard kept"
                 }
+                if reason?.lowercased().contains("restore failed") == true {
+                    return "Paste sent\(enterText); clipboard restore failed"
+                }
+                if reason?.lowercased().contains("restore pending") == true {
+                    return "Paste sent\(enterText); clipboard restore pending"
+                }
                 if reason?.lowercased().contains("restored") == true {
                     return "Paste sent\(enterText); clipboard restored"
                 }
@@ -673,7 +679,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     @objc private func quit() { onQuit?() }
 
     @objc private func openMicrophoneSettings() {
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")!)
+        openSystemSettings(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+            label: "Microphone Settings"
+        )
     }
 
     @objc private func openAccessibilitySettings() {
@@ -681,6 +690,23 @@ final class StatusController: NSObject, NSMenuDelegate {
             kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
         ] as CFDictionary
         AXIsProcessTrustedWithOptions(options)
-        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
+        openSystemSettings(
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+            label: "Accessibility Settings"
+        )
+    }
+
+    private func openSystemSettings(_ urlString: String, label: String) {
+        guard let url = URL(string: urlString),
+              NSWorkspace.shared.open(url) else {
+            NSLog("zen-whisper: failed to open %@", label)
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            alert.messageText = "Could Not Open \(label)"
+            alert.informativeText = urlString
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return
+        }
     }
 }

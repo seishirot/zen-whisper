@@ -8,6 +8,7 @@ import os
 import socket
 import sys
 import threading
+import time
 from pathlib import Path
 
 from zen_whisper_mac_backend.logging_config import setup_logging
@@ -21,6 +22,35 @@ from zen_whisper_mac_backend.service import BackendService
 
 logger = logging.getLogger(__name__)
 MAX_HANDLER_THREADS = 8
+
+
+def _parent_is_alive(parent_pid: int) -> bool:
+    if parent_pid <= 0:
+        return True
+    if os.getppid() == 1 and parent_pid != 1:
+        return False
+    try:
+        os.kill(parent_pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _start_parent_monitor(service: BackendService, parent_pid: int | None) -> None:
+    if parent_pid is None:
+        return
+
+    def monitor() -> None:
+        while not service.should_shutdown:
+            if not _parent_is_alive(parent_pid):
+                logger.info("Parent process exited; shutting down backend")
+                service.should_shutdown = True
+                return
+            time.sleep(0.5)
+
+    threading.Thread(target=monitor, daemon=True).start()
 
 
 def _handle_connection(
@@ -63,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--socket-path", required=True)
     parser.add_argument("--log-dir")
+    parser.add_argument("--parent-pid", type=int)
     parser.add_argument("--auth-token-stdin", action="store_true")
     args = parser.parse_args(argv)
 
@@ -85,6 +116,7 @@ def main(argv: list[str] | None = None) -> int:
     socket_path.unlink(missing_ok=True)
 
     service = BackendService(auth_token=auth_token)
+    _start_parent_monitor(service, args.parent_pid)
     handler_slots = threading.BoundedSemaphore(MAX_HANDLER_THREADS)
     logger.info("Starting backend socket at %s", socket_path)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:

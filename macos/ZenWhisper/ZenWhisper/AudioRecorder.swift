@@ -83,7 +83,7 @@ final class AudioRecorder {
         try engine.start()
     }
 
-    func stop() throws -> URL {
+    func stop() throws -> RecordingResult {
         guard isRecording, let outputURL else {
             throw AudioRecorderError.notRecording
         }
@@ -100,12 +100,19 @@ final class AudioRecorder {
         }
         startDate = nil
         self.outputURL = nil
+        let samples = capture.flattenedSamples
+        let isEmptyAudio = RMSAnalyzer.isEmptyAudio(samples: samples)
         try Self.writeWav16kMonoPCM16(
-            samples: capture.flattenedSamples,
+            samples: samples,
             sourceSampleRate: capture.sampleRate,
             to: outputURL
         )
-        return outputURL
+        return RecordingResult(
+            url: outputURL,
+            isEmptyAudio: isEmptyAudio,
+            rms: RMSAnalyzer.rms(samples),
+            peak: RMSAnalyzer.peak(samples)
+        )
     }
 
     func cancel() {
@@ -254,6 +261,13 @@ struct RecordingLevelSnapshot: Equatable {
     let voiceActive: Bool
     let shouldAutoStop: Bool
     let reachedMaxDuration: Bool
+}
+
+struct RecordingResult: Equatable {
+    let url: URL
+    let isEmptyAudio: Bool
+    let rms: Float
+    let peak: Float
 }
 
 private struct RecordingLevel {

@@ -19,7 +19,7 @@ explain_codesign_prompt_policy() {
 trust_cert() {
   if [[ "${ZEN_WHISPER_TRUST_LOCAL_CERT:-}" != "1" ]]; then
     echo "Local certificate trust not changed. If macOS does not list the identity as valid, run:"
-    echo "  ZEN_WHISPER_TRUST_LOCAL_CERT=1 macos/scripts/create_local_codesign_cert.sh"
+    echo "  Rerun the same command with ZEN_WHISPER_TRUST_LOCAL_CERT=1."
     return 0
   fi
   /usr/bin/security add-trusted-cert \

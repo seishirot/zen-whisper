@@ -60,7 +60,7 @@ final class PasteController {
         let previous = PasteboardSnapshot(pasteboard: pasteboard)
         pasteboard.clearContents()
         guard pasteboard.setString(text, forType: .string) else {
-            previous.restore(to: pasteboard)
+            _ = previous.restore(to: pasteboard)
             return nil
         }
         return PasteboardRestoreToken(
@@ -70,18 +70,24 @@ final class PasteController {
         )
     }
 
-    func scheduleRestore(_ token: PasteboardRestoreToken, after delay: TimeInterval) {
+    func scheduleRestore(
+        _ token: PasteboardRestoreToken,
+        after delay: TimeInterval,
+        completion: @escaping (Bool) -> Void = { _ in }
+    ) {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             let current = NSPasteboard.general
             guard current.changeCount == token.writtenChangeCount,
                   current.string(forType: .string) == token.text else {
+                completion(false)
                 return
             }
-            self.restore(token)
+            completion(self.restore(token))
         }
     }
 
-    func restore(_ token: PasteboardRestoreToken) {
+    @discardableResult
+    func restore(_ token: PasteboardRestoreToken) -> Bool {
         token.previous.restore(to: NSPasteboard.general)
     }
 
@@ -673,11 +679,12 @@ fileprivate struct PasteboardSnapshot {
         } ?? []
     }
 
-    func restore(to pasteboard: NSPasteboard) {
+    @discardableResult
+    func restore(to pasteboard: NSPasteboard) -> Bool {
         pasteboard.clearContents()
         guard !items.isEmpty else {
-            return
+            return true
         }
-        _ = pasteboard.writeObjects(items)
+        return pasteboard.writeObjects(items)
     }
 }

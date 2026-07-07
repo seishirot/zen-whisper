@@ -8,7 +8,7 @@ Fully local voice-to-text input tool. Toggle recording with a hotkey, transcribe
 
 - **Hotkey toggle recording** — press to start, press again to stop (or auto-stop on silence via VAD)
 - **Local ASR transcription** — no data leaves your machine after models are installed
-- **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper) and macOS (Apple Silicon/mlx-whisper)
+- **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
 - **System tray** — runs in background with tray icon showing recording state
 - **Microphone selection** — pick the recording input from the tray, including virtual mics like NVIDIA Broadcast
 - **Floating overlay** — draggable microphone widget with real-time VAD visual feedback
@@ -92,8 +92,14 @@ Edit `config.toml` to customize hotkeys, model size, language, and other setting
 
 **macOS**:
 ```bash
-uv run zen-whisper
+mise trust .mise.toml
+macos/scripts/create_local_codesign_cert.sh
+macos/scripts/install_app.sh
+open /Applications/zen-whisper.app
 ```
+
+The macOS daily-use target is the native menu bar app. The Python CLI is kept
+for development and does not auto-copy or auto-paste on macOS.
 
 **Development** (with console output):
 ```bash

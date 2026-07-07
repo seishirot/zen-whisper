@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import socket
+import subprocess
 import sys
+import time
 import types
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -64,6 +69,100 @@ def test_swift_backend_client_uses_per_launch_auth_token() -> None:
     assert "handler_slots.release()" in server
     assert "connection.settimeout(1.0)" in server
     assert "reader.readline(MAX_LINE_BYTES + 1)" in server
+    assert '"--parent-pid"' in client
+    assert 'parser.add_argument("--parent-pid", type=int)' in server
+    assert "_start_parent_monitor(service, args.parent_pid)" in server
+
+
+def test_backend_socket_server_enforces_auth_and_cleans_up_socket(tmp_path: Path) -> None:
+    token = "socket-secret"
+    socket_path = _short_socket_path()
+    process = _start_backend_server(tmp_path, socket_path, token)
+    try:
+        missing = _socket_request(socket_path, {"type": "health", "request_id": "missing"})
+        assert missing["type"] == "error"
+        assert missing["code"] == "AUTH_FAILED"
+
+        wrong = _socket_request(
+            socket_path,
+            {"type": "health", "request_id": "wrong", "auth_token": "wrong"},
+        )
+        assert wrong["type"] == "error"
+        assert wrong["code"] == "AUTH_FAILED"
+
+        health = _socket_request(
+            socket_path,
+            {"type": "health", "request_id": "ok", "auth_token": token},
+        )
+        assert health["type"] == "health_result"
+        assert health["request_id"] == "ok"
+
+        malformed = _raw_socket_request(socket_path, b"{not-json}\n")
+        assert malformed["type"] == "error"
+        assert malformed["code"] == "PROTOCOL_ERROR"
+
+        oversized = _raw_socket_request(socket_path, b"x" * (MAX_LINE_BYTES + 1) + b"\n")
+        assert oversized["type"] == "error"
+        assert oversized["code"] == "PROTOCOL_ERROR"
+
+        shutdown = _socket_request(
+            socket_path,
+            {"type": "shutdown", "request_id": "bye", "auth_token": token},
+        )
+        assert shutdown["type"] == "shutdown_ack"
+        process.wait(timeout=5)
+        assert not socket_path.exists()
+    finally:
+        _terminate_process(process)
+        socket_path.unlink(missing_ok=True)
+
+
+def test_backend_socket_server_exits_when_parent_pid_is_gone(tmp_path: Path) -> None:
+    token = "socket-secret"
+    socket_path = _short_socket_path()
+    process = _start_backend_server(
+        tmp_path,
+        socket_path,
+        token,
+        extra_args=["--parent-pid", "999999999"],
+        wait_for_socket=False,
+    )
+    try:
+        process.wait(timeout=5)
+        stderr = _stderr_text(process)
+        if process.returncode != 0 and "PermissionError" in stderr and "Operation not permitted" in stderr:
+            pytest.skip("Unix socket bind is not permitted in this sandbox")
+        assert process.returncode == 0
+    finally:
+        _terminate_process(process)
+        socket_path.unlink(missing_ok=True)
+
+
+def test_service_invalid_request_fields_are_not_recoverable() -> None:
+    service = BackendService()
+    result = service.handle(
+        {
+            "type": "transcribe",
+            "request_id": "bad-request",
+            "engine": "mlx-whisper",
+            "model": "mlx-community/whisper-large-v3-turbo",
+            "language": "ja",
+        }
+    )
+
+    assert result["type"] == "error"
+    assert result["code"] == "INVALID_REQUEST"
+    assert result["recoverable"] is False
+
+
+def test_registry_data_is_immutable() -> None:
+    registry = load_registry()
+
+    with pytest.raises(TypeError):
+        registry.data["default_engine"] = "dummy"  # type: ignore[index]
+
+    with pytest.raises(TypeError):
+        registry.data["languages"]["ja"]["engines"]["mlx-whisper"] = "English"  # type: ignore[index]
 
 
 def test_registry_language_mapping() -> None:
@@ -74,6 +173,97 @@ def test_registry_language_mapping() -> None:
     assert registry.language_for_engine("ja", "mlx-qwen3-asr") == "Japanese"
     assert registry.language_for_engine("en", "mlx-qwen3-asr") == "English"
     assert "mlx-qwen3-asr" in registry.engine_ids()
+
+
+def _start_backend_server(
+    tmp_path: Path,
+    socket_path: Path,
+    token: str,
+    *,
+    extra_args: list[str] | None = None,
+    wait_for_socket: bool = True,
+) -> subprocess.Popen[bytes]:
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(BACKEND_SRC)
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            "-P",
+            "-m",
+            "zen_whisper_mac_backend.server",
+            "--socket-path",
+            str(socket_path),
+            "--log-dir",
+            str(tmp_path / "logs"),
+            "--auth-token-stdin",
+            *(extra_args or []),
+        ],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        env=env,
+    )
+    assert process.stdin is not None
+    process.stdin.write((token + "\n").encode("utf-8"))
+    process.stdin.close()
+    if wait_for_socket:
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                stderr = _stderr_text(process)
+                if "PermissionError" in stderr and "Operation not permitted" in stderr:
+                    pytest.skip("Unix socket bind is not permitted in this sandbox")
+                raise AssertionError(
+                    f"backend server exited early: {process.returncode}\n{stderr}"
+                )
+            if socket_path.exists():
+                return process
+            time.sleep(0.05)
+        raise AssertionError("backend server socket was not created")
+    return process
+
+
+def _socket_request(socket_path: Path, payload: dict[str, object]) -> dict[str, object]:
+    return _raw_socket_request(
+        socket_path,
+        (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8"),
+    )
+
+
+def _raw_socket_request(socket_path: Path, payload: bytes) -> dict[str, object]:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(5)
+        client.connect(str(socket_path))
+        client.sendall(payload)
+        response = client.makefile("rb").readline()
+    assert response
+    decoded = json.loads(response.decode("utf-8"))
+    assert isinstance(decoded, dict)
+    return decoded
+
+
+def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+
+
+def _short_socket_path() -> Path:
+    return Path("/private/tmp") / f"zwb-{os.getpid()}-{uuid.uuid4().hex[:8]}.sock"
+
+
+def _stderr_text(process: subprocess.Popen[bytes]) -> str:
+    if process.stderr is None:
+        return ""
+    try:
+        return process.stderr.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
 
 
 def test_qwen_adapter_is_shipped_but_lazily_imported() -> None:

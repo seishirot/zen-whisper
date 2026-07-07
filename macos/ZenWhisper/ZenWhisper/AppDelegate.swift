@@ -94,7 +94,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         statusController.onOpenLogs = { [weak self] in
             guard let self else { return }
-            NSWorkspace.shared.open(self.paths.logs)
+            guard NSWorkspace.shared.open(self.paths.logs) else {
+                self.logInfo("open logs failed: \(self.paths.logs.path)")
+                self.showOpenFailureAlert(
+                    title: "Could Not Open Logs",
+                    message: self.paths.logs.path
+                )
+                return
+            }
         }
         statusController.onCopyDiagnostics = { [weak self] in self?.copyDiagnostics() }
         statusController.onQuit = { NSApp.terminate(nil) }
@@ -216,14 +223,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func toggleRecording(submitAfterPaste: Bool = false) {
         if recorder.isRecording {
-            submitAfterPasteForCurrentRecording = submitAfterPaste
-            stopRecordingAndTranscribe(submitAfterPaste: submitAfterPaste)
+            let shouldSubmitAfterPaste = submitAfterPasteForCurrentRecording || submitAfterPaste
+            submitAfterPasteForCurrentRecording = shouldSubmitAfterPaste
+            stopRecordingAndTranscribe(submitAfterPaste: shouldSubmitAfterPaste)
             return
         }
         guard state.canStartRecording else {
             return
         }
-        submitAfterPasteForCurrentRecording = false
+        submitAfterPasteForCurrentRecording = submitAfterPaste
         startRecording()
     }
 
@@ -280,7 +288,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         submitAfterPasteForCurrentRecording = false
         let stopTarget = capturePasteTarget(stage: "recording stop", allowCached: false)
         do {
-            let audioURL = try recorder.stop()
+            let recording = try recorder.stop()
+            if recording.isEmptyAudio {
+                logInfo("recording skipped as empty audio rms=\(recording.rms) peak=\(recording.peak)")
+                try? FileManager.default.removeItem(at: recording.url)
+                setCopySkippedTransient("empty audio")
+                return
+            }
+            let audioURL = recording.url
             setState(.transcribing)
             let startTarget = pasteTargetAtRecordingStart
             let engine = settings.engine
@@ -370,8 +385,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let pid = current?.pid, pasteController.paste(to: pid) {
                 let pasteReason: String
                 if settings.outputMode.restoresClipboardAfterPaste {
-                    pasteController.scheduleRestore(restoreToken, after: 1.0)
-                    pasteReason = "clipboard restored"
+                    pasteReason = "clipboard restore pending"
+                    pasteController.scheduleRestore(restoreToken, after: 1.0) { [weak self] restored in
+                        guard let self else {
+                            return
+                        }
+                        if restored {
+                            self.logInfo("clipboard restored after paste")
+                        } else {
+                            self.logInfo("clipboard restore failed after paste")
+                            if case .copied = self.state {
+                                self.setCopiedTransient(pasteDispatched: true, reason: "clipboard restore failed")
+                            }
+                        }
+                    }
                 } else {
                     pasteReason = "clipboard kept"
                 }
@@ -387,7 +414,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 logInfo("paste event unavailable for target: \(current?.redactedDescription ?? "nil")")
                 if settings.outputMode.restoresClipboardAfterPaste {
-                    pasteController.restore(restoreToken)
+                    guard pasteController.restore(restoreToken) else {
+                        setCopiedTransient(pasteDispatched: false, reason: "paste event unavailable; clipboard restore failed")
+                        return
+                    }
                 }
                 setCopiedTransient(pasteDispatched: false, reason: "paste event unavailable")
             }
@@ -607,7 +637,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func recordCustomHotkey() {
         closeHotkeyRecorders()
         suspendHotkeysForRecorder()
-        let recorder = HotkeyRecorderWindowController(currentShortcut: settings.hotkey) { [weak self] shortcut in
+        let recorder = HotkeyRecorderWindowController(
+            title: "Record Hotkey",
+            instruction: "Press the shortcut to start or stop recording. Use Ctrl, Option, or Cmd. Shift+Space is also allowed.",
+            currentShortcut: settings.hotkey
+        ) { [weak self] shortcut in
             guard let self else {
                 return
             }
@@ -677,7 +711,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         closeHotkeyRecorders()
         suspendHotkeysForRecorder()
         let current = settings.submitHotkey ?? HotkeyShortcut.controlOptionCommandReturn
-        let recorder = HotkeyRecorderWindowController(currentShortcut: current) { [weak self] shortcut in
+        let recorder = HotkeyRecorderWindowController(
+            title: "Record Submit Hotkey",
+            instruction: "Press the shortcut to record, paste, and send Return after paste. Use Ctrl, Option, or Cmd.",
+            currentShortcut: current
+        ) { [weak self] shortcut in
             guard let self else {
                 return
             }
@@ -734,6 +772,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func showHotkeyRegistrationAlert(title: String, message: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    private func showOpenFailureAlert(title: String, message: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = title
@@ -976,7 +1023,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     nonisolated private static func visibleBackendOperationMessage(code: String, recoverable: Bool) -> String {
         switch code.uppercased() {
         case "AUDIO_NOT_FOUND":
-            return "Audio tool missing. See logs."
+            return "Audio file missing. See logs."
         case "MODEL_NOT_AVAILABLE", "MODEL_LOAD_FAILED":
             return "Model unavailable. See logs."
         default:

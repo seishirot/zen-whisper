@@ -41,6 +41,8 @@ final class BackendClient: @unchecked Sendable {
             paths.socketPath.path,
             "--log-dir",
             paths.logs.path,
+            "--parent-pid",
+            "\(ProcessInfo.processInfo.processIdentifier)",
             "--auth-token-stdin"
         ]
         process.currentDirectoryURL = paths.appSupport

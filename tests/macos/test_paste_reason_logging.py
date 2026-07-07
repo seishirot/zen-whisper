@@ -20,6 +20,8 @@ def test_copy_only_reasons_are_user_visible_and_logged() -> None:
     assert 'logInfo("transcript copy skipped: \\(reason)")' in app_delegate
     assert "Copy Skipped: \\(reason)" in status_controller
     assert "Copied; paste skipped: \\(reason)" in status_controller
+    assert '"Paste sent\\(enterText); clipboard restore pending"' in status_controller
+    assert '"Paste sent\\(enterText); clipboard restore failed"' in status_controller
     assert '"Paste sent\\(enterText); clipboard restored"' in status_controller
     assert 'enterText = "; Enter sent"' in status_controller
     assert '"Paste sent\\(enterText); clipboard kept"' in status_controller
@@ -50,10 +52,10 @@ def test_paste_dispatch_reports_event_creation_failure() -> None:
     assert "current.string(forType: .string) == token.text" in paste_controller
     assert "DispatchQueue.main.asyncAfter(deadline: .now() + delay)" in paste_controller
     assert "self.restore(token)" in paste_controller
-    assert "func restore(_ token: PasteboardRestoreToken)" in paste_controller
+    assert "func restore(_ token: PasteboardRestoreToken) -> Bool" in paste_controller
     assert "token.previous.restore(to: NSPasteboard.general)" in paste_controller
     assert "func copyForAutoPaste(_ text: String) -> PasteboardRestoreToken?" in paste_controller
-    assert "func scheduleRestore(_ token: PasteboardRestoreToken, after delay: TimeInterval)" in paste_controller
+    assert "completion: @escaping (Bool) -> Void = { _ in }" in paste_controller
     assert "func paste(to pid: pid_t) -> Bool" in paste_controller
     assert "func pressReturn(to pid: pid_t) -> Bool" in paste_controller
     assert "func canCreatePasteEvents() -> Bool" in paste_controller
@@ -112,6 +114,7 @@ def test_pasteboard_write_failure_has_distinct_state_and_restore_attempt() -> No
     assert "fileprivate struct PasteboardSnapshot" in paste_controller
     assert "struct PasteboardRestoreToken" in paste_controller
     assert "previous.restore(to: pasteboard)" in paste_controller
+    assert "return pasteboard.writeObjects(items)" in paste_controller
 
 
 def test_paste_controller_keeps_specific_copy_only_reasons() -> None:

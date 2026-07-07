@@ -7,16 +7,19 @@ final class HotkeyRecorderWindowController: NSWindowController, NSWindowDelegate
     private var didFinish = false
     private let captureView = HotkeyCaptureView()
 
-    init(currentShortcut: HotkeyShortcut, completion: @escaping (HotkeyShortcut?) -> Void) {
+    init(
+        title: String = "Record Hotkey",
+        instruction: String = "Press the shortcut to use for recording. Use Ctrl, Option, or Cmd. Shift+Space is also allowed.",
+        currentShortcut: HotkeyShortcut,
+        completion: @escaping (HotkeyShortcut?) -> Void
+    ) {
         self.completion = completion
 
         let contentView = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 210))
-        let titleLabel = NSTextField(labelWithString: "Record Hotkey")
+        let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
 
-        let instructionLabel = NSTextField(
-            wrappingLabelWithString: "Press the shortcut to use for recording. Use Ctrl, Option, or Cmd. Shift+Space is also allowed."
-        )
+        let instructionLabel = NSTextField(wrappingLabelWithString: instruction)
         instructionLabel.textColor = .secondaryLabelColor
 
         let currentLabel = NSTextField(labelWithString: "Current: \(currentShortcut.label)")
@@ -57,7 +60,7 @@ final class HotkeyRecorderWindowController: NSWindowController, NSWindowDelegate
             backing: .buffered,
             defer: false
         )
-        window.title = "Record Hotkey"
+        window.title = title
         window.contentView = contentView
         window.isReleasedWhenClosed = false
         super.init(window: window)

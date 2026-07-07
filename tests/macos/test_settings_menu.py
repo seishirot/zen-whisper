@@ -117,6 +117,23 @@ def test_model_change_restarts_backend_to_release_loaded_model_memory() -> None:
     assert "preloadSelectedModel()" not in select_model
 
 
+def test_submit_hotkey_mode_is_preserved_until_recording_stops() -> None:
+    app_delegate = (SWIFT_SRC / "AppDelegate.swift").read_text(encoding="utf-8")
+    toggle_recording = app_delegate[
+        app_delegate.index("private func toggleRecording(submitAfterPaste: Bool = false)"):
+        app_delegate.index("private func startRecording()")
+    ]
+    timer_refresh = app_delegate[
+        app_delegate.index("@objc private func refreshRecordingTimer"):
+        app_delegate.index("private func stopRecordingAndTranscribe")
+    ]
+
+    assert "let shouldSubmitAfterPaste = submitAfterPasteForCurrentRecording || submitAfterPaste" in toggle_recording
+    assert "stopRecordingAndTranscribe(submitAfterPaste: shouldSubmitAfterPaste)" in toggle_recording
+    assert "submitAfterPasteForCurrentRecording = submitAfterPaste" in toggle_recording
+    assert "stopRecordingAndTranscribe(submitAfterPaste: submitAfterPasteForCurrentRecording)" in timer_refresh
+
+
 def test_microphone_menu_lists_devices_and_recorder_uses_selected_uid() -> None:
     status_controller = (SWIFT_SRC / "StatusController.swift").read_text(encoding="utf-8")
     recorder = (SWIFT_SRC / "AudioRecorder.swift").read_text(encoding="utf-8")

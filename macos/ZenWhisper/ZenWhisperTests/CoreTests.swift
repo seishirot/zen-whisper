@@ -236,6 +236,51 @@ final class CoreTests: XCTestCase {
         }
     }
 
+    func testBackendInstallValidatorRejectsStartupHookEvenWhenManifestMatches() throws {
+        let fixture = try makePerUserBackendInstallFixture()
+        let sitePackages = fixture.paths.appSupport
+            .appendingPathComponent("backend/.venv/lib/python3.12/site-packages", isDirectory: true)
+        try "raise SystemExit('blocked')\n"
+            .write(to: sitePackages.appendingPathComponent("sitecustomize.py"), atomically: true, encoding: .utf8)
+        try rewriteVenvManifestAndInstallHash(fixture.paths)
+
+        if case .invalid(let reason) = fixture.validator.validateInstallMetadata() {
+            XCTAssertTrue(reason.contains("startup hook"))
+        } else {
+            XCTFail("Expected startup hook to invalidate install")
+        }
+    }
+
+    func testBackendInstallValidatorRejectsExternalSymlinkEvenWhenManifestMatches() throws {
+        let fixture = try makePerUserBackendInstallFixture()
+        let sitePackages = fixture.paths.appSupport
+            .appendingPathComponent("backend/.venv/lib/python3.12/site-packages", isDirectory: true)
+        try FileManager.default.createSymbolicLink(
+            at: sitePackages.appendingPathComponent("external-link"),
+            withDestinationURL: URL(fileURLWithPath: "/tmp")
+        )
+        try rewriteVenvManifestAndInstallHash(fixture.paths)
+
+        if case .invalid(let reason) = fixture.validator.validateInstallMetadata() {
+            XCTAssertTrue(reason.contains("external backend venv symlink"))
+        } else {
+            XCTFail("Expected external symlink to invalidate install")
+        }
+    }
+
+    func testBackendInstallValidatorRejectsPythonSourceHashMismatch() throws {
+        let fixture = try makePerUserBackendInstallFixture()
+        try updateInstallRecord(fixture.paths) { install in
+            install["python_source_sha256"] = "bad"
+        }
+
+        if case .invalid(let reason) = fixture.validator.validateInstallMetadata() {
+            XCTAssertTrue(reason.contains("Python executable hash"))
+        } else {
+            XCTFail("Expected Python source hash mismatch to invalidate install")
+        }
+    }
+
     func testLoginItemManagerReadsMatchingLaunchAgent() throws {
         let home = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -516,6 +561,29 @@ final class CoreTests: XCTestCase {
     private func writeJSONObject(_ object: [String: Any], to url: URL) throws {
         let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
         try data.write(to: url, options: .atomic)
+    }
+
+    private func rewriteVenvManifestAndInstallHash(_ paths: AppPaths) throws {
+        let venvRoot = paths.appSupport.appendingPathComponent("backend/.venv", isDirectory: true)
+        let venvManifest = paths.appSupport.appendingPathComponent("backend/venv_manifest.json")
+        try writeManifest(entries: testManifestEntries(root: venvRoot), rootPath: nil, to: venvManifest)
+        let hash = try testSHA256(file: venvManifest)
+        try updateInstallRecord(paths) { install in
+            install["venv_manifest_hash"] = hash
+        }
+    }
+
+    private func updateInstallRecord(
+        _ paths: AppPaths,
+        update: (inout [String: Any]) -> Void
+    ) throws {
+        let installURL = paths.appSupport.appendingPathComponent("backend/install.json")
+        let data = try Data(contentsOf: installURL)
+        guard var install = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw NSError(domain: "test", code: 2)
+        }
+        update(&install)
+        try writeJSONObject(install, to: installURL)
     }
 
     private func testManifestEntries(root: URL) throws -> [BackendVenvManifestEntry] {

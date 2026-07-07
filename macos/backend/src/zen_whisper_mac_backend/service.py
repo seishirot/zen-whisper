@@ -55,7 +55,15 @@ class BackendService:
                 f"Unsupported request type: {request_type}",
                 recoverable=True,
             )
-        except (AdapterError, RegistryError, OSError, ValueError) as exc:
+        except InvalidRequestError as exc:
+            logger.info("Invalid request %s/%s: %s", request_id, request_type, exc)
+            return error_response(
+                request_id,
+                "INVALID_REQUEST",
+                str(exc),
+                recoverable=False,
+            )
+        except (AdapterError, RegistryError, OSError) as exc:
             logger.info("Request failed: %s", _error_message_for(exc))
             return error_response(
                 request_id,
@@ -96,12 +104,12 @@ class BackendService:
 
     def _preload(self, request: JsonDict) -> JsonDict:
         request_id = str(request["request_id"])
-        engine_id = str(request["engine"])
+        engine_id = _required_str(request, "engine")
         model_id = self.registry.validate_engine_model(
-            engine_id, _optional_str(request.get("model"))
+            engine_id, _optional_str_field(request, "model")
         )
         language = self.registry.language_for_engine(
-            str(request.get("language", self.registry.default_language)),
+            _optional_str_field(request, "language") or self.registry.default_language,
             engine_id,
         )
         adapter = self._adapter(engine_id)
@@ -118,15 +126,15 @@ class BackendService:
 
     def _transcribe(self, request: JsonDict) -> JsonDict:
         request_id = str(request["request_id"])
-        engine_id = str(request["engine"])
+        engine_id = _required_str(request, "engine")
         model_id = self.registry.validate_engine_model(
-            engine_id, _optional_str(request.get("model"))
+            engine_id, _optional_str_field(request, "model")
         )
         language = self.registry.language_for_engine(
-            str(request.get("language", self.registry.default_language)),
+            _optional_str_field(request, "language") or self.registry.default_language,
             engine_id,
         )
-        audio_path = Path(str(request["audio_path"]))
+        audio_path = Path(_required_str(request, "audio_path"))
         if not audio_path.exists():
             raise FileNotFoundError(audio_path)
         started = time.monotonic()
@@ -150,8 +158,24 @@ class BackendService:
         return adapter
 
 
-def _optional_str(value: object) -> str | None:
-    return value if isinstance(value, str) else None
+class InvalidRequestError(ValueError):
+    """Raised for well-formed JSON requests with invalid per-type fields."""
+
+
+def _required_str(request: JsonDict, key: str) -> str:
+    value = request.get(key)
+    if not isinstance(value, str) or not value:
+        raise InvalidRequestError(f"{key} must be a non-empty string")
+    return value
+
+
+def _optional_str_field(request: JsonDict, key: str) -> str | None:
+    value = request.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise InvalidRequestError(f"{key} must be a string")
+    return value
 
 
 def _error_code_for(exc: Exception) -> str:

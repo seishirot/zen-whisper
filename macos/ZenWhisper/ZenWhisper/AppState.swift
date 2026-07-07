@@ -31,7 +31,7 @@ enum AppState: Equatable {
         case .preloading:
             return "Loading"
         case .transcribing:
-            return "処理中"
+            return "Processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
                 if reason?.lowercased().contains("enter sent") == true {
@@ -101,6 +101,9 @@ enum StatusText {
         }
         if lower.contains("unsafe") {
             return "Unsafe"
+        }
+        if lower.contains("empty audio") || lower.contains("silent") {
+            return "Silent"
         }
         if lower.contains("start") {
             return "No start"

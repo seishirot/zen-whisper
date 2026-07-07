@@ -443,10 +443,10 @@ except Exception:
 PY
 )"
   if [[ -z "$PREVIOUS_REQUIREMENT" && "${ZEN_WHISPER_ACCEPT_SIGNATURE_CHANGE:-}" != "1" ]]; then
-    fail "existing signing baseline is unreadable. Set ZEN_WHISPER_ACCEPT_SIGNATURE_CHANGE=1 after resetting/regranting TCC."
+    fail "existing signing baseline is unreadable. Rerun with ZEN_WHISPER_ACCEPT_SIGNATURE_CHANGE=1 only if you trust this app build. After launch, regrant Microphone and Accessibility permissions if recording or paste stops working."
   fi
   if [[ -n "$PREVIOUS_REQUIREMENT" && "$PREVIOUS_REQUIREMENT" != "$DESIGNATED_REQUIREMENT" && "${ZEN_WHISPER_ACCEPT_SIGNATURE_CHANGE:-}" != "1" ]]; then
-    fail "app signing requirement changed. Set ZEN_WHISPER_ACCEPT_SIGNATURE_CHANGE=1 after resetting/regranting TCC."
+    fail "app signing requirement changed. Rerun with ZEN_WHISPER_ACCEPT_SIGNATURE_CHANGE=1 only if you trust this app build. After launch, regrant Microphone and Accessibility permissions if recording or paste stops working."
   fi
 fi
 write_json_object "$SIGNING_TEMP" \
