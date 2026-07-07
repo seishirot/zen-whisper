@@ -167,27 +167,32 @@ def is_startup_registered() -> bool:
         return False
 
 
-def register_startup() -> None:
+def register_startup() -> bool:
     """スタートアップに登録する。"""
     cmd = _get_startup_command()
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REG_PATH, 0, winreg.KEY_WRITE) as key:
             winreg.SetValueEx(key, _APP_NAME, 0, winreg.REG_SZ, cmd)
         logger.info("スタートアップに登録しました: %s", cmd)
+        return True
     except OSError:
         logger.exception("スタートアップの登録に失敗しました")
+        return False
 
 
-def unregister_startup() -> None:
+def unregister_startup() -> bool:
     """スタートアップから解除する。"""
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REG_PATH, 0, winreg.KEY_WRITE) as key:
             winreg.DeleteValue(key, _APP_NAME)
         logger.info("スタートアップから解除しました")
+        return True
     except FileNotFoundError:
         logger.debug("スタートアップに登録されていません")
+        return True
     except OSError:
         logger.exception("スタートアップの解除に失敗しました")
+        return False
 
 
 # ── オーバーレイ（Win32 ウィンドウ属性）───────────────

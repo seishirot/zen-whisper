@@ -83,6 +83,23 @@ config.toml
 # Internal docs (kept locally)
 docs/
 
+# macOS native app outputs
+DerivedData/
+macos/build/
+macos/ZenWhisper/.build/
+macos/ZenWhisper/.swiftpm/
+macos/ZenWhisper/DerivedData/
+macos/ZenWhisper/*.xcodeproj/xcuserdata/
+macos/ZenWhisper/*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserdata/
+*.xcuserstate
+*.app/
+*.dSYM/
+macos/backend/.venv/
+macos/backend/dist/
+macos/backend/build/
+macos/backend/*.egg-info/
+
 # app logs
 *.log
 

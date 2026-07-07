@@ -7,6 +7,9 @@ GUI / オーディオ等ネイティブ依存のテストモジュールは
 from __future__ import annotations
 
 import importlib
+import sys
+
+sys.dont_write_bytecode = True
 
 collect_ignore: list[str] = []
 

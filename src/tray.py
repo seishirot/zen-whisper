@@ -285,7 +285,12 @@ class TrayApp:
 
     def _toggle_startup(self, icon: Icon, item: MenuItem) -> None:
         """スタートアップ登録のトグルコールバック。"""
+        previous_state = is_registered()
         new_state = toggle_startup()
+        if new_state == previous_state:
+            logger.warning("スタートアップ設定の変更に失敗しました")
+            self.notify("スタートアップ: 変更失敗")
+            return
         status = "登録" if new_state else "解除"
         logger.info("スタートアップを%sしました", status)
         self.notify(f"スタートアップ: {status}")

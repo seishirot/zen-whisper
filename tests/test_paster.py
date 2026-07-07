@@ -88,6 +88,7 @@ class TestPasteSubmit:
             "sleep",
             lambda delay: events.append(("sleep", delay)),
         )
+        monkeypatch.setattr(paster_module, "is_mac", lambda: False)
         return paster_module
 
     def test_paste_does_not_press_enter_by_default(self, monkeypatch):
@@ -126,32 +127,39 @@ class TestPasteSubmit:
             ("restore", "saved"),
         ]
 
-    def test_submit_does_not_press_enter_when_mac_paste_fallback_fails(
+    def test_mac_cli_does_not_copy_auto_paste_or_submit(
         self,
         monkeypatch,
     ):
-        import src.platform.darwin as darwin_module
-
         events = []
         paster_module = self._patch_paste_dependencies(monkeypatch, events)
         monkeypatch.setattr(paster_module, "is_mac", lambda: True)
-        monkeypatch.setattr(
-            paster_module.pyautogui,
-            "hotkey",
-            lambda mod, key: (_ for _ in ()).throw(RuntimeError("paste failed")),
-        )
-        monkeypatch.setattr(
-            darwin_module,
-            "paste_via_applescript",
-            lambda: events.append(("fallback_paste",)) or False,
-        )
+        notices = []
 
         paster_module.paste(
             "hello",
             OutputConfig(restore_clipboard=True),
+            on_error=notices.append,
             submit_after_paste=True,
         )
 
-        assert ("fallback_paste",) in events
-        assert ("press", "enter") not in events
-        assert events[-1] == ("restore", "saved")
+        assert events == []
+        assert notices == ["macOS CLI auto-paste/copy is disabled. Use the native menu bar app."]
+
+    def test_paste_error_notifies_callback(self, monkeypatch):
+        events = []
+        paster_module = self._patch_paste_dependencies(monkeypatch, events)
+
+        def fail_copy(text):
+            raise RuntimeError("clipboard unavailable")
+
+        monkeypatch.setattr(paster_module.pyperclip, "copy", fail_copy)
+        notices = []
+
+        paster_module.paste(
+            "hello",
+            OutputConfig(restore_clipboard=False),
+            on_error=notices.append,
+        )
+
+        assert notices == ["ペースト処理中にエラーが発生しました: clipboard unavailable"]

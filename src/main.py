@@ -29,6 +29,7 @@ if sys.platform == "win32":
 import atexit
 import logging
 import threading
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 # src パッケージをインポート可能にする
@@ -54,14 +55,39 @@ from src.tray import TrayApp, TrayState
 logger = logging.getLogger("zen-whisper")
 
 
+class _PrivateRotatingFileHandler(RotatingFileHandler):
+    def _chmod_logs(self) -> None:
+        for index in range(self.backupCount + 1):
+            path = self.baseFilename if index == 0 else f"{self.baseFilename}.{index}"
+            if os.path.exists(path):
+                try:
+                    os.chmod(path, 0o600)
+                except OSError:
+                    pass
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self._chmod_logs()
+
+    def doRollover(self) -> None:  # noqa: N802 - stdlib override name
+        super().doRollover()
+        self._chmod_logs()
+
+
 def _setup_logging(cfg: AppConfig) -> None:
     """ロギングを設定する。"""
     log_path = _ROOT_DIR / cfg.logging.file
+    log_handler = _PrivateRotatingFileHandler(
+        log_path,
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+        encoding="utf-8",
+    )
     logging.basicConfig(
         level=getattr(logging, cfg.logging.level.upper(), logging.INFO),
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler(log_path, encoding="utf-8"),
+            log_handler,
             logging.StreamHandler(),
         ],
     )
