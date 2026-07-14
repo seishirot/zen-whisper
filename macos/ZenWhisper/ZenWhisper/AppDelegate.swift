@@ -281,11 +281,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             try recorder.start(deviceUID: settings.microphoneDeviceUID)
             setState(.recording(elapsed: 0, voiceActive: false))
             timer?.invalidate()
-            let recordingTimer = Timer(timeInterval: 0.2, repeats: true) { [weak self] timer in
-                Task { @MainActor in
-                    self?.refreshRecordingTimer(timer)
-                }
-            }
+            let recordingTimer = Timer(
+                timeInterval: 0.2,
+                target: self,
+                selector: #selector(refreshRecordingTimer(_:)),
+                userInfo: nil,
+                repeats: true
+            )
             timer = recordingTimer
             RunLoop.main.add(recordingTimer, forMode: .common)
         } catch {
@@ -665,16 +667,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         setState(.copied(pasteDispatched: pasteDispatched, reason: reason))
         statusResetTimer?.invalidate()
-        let resetTimer = Timer(timeInterval: 1.2, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, case .copied = self.state else {
-                    return
-                }
-                self.setState(self.readyState())
-            }
-        }
+        let resetTimer = Timer(
+            timeInterval: 1.2,
+            target: self,
+            selector: #selector(resetCopiedState(_:)),
+            userInfo: nil,
+            repeats: false
+        )
         statusResetTimer = resetTimer
         RunLoop.main.add(resetTimer, forMode: .common)
+    }
+
+    @objc private func resetCopiedState(_ timer: Timer) {
+        guard case .copied = state else {
+            return
+        }
+        setState(readyState())
     }
 
     private func removeRecordingFile(_ url: URL, context: String) {
@@ -688,32 +696,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logInfo("transcript copy skipped: \(reason)")
         setState(.copySkipped(reason))
         statusResetTimer?.invalidate()
-        let resetTimer = Timer(timeInterval: 1.2, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, case .copySkipped = self.state else {
-                    return
-                }
-                self.setState(self.readyState())
-            }
-        }
+        let resetTimer = Timer(
+            timeInterval: 1.2,
+            target: self,
+            selector: #selector(resetCopySkippedState(_:)),
+            userInfo: nil,
+            repeats: false
+        )
         statusResetTimer = resetTimer
         RunLoop.main.add(resetTimer, forMode: .common)
+    }
+
+    @objc private func resetCopySkippedState(_ timer: Timer) {
+        guard case .copySkipped = state else {
+            return
+        }
+        setState(readyState())
     }
 
     private func setCopyFailedTransient(_ reason: String) {
         logInfo("transcript copy failed: \(reason)")
         setState(.copyFailed(reason))
         statusResetTimer?.invalidate()
-        let resetTimer = Timer(timeInterval: 1.6, repeats: false) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, case .copyFailed = self.state else {
-                    return
-                }
-                self.setState(self.readyState())
-            }
-        }
+        let resetTimer = Timer(
+            timeInterval: 1.6,
+            target: self,
+            selector: #selector(resetCopyFailedState(_:)),
+            userInfo: nil,
+            repeats: false
+        )
         statusResetTimer = resetTimer
         RunLoop.main.add(resetTimer, forMode: .common)
+    }
+
+    @objc private func resetCopyFailedState(_ timer: Timer) {
+        guard case .copyFailed = state else {
+            return
+        }
+        setState(readyState())
     }
 
     private func rememberPasteTarget(stage: String) {
@@ -1380,13 +1400,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         refreshPasteTargetCache(stage: "idle target poll")
-        let cacheTimer = Timer(timeInterval: 0.75, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                self?.refreshPasteTargetCache(stage: "idle target poll")
-            }
-        }
+        let cacheTimer = Timer(
+            timeInterval: 0.75,
+            target: self,
+            selector: #selector(pollPasteTargetCache(_:)),
+            userInfo: nil,
+            repeats: true
+        )
         pasteTargetCacheTimer = cacheTimer
         RunLoop.main.add(cacheTimer, forMode: .common)
+    }
+
+    @objc private func pollPasteTargetCache(_ timer: Timer) {
+        refreshPasteTargetCache(stage: "idle target poll")
     }
 
     private func shouldPollPasteTarget(in state: AppState) -> Bool {
