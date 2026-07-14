@@ -21,6 +21,11 @@ final class StatusController: NSObject, NSMenuDelegate {
     private let submitHotkeyMenuItem = NSMenuItem(title: "Submit Hotkey", action: nil, keyEquivalent: "")
     private let silenceAutoStopMenuItem = NSMenuItem(title: "Auto-stop on Silence", action: #selector(toggleSilenceAutoStop), keyEquivalent: "")
     private let outputModeMenuItem = NSMenuItem(title: "Output", action: nil, keyEquivalent: "")
+    private let unverifiedPasteFallbackMenuItem = NSMenuItem(
+        title: "Allow Unverified Paste/Submit to Frontmost App",
+        action: #selector(toggleUnverifiedPasteFallback),
+        keyEquivalent: ""
+    )
     private let microphoneMenuItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
     private let launchAtLoginMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
     private var currentState: AppState = .idle
@@ -54,6 +59,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var onRecordCustomSubmitHotkey: (() -> Void)?
     var onToggleSilenceAutoStop: ((Bool) -> Void)?
     var onSelectOutputMode: ((OutputMode) -> Void)?
+    var onToggleUnverifiedPasteFallback: ((Bool) -> Void)?
     var onSelectMicrophone: ((String?) -> Void)?
     var onToggleLaunchAtLogin: ((Bool) -> Void)?
     var onMenuWillOpen: (() -> Void)?
@@ -176,6 +182,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         silenceAutoStopMenuItem.target = self
         menu.addItem(silenceAutoStopMenuItem)
         menu.addItem(outputModeMenuItem)
+        unverifiedPasteFallbackMenuItem.target = self
+        menu.addItem(unverifiedPasteFallbackMenuItem)
         menu.addItem(microphoneMenuItem)
         launchAtLoginMenuItem.target = self
         launchAtLoginMenuItem.state = launchAtLoginEnabled ? .on : .off
@@ -236,6 +244,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             silenceAutoStopMenuItem.state = .off
             outputModeMenuItem.title = "Output"
             outputModeMenuItem.isEnabled = false
+            unverifiedPasteFallbackMenuItem.isEnabled = false
+            unverifiedPasteFallbackMenuItem.state = .off
             microphoneMenuItem.title = "Microphone: System Default"
             microphoneMenuItem.submenu = microphoneMenu(selectedUID: nil)
             launchAtLoginMenuItem.state = launchAtLoginEnabled ? .on : .off
@@ -278,6 +288,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             representedObject: { rawValue in OutputMode(rawValue: rawValue) ?? .pasteRestoreClipboard },
             action: #selector(selectOutputMode(_:))
         )
+        unverifiedPasteFallbackMenuItem.state = settings.allowUnverifiedPasteFallback ? .on : .off
         let devices = AudioDeviceManager.inputDevices()
         let storedUID = settings.microphoneDeviceUID?.isEmpty == true ? nil : settings.microphoneDeviceUID
         if let storedUID,
@@ -300,6 +311,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         submitHotkeyMenuItem.isEnabled = enabled
         silenceAutoStopMenuItem.isEnabled = enabled
         outputModeMenuItem.isEnabled = enabled
+        unverifiedPasteFallbackMenuItem.isEnabled = enabled
         microphoneMenuItem.isEnabled = settings != nil
         launchAtLoginMenuItem.isEnabled = true
         launchAtLoginMenuItem.state = launchAtLoginEnabled ? .on : .off
@@ -668,6 +680,10 @@ final class StatusController: NSObject, NSMenuDelegate {
     @objc private func selectOutputMode(_ sender: NSMenuItem) {
         guard let mode = sender.representedObject as? OutputMode else { return }
         onSelectOutputMode?(mode)
+    }
+    @objc private func toggleUnverifiedPasteFallback() {
+        let enabled = unverifiedPasteFallbackMenuItem.state != .on
+        onToggleUnverifiedPasteFallback?(enabled)
     }
     @objc private func toggleLaunchAtLogin() {
         let enabled = launchAtLoginMenuItem.state != .on

@@ -101,7 +101,21 @@ def test_backend_install_validation_runs_off_main_actor_with_probe_timeout() -> 
     assert "finished.wait(timeout: .now() + .seconds(8))" in validator
     assert "process.terminate()" in validator
     assert "case probeTimedOut" in validator
-    assert "backend.stop()" in start_backend
+    assert "backend.stopDetailed()" in start_backend
+
+
+def test_backend_client_tracks_process_before_auth_token_write() -> None:
+    backend_client = (SWIFT_SRC / "BackendClient.swift").read_text(encoding="utf-8")
+    start = backend_client[
+        backend_client.index("func start() throws"):
+        backend_client.index("@discardableResult")
+    ]
+
+    assert "try process.run()" in start
+    assert "self.process = process" in start
+    assert "let stopResult = stopDetailed()" in start
+    assert start.index("self.process = process") < start.index("try authPipe.fileHandleForWriting.write")
+    assert start.index("let stopResult = stopDetailed()") < start.index("throw BackendClientError.authTokenWriteFailed")
 
 
 def test_backend_static_validation_runs_before_python_probe() -> None:

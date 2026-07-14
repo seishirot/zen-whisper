@@ -10,13 +10,32 @@ enum BackendClientError: Error {
     case authTokenWriteFailed(String)
 }
 
+struct BackendStopResult: Equatable {
+    let stopped: Bool
+    let cleanExit: Bool
+    let terminationStatus: Int32?
+
+    var summary: String {
+        guard stopped else {
+            return "backend did not stop"
+        }
+        guard let terminationStatus else {
+            return "backend stopped without process status"
+        }
+        return cleanExit
+            ? "backend stopped cleanly status=\(terminationStatus)"
+            : "backend stopped with nonzero status=\(terminationStatus)"
+    }
+}
+
 final class BackendClient: @unchecked Sendable {
     private let paths: AppPaths
     private var process: Process?
     private let authToken = "\(UUID().uuidString)-\(UUID().uuidString)"
 
-    init(paths: AppPaths) {
+    init(paths: AppPaths, process: Process? = nil) {
         self.paths = paths
+        self.process = process
     }
 
     var isRunning: Bool {
@@ -65,22 +84,27 @@ final class BackendClient: @unchecked Sendable {
         process.standardOutput = startupLog
         process.standardError = startupLog
         try process.run()
+        self.process = process
         do {
             if let token = "\(authToken)\n".data(using: .utf8) {
                 try authPipe.fileHandleForWriting.write(contentsOf: token)
             }
             try authPipe.fileHandleForWriting.close()
         } catch {
-            process.terminate()
-            throw BackendClientError.authTokenWriteFailed(String(describing: error))
+            let stopResult = stopDetailed()
+            throw BackendClientError.authTokenWriteFailed("\(String(describing: error)); \(stopResult.summary)")
         }
-        self.process = process
     }
 
     @discardableResult
     func stop() -> Bool {
+        stopDetailed().stopped
+    }
+
+    @discardableResult
+    func stopDetailed() -> BackendStopResult {
         guard let process else {
-            return true
+            return BackendStopResult(stopped: true, cleanExit: true, terminationStatus: nil)
         }
         if process.isRunning {
             _ = try? UnixSocketClient(
@@ -97,10 +121,15 @@ final class BackendClient: @unchecked Sendable {
             }
         }
         let stopped = !process.isRunning
+        let status = stopped ? process.terminationStatus : nil
+        let cleanExit = stopped && status == 0
         if stopped {
+            if !cleanExit {
+                NSLog("zen-whisper: backend stopped with nonzero status %d", status ?? -1)
+            }
             self.process = nil
         }
-        return stopped
+        return BackendStopResult(stopped: stopped, cleanExit: cleanExit, terminationStatus: status)
     }
 
     func health() throws -> [String: Any] {

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon
+import CryptoKit
 import Foundation
 
 struct PasteTargetSnapshot: Equatable {
@@ -18,7 +19,7 @@ struct PasteTargetSnapshot: Equatable {
     let discovery: String
 
     var redactedDescription: String {
-        "pid=\(pid) bundle=\(bundleIdentifier) role=\(role) subrole=\(subrole) editable=\(hasEditableValue) protected=\(isProtectedContent) discovery=\(discovery) window=\(frameDescription(windowFrame)) element=\(frameDescription(elementFrame))"
+        "appHash=\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier)) role=\(role) subrole=\(subrole) editable=\(hasEditableValue) protected=\(isProtectedContent) discovery=\(discovery) window=\(frameDescription(windowFrame)) element=\(frameDescription(elementFrame))"
     }
 
     private func frameDescription(_ frame: CGRect) -> String {
@@ -34,9 +35,64 @@ struct PasteTargetProbe {
     let detail: String
 }
 
+struct PasteApplicationTarget: Equatable {
+    let pid: pid_t
+    let bundleIdentifier: String
+
+    var redactedDescription: String {
+        "appHash=\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier))"
+    }
+}
+
+private func redactedAppIdentityHash(pid: pid_t, bundleIdentifier: String) -> String {
+    SHA256.hash(data: Data("\(pid)|\(bundleIdentifier)".utf8))
+        .prefix(4)
+        .map { String(format: "%02x", $0) }
+        .joined()
+}
+
+private func redactedAppIdentityDescription(pid: pid_t, bundleIdentifier: String) -> String {
+    "appHash=\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier))"
+}
+
+enum PasteCopyOnlyReason: Equatable {
+    case missingRecordingStartAXTarget
+    case missingRecordingStopAXTarget
+    case missingCurrentAXTarget
+    case targetChangedDuringRecording
+    case targetChanged
+    case targetNotEditable
+
+    var message: String {
+        switch self {
+        case .missingRecordingStartAXTarget:
+            return "missing recording start AX target"
+        case .missingRecordingStopAXTarget:
+            return "missing recording stop AX target"
+        case .missingCurrentAXTarget:
+            return "missing current AX target"
+        case .targetChangedDuringRecording:
+            return "target changed during recording"
+        case .targetChanged:
+            return "target changed"
+        case .targetNotEditable:
+            return "target is not editable"
+        }
+    }
+
+    var isMissingAXTarget: Bool {
+        switch self {
+        case .missingRecordingStartAXTarget, .missingRecordingStopAXTarget, .missingCurrentAXTarget:
+            return true
+        case .targetChangedDuringRecording, .targetChanged, .targetNotEditable:
+            return false
+        }
+    }
+}
+
 enum PasteDecision: Equatable {
     case paste
-    case copyOnly(String)
+    case copyOnly(PasteCopyOnlyReason)
     case skipCopy(String)
 }
 
@@ -132,8 +188,9 @@ final class PasteController {
         if let axApp = focusedApp.element {
             var focusedAppPID: pid_t = 0
             let pidStatus = AXUIElementGetPid(axApp, &focusedAppPID)
-            detail.append("focusedAppPidStatus=\(pidStatus.rawValue) focusedAppPid=\(focusedAppPID)")
+            detail.append("focusedAppPidStatus=\(pidStatus.rawValue)")
             if pidStatus == .success, focusedAppPID != currentPID {
+                detail.append("focusedApp=\(redactedAppIdentityDescription(pid: focusedAppPID, bundleIdentifier: "<ax-focused>"))")
                 let focused = copyElementAttributeResult(axApp, kAXFocusedUIElementAttribute as CFString)
                 detail.append("focusedAppElement=\(describe(focused))")
                 if let focusedElement = focused.element {
@@ -159,7 +216,9 @@ final class PasteController {
             detail.append("frontmost=nil")
             return PasteTargetProbe(snapshot: nil, detail: detail.joined(separator: " "))
         }
-        detail.append("frontmostPid=\(app.processIdentifier) frontmostBundle=\(app.bundleIdentifier ?? "<nil>")")
+        detail.append(
+            "frontmost=\(redactedAppIdentityDescription(pid: app.processIdentifier, bundleIdentifier: app.bundleIdentifier ?? "<nil>"))"
+        )
         guard app.processIdentifier != NSRunningApplication.current.processIdentifier else {
             detail.append("frontmost=current")
             return PasteTargetProbe(snapshot: nil, detail: detail.joined(separator: " "))
@@ -410,24 +469,24 @@ final class PasteController {
         }
         guard let stop else {
             if start == nil {
-                return .copyOnly("missing recording start AX target")
+                return .copyOnly(.missingRecordingStartAXTarget)
             }
-            return .copyOnly("missing recording stop AX target")
+            return .copyOnly(.missingRecordingStopAXTarget)
         }
         guard let start else {
-            return .copyOnly("missing recording start AX target")
+            return .copyOnly(.missingRecordingStartAXTarget)
         }
         guard sameTarget(start, stop) else {
-            return .copyOnly("target changed during recording")
+            return .copyOnly(.targetChangedDuringRecording)
         }
         guard let current else {
-            return .copyOnly("missing current AX target")
+            return .copyOnly(.missingCurrentAXTarget)
         }
         guard isEligible(start), isEligible(stop), isEligible(current) else {
-            return .copyOnly("target is not editable")
+            return .copyOnly(.targetNotEditable)
         }
         guard sameTarget(stop, current) else {
-            return .copyOnly("target changed")
+            return .copyOnly(.targetChanged)
         }
         return .paste
     }
@@ -439,11 +498,27 @@ final class PasteController {
         return postPasteEvents(to: pid)
     }
 
+    func pasteToFrontmostApplication(approvedTarget: PasteApplicationTarget) -> Bool {
+        guard canCreatePasteEvents(),
+              Self.currentFrontmostApplicationTarget() == approvedTarget else {
+            return false
+        }
+        return postPasteEventsToFrontmostApplication()
+    }
+
     func pressReturn(to pid: pid_t) -> Bool {
         guard canCreateKeyEvents(virtualKey: CGKeyCode(kVK_Return)) else {
             return false
         }
         return postKeyEvents(to: pid, virtualKey: CGKeyCode(kVK_Return), flags: [])
+    }
+
+    func pressReturnToFrontmostApplication(approvedTarget: PasteApplicationTarget) -> Bool {
+        guard canCreateKeyEvents(virtualKey: CGKeyCode(kVK_Return)),
+              Self.currentFrontmostApplicationTarget() == approvedTarget else {
+            return false
+        }
+        return postKeyEventsToFrontmostApplication(virtualKey: CGKeyCode(kVK_Return), flags: [])
     }
 
     func canCreatePasteEvents() -> Bool {
@@ -466,6 +541,10 @@ final class PasteController {
         postKeyEvents(to: pid, virtualKey: 9, flags: .maskCommand)
     }
 
+    private func postPasteEventsToFrontmostApplication() -> Bool {
+        postKeyEventsToFrontmostApplication(virtualKey: 9, flags: .maskCommand)
+    }
+
     private func postKeyEvents(to pid: pid_t, virtualKey: CGKeyCode, flags: CGEventFlags) -> Bool {
         guard let source = CGEventSource(stateID: .hidSystemState),
               let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
@@ -477,6 +556,32 @@ final class PasteController {
         keyDown.postToPid(pid)
         keyUp.postToPid(pid)
         return true
+    }
+
+    private func postKeyEventsToFrontmostApplication(virtualKey: CGKeyCode, flags: CGEventFlags) -> Bool {
+        guard let source = CGEventSource(stateID: .hidSystemState),
+              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false) else {
+            return false
+        }
+        keyDown.flags = flags
+        keyUp.flags = flags
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+        return true
+    }
+
+    private static func currentFrontmostApplicationTarget() -> PasteApplicationTarget? {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return nil
+        }
+        guard app.processIdentifier != NSRunningApplication.current.processIdentifier else {
+            return nil
+        }
+        return PasteApplicationTarget(
+            pid: app.processIdentifier,
+            bundleIdentifier: app.bundleIdentifier ?? "<nil>"
+        )
     }
 
     func isEligible(_ snapshot: PasteTargetSnapshot) -> Bool {

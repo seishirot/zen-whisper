@@ -40,6 +40,15 @@ enum BackendProtocolError: Error, Equatable {
     case protocolMismatch(expected: Int, actual: Int?)
 }
 
+private let nonRecoverableBackendErrorCodes: Set<String> = [
+    "AUTH_FAILED",
+    "BACKEND_ERROR",
+    "BACKEND_SHUTTING_DOWN",
+    "INVALID_REQUEST",
+    "PROTOCOL_ERROR",
+    "UNKNOWN_REQUEST"
+]
+
 func decodeBackendResponse(_ data: Data) throws -> [String: Any] {
     let dict = try decodeBackendResponseObject(data)
     if dict["type"] as? String == "error" {
@@ -96,6 +105,9 @@ private func backendError(from response: [String: Any]) throws -> BackendProtoco
     }
     guard let recoverable = response["recoverable"] as? Bool else {
         throw BackendProtocolError.invalidBackendError("missing recoverable")
+    }
+    if recoverable, nonRecoverableBackendErrorCodes.contains(code.uppercased()) {
+        throw BackendProtocolError.invalidBackendError("contradictory recoverable")
     }
     return .backendError(code: code, message: message, recoverable: recoverable)
 }

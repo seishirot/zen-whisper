@@ -31,6 +31,9 @@ def test_settings_menu_shows_selected_values_and_disables_while_busy() -> None:
     assert 'outputModeMenuItem.title = "Output: \\(settings.outputMode.label)"' in status_controller
     assert "items: OutputMode.allCases.map" in status_controller
     assert "onSelectOutputMode?(mode)" in status_controller
+    assert 'NSMenuItem(\n        title: "Allow Unverified Paste/Submit to Frontmost App"' in status_controller
+    assert "settings.allowUnverifiedPasteFallback ? .on : .off" in status_controller
+    assert "onToggleUnverifiedPasteFallback?(enabled)" in status_controller
     assert 'NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin)' in status_controller
     assert "func updateLaunchAtLogin(enabled: Bool)" in status_controller
     assert "launchAtLoginMenuItem.isEnabled = true" in status_controller
@@ -69,6 +72,8 @@ def test_app_delegate_wires_settings_menu_to_saved_settings() -> None:
     assert "statusController.onToggleSilenceAutoStop" in app_delegate
     assert "statusController.onSelectOutputMode" in app_delegate
     assert "private func selectOutputMode(_ mode: OutputMode)" in app_delegate
+    assert "statusController.onToggleUnverifiedPasteFallback" in app_delegate
+    assert "private func setUnverifiedPasteFallback(_ enabled: Bool)" in app_delegate
     assert "statusController.onSelectMicrophone" in app_delegate
     assert "statusController.onToggleLaunchAtLogin" in app_delegate
     assert "private let loginItemManager = LoginItemManager()" in app_delegate
@@ -92,7 +97,7 @@ def test_app_delegate_wires_settings_menu_to_saved_settings() -> None:
     assert "private func restartBackendForModelChange()" in app_delegate
     assert "preloadSelectedModel()" in app_delegate
     assert "restarting backend after recognition model change" in app_delegate
-    assert "backend.stop()" in app_delegate
+    assert "backend.stopDetailed()" in app_delegate
     assert "self.startBackend()" in app_delegate
     assert "settings.language = registry.validLanguage(settings.language, for: engine)" in app_delegate
     assert "statusController.onSelectEngine" not in app_delegate
@@ -113,7 +118,7 @@ def test_model_change_restarts_backend_to_release_loaded_model_memory() -> None:
     assert "let selectionChanged = engine != previousEngine || model != previousModel" in select_model
     assert "saveSettingsAndRestartBackendForModelChange()" in select_model
     assert "saveSettingsOnly()" in select_model
-    assert "backend.stop()" in restart
+    assert "backend.stopDetailed()" in restart
     assert "self.startBackend()" in restart
     assert "preloadSelectedModel()" not in select_model
 

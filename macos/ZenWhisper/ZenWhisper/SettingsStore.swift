@@ -9,6 +9,7 @@ struct SettingsSnapshot: Equatable {
     var silenceAutoStopEnabled: Bool
     var microphoneDeviceUID: String?
     var outputMode: OutputMode
+    var allowUnverifiedPasteFallback: Bool
 }
 
 enum OutputMode: String, CaseIterable, Codable {
@@ -46,6 +47,7 @@ final class SettingsStore {
         static let silenceAutoStopEnabled = "silenceAutoStopEnabled"
         static let microphoneDeviceUID = "microphoneDeviceUID"
         static let outputMode = "outputMode"
+        static let allowUnverifiedPasteFallback = "allowUnverifiedPasteFallback"
     }
 
     private let defaults: UserDefaults
@@ -79,7 +81,8 @@ final class SettingsStore {
             lastModelByEngine: models,
             silenceAutoStopEnabled: hasSilenceSetting ? defaults.bool(forKey: Key.silenceAutoStopEnabled) : true,
             microphoneDeviceUID: microphoneDeviceUID,
-            outputMode: outputMode
+            outputMode: outputMode,
+            allowUnverifiedPasteFallback: defaults.bool(forKey: Key.allowUnverifiedPasteFallback)
         )
     }
 
@@ -101,5 +104,6 @@ final class SettingsStore {
             defaults.removeObject(forKey: Key.microphoneDeviceUID)
         }
         defaults.set(snapshot.outputMode.rawValue, forKey: Key.outputMode)
+        defaults.set(snapshot.allowUnverifiedPasteFallback, forKey: Key.allowUnverifiedPasteFallback)
     }
 }

@@ -81,7 +81,7 @@ def test_native_pasteboard_write_happens_only_after_paste_decision() -> None:
     schedule_enter_index = app_delegate.index("scheduleSubmitReturn(to: current, pasteReason: pasteReason)")
     keep_index = app_delegate.index('pasteReason = "clipboard kept"')
     failure_restore_index = app_delegate.index("pasteController.restore(restoreToken)")
-    copy_only_index = app_delegate.index("copyTranscriptWithoutPaste(trimmed, reason: reason)")
+    copy_only_index = app_delegate.index("copyTranscriptWithoutPaste(trimmed, reason: reasonText)")
 
     assert decision_index < paste_case_index < preflight_index < copy_index
     assert copy_index < restore_index
@@ -127,14 +127,18 @@ def test_pasteboard_write_failure_has_distinct_state_and_restore_attempt() -> No
 def test_paste_controller_keeps_specific_copy_only_reasons() -> None:
     paste_controller = (SWIFT_SRC / "PasteController.swift").read_text(encoding="utf-8")
 
-    assert '.copyOnly("missing recording start AX target")' in paste_controller
-    assert '.copyOnly("missing recording stop AX target")' in paste_controller
-    assert 'return .copyOnly("missing current AX target")' in paste_controller
+    assert "enum PasteCopyOnlyReason: Equatable" in paste_controller
+    assert 'return "missing recording start AX target"' in paste_controller
+    assert 'return "missing recording stop AX target"' in paste_controller
+    assert 'return "missing current AX target"' in paste_controller
+    assert ".copyOnly(.missingRecordingStartAXTarget)" in paste_controller
+    assert ".copyOnly(.missingRecordingStopAXTarget)" in paste_controller
+    assert "return .copyOnly(.missingCurrentAXTarget)" in paste_controller
     assert 'return .skipCopy("target is unsafe")' in paste_controller
-    assert 'return .copyOnly("target is not editable")' in paste_controller
+    assert "return .copyOnly(.targetNotEditable)" in paste_controller
     assert "guard isEligible(start), isEligible(stop), isEligible(current) else" in paste_controller
-    assert 'return .copyOnly("target changed")' in paste_controller
-    assert 'return .copyOnly("target changed during recording")' in paste_controller
+    assert "return .copyOnly(.targetChanged)" in paste_controller
+    assert "return .copyOnly(.targetChangedDuringRecording)" in paste_controller
     assert "AXSecureTextField" in paste_controller
     assert 'snapshot.role == "AXWebArea"' in paste_controller
     assert '"api key"' in paste_controller
@@ -163,6 +167,12 @@ def test_paste_target_snapshot_uses_system_wide_focus_before_frontmost_fallback(
     assert "NSRunningApplication.current.processIdentifier" in paste_controller
     assert "let enabled = copyBoolAttribute(focused, kAXEnabledAttribute as CFString) ?? true" in paste_controller
     assert "var redactedDescription: String" in paste_controller
+    assert '"appHash=\\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier))"' in paste_controller
+    assert '"pid=\\(pid) bundle=\\(bundleIdentifier)' not in paste_controller
+    assert "focusedAppPid=\\(focusedAppPID)" not in paste_controller
+    assert "frontmostPid=" not in paste_controller
+    assert "frontmostBundle=" not in paste_controller
+    assert "redactedAppIdentityDescription(pid: app.processIdentifier" in paste_controller
     assert "bundleIdentifier" in paste_controller
     assert "windowTitle" in paste_controller
     assert "elementIdentifier" in paste_controller
@@ -174,7 +184,7 @@ def test_paste_decision_compares_start_stop_and_current_targets() -> None:
 
     assert "private var pasteTargetAtRecordingStart: PasteTargetSnapshot?" in app_delegate
     assert 'pasteTargetAtRecordingStart = capturePasteTarget(stage: "recording start", allowCached: true)' in app_delegate
-    assert 'let stopTarget = capturePasteTarget(stage: "recording stop", allowCached: false)' in app_delegate
+    assert 'let stopTarget = capturePasteTarget(stage: "recording stop", allowCached: true)' in app_delegate
     assert "startTarget: startTarget" in app_delegate
     assert "stopTarget: stopTarget" in app_delegate
     assert "func decide(\n        start: PasteTargetSnapshot?," in paste_controller
@@ -183,7 +193,7 @@ def test_paste_decision_compares_start_stop_and_current_targets() -> None:
     assert "guard sameTarget(start, stop) else" in paste_controller
 
 
-def test_app_delegate_polls_paste_targets_for_recording_start_but_requires_fresh_stop_and_current() -> None:
+def test_app_delegate_polls_paste_targets_for_recording_start_stop_but_requires_fresh_current() -> None:
     app_delegate = (SWIFT_SRC / "AppDelegate.swift").read_text(encoding="utf-8")
     status_controller = (SWIFT_SRC / "StatusController.swift").read_text(encoding="utf-8")
 
@@ -194,10 +204,11 @@ def test_app_delegate_polls_paste_targets_for_recording_start_but_requires_fresh
     assert "self?.refreshLaunchAtLoginState()" in app_delegate
     assert "private var lastKnownPasteTarget: PasteTargetSnapshot?" in app_delegate
     assert 'capturePasteTarget(stage: "recording start", allowCached: true)' in app_delegate
-    assert 'capturePasteTarget(stage: "recording stop", allowCached: false)' in app_delegate
+    assert 'capturePasteTarget(stage: "recording stop", allowCached: true)' in app_delegate
     assert 'capturePasteTarget(stage: "transcription complete", allowCached: false)' in app_delegate
     assert "paste target reused at \\(stage)" in app_delegate
     assert "paste target missing at \\(stage): \\(probe.detail)" in app_delegate
+    assert "lastKnownPasteTargetDate = Date()\n            return snapshot" not in app_delegate
     assert "private var pasteTargetCacheTimer: Timer?" in app_delegate
     assert "private func refreshPasteTargetCache(stage: String)" in app_delegate
     assert "private func updatePasteTargetCacheTimer(for state: AppState)" in app_delegate
@@ -211,13 +222,13 @@ def test_swift_unit_tests_cover_paste_decision_matrix() -> None:
     core_tests = (REPO_ROOT / "macos/ZenWhisper/ZenWhisperTests/CoreTests.swift").read_text(encoding="utf-8")
 
     assert "func testPasteDecisionRequiresCompleteStableTargetHistory()" in core_tests
-    assert "controller.decide(start: nil, stop: target, current: target),\n            .copyOnly(\"missing recording start AX target\")" in core_tests
-    assert "controller.decide(start: nil, stop: nil, current: target),\n            .copyOnly(\"missing recording start AX target\")" in core_tests
-    assert '.copyOnly("missing recording stop AX target")' in core_tests
-    assert '.copyOnly("missing current AX target")' in core_tests
-    assert '.copyOnly("target changed during recording")' in core_tests
-    assert '.copyOnly("target changed")' in core_tests
-    assert '.copyOnly("target is not editable")' in core_tests
+    assert "controller.decide(start: nil, stop: target, current: target),\n            .copyOnly(.missingRecordingStartAXTarget)" in core_tests
+    assert "controller.decide(start: nil, stop: nil, current: target),\n            .copyOnly(.missingRecordingStartAXTarget)" in core_tests
+    assert ".copyOnly(.missingRecordingStopAXTarget)" in core_tests
+    assert ".copyOnly(.missingCurrentAXTarget)" in core_tests
+    assert ".copyOnly(.targetChangedDuringRecording)" in core_tests
+    assert ".copyOnly(.targetChanged)" in core_tests
+    assert ".copyOnly(.targetNotEditable)" in core_tests
     assert 'controller.decide(start: ineligible, stop: target, current: target)' in core_tests
     assert '.skipCopy("target is unsafe")' in core_tests
     assert 'controller.decide(start: unsafe, stop: target, current: target)' in core_tests
@@ -250,6 +261,31 @@ def test_copy_only_decisions_copy_without_auto_paste() -> None:
     assert "case pasteUnavailable(String)" in app_state
     assert 'case .pasteUnavailable:' in app_state
     assert 'return "AX"' in app_state
+
+
+def test_unverified_frontmost_paste_fallback_has_explicit_setting_and_logs() -> None:
+    app_delegate = (SWIFT_SRC / "AppDelegate.swift").read_text(encoding="utf-8")
+    settings_store = (SWIFT_SRC / "SettingsStore.swift").read_text(encoding="utf-8")
+    paste_controller = (SWIFT_SRC / "PasteController.swift").read_text(encoding="utf-8")
+
+    assert "var allowUnverifiedPasteFallback: Bool" in settings_store
+    assert "static let allowUnverifiedPasteFallback = \"allowUnverifiedPasteFallback\"" in settings_store
+    assert "allowUnverifiedPasteFallback: defaults.bool(forKey: Key.allowUnverifiedPasteFallback)" in settings_store
+    assert "settings.allowUnverifiedPasteFallback," in app_delegate
+    assert "reason.isMissingAXTarget" in app_delegate
+    assert 'capturePasteApplicationTarget(stage: "fallback paste verification")' in app_delegate
+    assert 'capturePasteApplicationTarget(stage: "fallback paste dispatch")' in app_delegate
+    assert "verifiedTarget == target" in app_delegate
+    assert "dispatchTarget == target" in app_delegate
+    assert "pasteToFrontmostApplication(approvedTarget: target)" in app_delegate
+    assert "pasteToFrontmostApplication(approvedTarget: PasteApplicationTarget)" in paste_controller
+    assert "func pasteToFrontmostApplication() -> Bool" not in paste_controller
+    assert "unverified frontmost fallback paste event posted target=" in app_delegate
+    assert "appTarget=" in app_delegate
+    assert "axStart=" in app_delegate
+    assert "unverified fallback; clipboard restore pending" in app_delegate
+    assert "unverified fallback target changed" in app_delegate
+    assert "clipboard restored" in app_delegate
 
 
 def test_paste_returns_true_only_after_event_post_path() -> None:

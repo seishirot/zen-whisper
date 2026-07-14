@@ -73,6 +73,8 @@ def test_native_menu_error_text_uses_sanitized_summaries_and_logs_details() -> N
     assert "Backend Repair Required: \\(StatusText.visibleErrorSummary(message))" in status_controller
     assert "Microphone Error: \\(StatusText.visibleErrorSummary(message))" in status_controller
     assert "logInfo(\"backend operation error code=\\(code) recoverable=\\(recoverable): \\(message)\")" in app_delegate
+    assert 'if code.uppercased() == "BACKEND_SHUTTING_DOWN"' in app_delegate
+    assert 'return "Backend is shutting down. Restart zen-whisper."' in app_delegate
     assert 'let repairLog = paths.logs.appendingPathComponent("backend-repair.log")' in app_delegate
     assert '"backend-repair.log:"' in app_delegate
     assert 'logInfo("backend repair requested")' in app_delegate

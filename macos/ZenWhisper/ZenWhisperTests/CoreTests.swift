@@ -76,6 +76,37 @@ final class CoreTests: XCTestCase {
             "Paste tried"
         )
         XCTAssertEqual(StatusText.copyOnlyReason("paste event unavailable"), "No paste")
+        XCTAssertEqual(
+            AppDelegate.copySkippedReasonAfterRestoredPasteFailure("paste event unavailable"),
+            "paste event unavailable; clipboard restored"
+        )
+    }
+
+    func testBackendStopReportsExitedProcessCleanlinessSeparately() throws {
+        let paths = AppPaths(
+            appSupport: URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("zw-stop-support-\(UUID().uuidString)", isDirectory: true),
+            logs: URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+                .appendingPathComponent("zw-stop-logs-\(UUID().uuidString)", isDirectory: true)
+        )
+        let success = try exitedProcess(status: 0)
+        let failure = try exitedProcess(status: 1)
+
+        XCTAssertEqual(
+            BackendClient(paths: paths, process: success).stopDetailed(),
+            BackendStopResult(stopped: true, cleanExit: true, terminationStatus: 0)
+        )
+        XCTAssertEqual(
+            BackendClient(paths: paths, process: failure).stopDetailed(),
+            BackendStopResult(stopped: true, cleanExit: false, terminationStatus: 1)
+        )
+        XCTAssertTrue(BackendClient(paths: paths, process: try exitedProcess(status: 1)).stop())
+        XCTAssertTrue(AppDelegate.shouldContinueAfterBackendStop(
+            BackendStopResult(stopped: true, cleanExit: false, terminationStatus: 1)
+        ))
+        XCTAssertFalse(AppDelegate.shouldContinueAfterBackendStop(
+            BackendStopResult(stopped: false, cleanExit: false, terminationStatus: nil)
+        ))
     }
 
     func testSocketPathUsesShortPrivateRuntimeDirectory() throws {
@@ -191,6 +222,27 @@ final class CoreTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: "submitHotkey"))
     }
 
+    func testSettingsStorePersistsUnverifiedPasteFallbackDefaultFalse() throws {
+        let registry = try ModelRegistry.loadDefault()
+        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let store = SettingsStore(defaults: defaults, registry: registry)
+
+        var settings = store.load()
+        XCTAssertFalse(settings.allowUnverifiedPasteFallback)
+
+        settings.allowUnverifiedPasteFallback = true
+        store.save(settings)
+        XCTAssertTrue(SettingsStore(defaults: defaults, registry: registry).load().allowUnverifiedPasteFallback)
+
+        settings.allowUnverifiedPasteFallback = false
+        store.save(settings)
+        XCTAssertFalse(SettingsStore(defaults: defaults, registry: registry).load().allowUnverifiedPasteFallback)
+    }
+
     func testRMSAnalyzer() {
         XCTAssertTrue(RMSAnalyzer.isEmptyAudio(samples: [0, 0, 0]))
         XCTAssertFalse(RMSAnalyzer.isEmptyAudio(samples: [0.02, 0, 0]))
@@ -292,6 +344,166 @@ final class CoreTests: XCTestCase {
         }
     }
 
+    func testBackendOperationErrorStateMapping() {
+        XCTAssertEqual(
+            AppDelegate.stateForBackendOperationError(code: "MODEL_NOT_AVAILABLE", recoverable: true),
+            .modelUnavailable("Model unavailable. See logs.")
+        )
+        XCTAssertEqual(
+            AppDelegate.stateForBackendOperationError(code: "BACKEND_SHUTTING_DOWN", recoverable: true),
+            .backendRepairRequired("Backend is shutting down. Restart zen-whisper.")
+        )
+        XCTAssertEqual(
+            AppDelegate.stateForBackendOperationError(code: "BACKEND_ERROR", recoverable: false),
+            .backendRepairRequired("Backend unavailable. See logs.")
+        )
+    }
+
+    func testCachedPasteTargetReuseRequiresCurrentOrCachedFrontmostApp() {
+        let now = Date()
+        XCTAssertTrue(
+            AppDelegate.shouldReuseCachedPasteTarget(
+                cachedPID: 100,
+                frontmostPID: 100,
+                currentPID: 200
+            )
+        )
+        XCTAssertTrue(
+            AppDelegate.shouldReuseCachedPasteTarget(
+                cachedPID: 100,
+                frontmostPID: 200,
+                currentPID: 200
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldReuseCachedPasteTarget(
+                cachedPID: 100,
+                frontmostPID: 300,
+                currentPID: 200
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldReuseCachedPasteTarget(
+                cachedPID: 100,
+                frontmostPID: nil,
+                currentPID: 200
+            )
+        )
+        XCTAssertTrue(
+            AppDelegate.shouldUseCachedPasteTarget(
+                cachedDate: now.addingTimeInterval(-19),
+                now: now,
+                maxAge: 20,
+                cachedPID: 100,
+                frontmostPID: 100,
+                currentPID: 200
+            )
+        )
+        XCTAssertTrue(
+            AppDelegate.shouldUseCachedPasteTarget(
+                cachedDate: now.addingTimeInterval(-20),
+                now: now,
+                maxAge: 20,
+                cachedPID: 100,
+                frontmostPID: 100,
+                currentPID: 200
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldUseCachedPasteTarget(
+                cachedDate: now.addingTimeInterval(-21),
+                now: now,
+                maxAge: 20,
+                cachedPID: 100,
+                frontmostPID: 100,
+                currentPID: 200
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldUseCachedPasteTarget(
+                cachedDate: nil,
+                now: now,
+                maxAge: 20,
+                cachedPID: 100,
+                frontmostPID: 100,
+                currentPID: 200
+            )
+        )
+        XCTAssertFalse(
+            AppDelegate.shouldUseCachedPasteTarget(
+                cachedDate: now,
+                now: now,
+                maxAge: 20,
+                cachedPID: 100,
+                frontmostPID: 300,
+                currentPID: 200
+            )
+        )
+    }
+
+    func testFallbackPasteApplicationRequiresStableFrontmostAppAndMissingAXTarget() {
+        let target = PasteApplicationTarget(pid: 100, bundleIdentifier: "com.example.target")
+        let sameBundleDifferentPID = PasteApplicationTarget(pid: 101, bundleIdentifier: "com.example.target")
+        let changed = PasteApplicationTarget(pid: 101, bundleIdentifier: "com.example.other")
+
+        XCTAssertTrue(target.redactedDescription.hasPrefix("appHash="))
+        XCTAssertFalse(target.redactedDescription.contains("com.example.target"))
+        XCTAssertFalse(target.redactedDescription.contains("pid="))
+        XCTAssertNotEqual(target, sameBundleDifferentPID)
+        XCTAssertNotEqual(target.redactedDescription, sameBundleDifferentPID.redactedDescription)
+        XCTAssertEqual(
+            AppDelegate.fallbackPasteApplicationTarget(
+                reason: .missingRecordingStartAXTarget,
+                start: target,
+                stop: target,
+                current: target
+            ),
+            target
+        )
+        XCTAssertEqual(
+            AppDelegate.fallbackPasteApplicationTarget(
+                reason: .missingRecordingStopAXTarget,
+                start: target,
+                stop: target,
+                current: target
+            ),
+            target
+        )
+        XCTAssertEqual(
+            AppDelegate.fallbackPasteApplicationTarget(
+                reason: .missingCurrentAXTarget,
+                start: target,
+                stop: target,
+                current: target
+            ),
+            target
+        )
+        XCTAssertNil(
+            AppDelegate.fallbackPasteApplicationTarget(
+                reason: .targetChanged,
+                start: target,
+                stop: target,
+                current: target
+            )
+        )
+        XCTAssertNil(
+            AppDelegate.fallbackPasteApplicationTarget(
+                reason: .missingRecordingStopAXTarget,
+                start: target,
+                stop: changed,
+                current: target
+            )
+        )
+        XCTAssertNil(
+            AppDelegate.fallbackPasteApplicationTarget(
+                reason: .missingRecordingStopAXTarget,
+                start: target,
+                stop: target,
+                current: nil
+            )
+        )
+    }
+
     func testBackendResponseValidationChecksErrorRequestIDAndSchema() throws {
         let request: [String: Any] = ["type": "preload", "request_id": "expected"]
         XCTAssertThrowsError(try validateBackendResponse(
@@ -338,6 +550,19 @@ final class CoreTests: XCTestCase {
                 error as? BackendProtocolError,
                 .backendError(code: "MODEL_NOT_AVAILABLE", message: "offline", recoverable: true)
             )
+        }
+        XCTAssertThrowsError(try validateBackendResponse(
+            [
+                "type": "error",
+                "request_id": "expected",
+                "code": "BACKEND_SHUTTING_DOWN",
+                "message": "stopping",
+                "recoverable": true
+            ],
+            request: request,
+            expectedType: "ready"
+        )) { error in
+            XCTAssertEqual(error as? BackendProtocolError, .invalidBackendError("contradictory recoverable"))
         }
     }
 
@@ -689,36 +914,36 @@ final class CoreTests: XCTestCase {
 
         XCTAssertEqual(
             controller.decide(start: nil, stop: target, current: target),
-            .copyOnly("missing recording start AX target")
+            .copyOnly(.missingRecordingStartAXTarget)
         )
         XCTAssertEqual(
             controller.decide(start: target, stop: nil, current: target),
-            .copyOnly("missing recording stop AX target")
+            .copyOnly(.missingRecordingStopAXTarget)
         )
         XCTAssertEqual(
             controller.decide(start: nil, stop: nil, current: target),
-            .copyOnly("missing recording start AX target")
+            .copyOnly(.missingRecordingStartAXTarget)
         )
         XCTAssertEqual(
             controller.decide(start: target, stop: target, current: nil),
-            .copyOnly("missing current AX target")
+            .copyOnly(.missingCurrentAXTarget)
         )
         XCTAssertEqual(
             controller.decide(start: target, stop: changed, current: changed),
-            .copyOnly("target changed during recording")
+            .copyOnly(.targetChangedDuringRecording)
         )
         XCTAssertEqual(
             controller.decide(start: target, stop: target, current: changed),
-            .copyOnly("target changed")
+            .copyOnly(.targetChanged)
         )
         let ineligible = pasteTarget(hasEditableValue: false)
         XCTAssertEqual(
             controller.decide(start: ineligible, stop: ineligible, current: ineligible),
-            .copyOnly("target is not editable")
+            .copyOnly(.targetNotEditable)
         )
         XCTAssertEqual(
             controller.decide(start: ineligible, stop: target, current: target),
-            .copyOnly("target is not editable")
+            .copyOnly(.targetNotEditable)
         )
         let unsafe = pasteTarget(role: "AXSecureTextField")
         XCTAssertEqual(
@@ -1084,6 +1309,16 @@ final class CoreTests: XCTestCase {
     private func testSHA256(file url: URL) throws -> String {
         let data = try Data(contentsOf: url)
         return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func exitedProcess(status: Int32) throws -> Process {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
+        process.arguments = ["-c", "exit \(status)"]
+        try process.run()
+        process.waitUntilExit()
+        XCTAssertEqual(process.terminationStatus, status)
+        return process
     }
 }
 
