@@ -28,6 +28,22 @@ class TestStartupFacade:
         result = is_registered()
         assert isinstance(result, bool)
 
+    def test_toggle_returns_unchanged_state_when_register_fails(self, monkeypatch):
+        import src.startup as startup
+
+        monkeypatch.setattr(startup, "is_registered", lambda: False)
+        monkeypatch.setattr(startup, "register", lambda: False)
+
+        assert startup.toggle() is False
+
+    def test_toggle_returns_unchanged_state_when_unregister_fails(self, monkeypatch):
+        import src.startup as startup
+
+        monkeypatch.setattr(startup, "is_registered", lambda: True)
+        monkeypatch.setattr(startup, "unregister", lambda: False)
+
+        assert startup.toggle() is True
+
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
 class TestWindowsStartup:

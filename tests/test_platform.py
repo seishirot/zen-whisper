@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import sys
+import hashlib
+from pathlib import Path
 
 import pytest
 
@@ -49,3 +51,151 @@ class TestPasteHotkey:
         assert isinstance(result, tuple)
         assert len(result) == 2
         assert all(isinstance(s, str) for s in result)
+
+
+def test_mac_legacy_startup_targets_signed_native_app() -> None:
+    from src.platform.darwin import _get_launch_command
+
+    assert _get_launch_command() == ["/usr/bin/open", "/Applications/zen-whisper.app"]
+
+
+def test_mac_legacy_startup_validates_native_app_bundle() -> None:
+    from src.platform import darwin
+
+    source = Path(darwin.__file__).read_text(encoding="utf-8")
+    assert '_NATIVE_APP_PATH = Path("/Applications/zen-whisper.app")' in source
+    assert '_NATIVE_BUNDLE_ID = "com.seishirot.zenwhisper"' in source
+    assert "def _native_app_is_installed() -> bool:" in source
+    assert "def _native_app_installation_issue() -> str | None:" in source
+    assert 'data.get("CFBundleIdentifier") != _NATIVE_BUNDLE_ID' in source
+    assert '"/usr/bin/codesign", "--verify", "--strict"' in source
+    assert '"/usr/bin/codesign", "-dr", "-"' in source
+    assert 'baseline.get("executable_sha256")' in source
+    assert "def _sha256_hex(path: Path) -> str:" in source
+
+
+def test_mac_legacy_startup_requires_matching_codesign_baseline(tmp_path, monkeypatch) -> None:
+    import json
+    import plistlib
+    import subprocess
+    from types import SimpleNamespace
+
+    from src.platform import darwin
+
+    app_path = tmp_path / "zen-whisper.app"
+    contents = app_path / "Contents"
+    executable = contents / "MacOS" / "zen-whisper"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"app")
+    (contents / "Info.plist").write_bytes(
+        plistlib.dumps({"CFBundleIdentifier": "com.seishirot.zenwhisper"})
+    )
+    signing_json = tmp_path / "signing.json"
+    signing_json.write_text(
+        json.dumps(
+            {
+                "app_path": str(app_path),
+                "executable_sha256": hashlib.sha256(b"app").hexdigest(),
+                "designated_requirement": 'identifier "com.seishirot.zenwhisper"',
+            }
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    def fake_run(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ["/usr/bin/codesign", "--verify", "--strict"]:
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[:3] == ["/usr/bin/codesign", "-dr", "-"]:
+            return SimpleNamespace(
+                returncode=0,
+                stdout='designated => identifier "com.seishirot.zenwhisper"\n',
+                stderr="",
+            )
+        raise AssertionError(args)
+
+    monkeypatch.setattr(darwin, "_NATIVE_APP_PATH", app_path)
+    monkeypatch.setattr(darwin, "_SIGNING_JSON", signing_json)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert darwin._native_app_is_installed() is True
+    assert ["/usr/bin/codesign", "--verify", "--strict", str(app_path)] in calls
+
+
+def test_mac_legacy_startup_reports_native_app_validation_reason(tmp_path, monkeypatch, caplog) -> None:
+    from src.platform import darwin
+
+    app_path = tmp_path / "zen-whisper.app"
+    plist_path = tmp_path / "com.zen-whisper.plist"
+
+    monkeypatch.setattr(darwin, "_NATIVE_APP_PATH", app_path)
+    monkeypatch.setattr(darwin, "_PLIST_PATH", plist_path)
+
+    assert darwin._native_app_installation_issue() == f"native app Info.plist not found: {app_path / 'Contents/Info.plist'}"
+    with caplog.at_level("WARNING", logger="src.platform.darwin"):
+        assert darwin.register_startup() is False
+
+    assert "native macOS app の検証に失敗" in caplog.text
+    assert "Info.plist not found" in caplog.text
+
+
+def test_mac_legacy_startup_removes_plist_when_launchctl_load_fails(tmp_path, monkeypatch) -> None:
+    import subprocess
+
+    from src.platform import darwin
+
+    plist_path = tmp_path / "com.zen-whisper.plist"
+
+    def fake_run(args, **kwargs):
+        if args[:2] == ["/bin/launchctl", "load"]:
+            raise subprocess.CalledProcessError(1, args)
+        raise AssertionError(args)
+
+    monkeypatch.setattr(darwin, "_PLIST_PATH", plist_path)
+    monkeypatch.setattr(darwin, "_native_app_is_installed", lambda: True)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert darwin.register_startup() is False
+    assert not plist_path.exists()
+
+
+def test_mac_legacy_startup_does_not_remove_plist_when_unload_fails(tmp_path, monkeypatch) -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    from src.platform import darwin
+
+    plist_path = tmp_path / "com.zen-whisper.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+
+    def fake_run(args, **kwargs):
+        assert args == ["/bin/launchctl", "unload", str(plist_path)]
+        assert kwargs["capture_output"] is True
+        return SimpleNamespace(returncode=1, stdout="", stderr="permission denied")
+
+    monkeypatch.setattr(darwin, "_PLIST_PATH", plist_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert darwin.unregister_startup() is False
+    assert plist_path.exists()
+
+
+def test_mac_legacy_startup_removes_plist_when_unload_failure_is_benign(tmp_path, monkeypatch) -> None:
+    import subprocess
+    from types import SimpleNamespace
+
+    from src.platform import darwin
+
+    plist_path = tmp_path / "com.zen-whisper.plist"
+    plist_path.write_text("plist", encoding="utf-8")
+
+    def fake_run(args, **kwargs):
+        assert args == ["/bin/launchctl", "unload", str(plist_path)]
+        return SimpleNamespace(returncode=3, stdout="", stderr="Could not find specified service")
+
+    monkeypatch.setattr(darwin, "_PLIST_PATH", plist_path)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert darwin.unregister_startup() is True
+    assert not plist_path.exists()

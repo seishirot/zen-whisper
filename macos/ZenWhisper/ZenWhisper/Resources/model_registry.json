@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "default_engine": "mlx-whisper",
+  "default_language": "ja",
+  "languages": {
+    "auto": {
+      "label": "Auto (detect)",
+      "engines": {
+        "mlx-whisper": "auto",
+        "mlx-qwen3-asr": "auto"
+      }
+    },
+    "ja": {
+      "label": "Japanese",
+      "engines": {
+        "mlx-whisper": "ja",
+        "mlx-qwen3-asr": "Japanese"
+      }
+    },
+    "en": {
+      "label": "English",
+      "engines": {
+        "mlx-whisper": "en",
+        "mlx-qwen3-asr": "English"
+      }
+    }
+  },
+  "engines": [
+    {
+      "id": "mlx-whisper",
+      "label": "MLX Whisper",
+      "default_model": "mlx-community/whisper-large-v3-turbo",
+      "models": [
+        {
+          "id": "mlx-community/whisper-large-v3-turbo",
+          "label": "Whisper large-v3-turbo",
+          "source": "https://huggingface.co/mlx-community/whisper-large-v3-turbo",
+          "upstream": "https://huggingface.co/openai/whisper-large-v3-turbo",
+          "license": "MIT"
+        }
+      ]
+    },
+    {
+      "id": "mlx-qwen3-asr",
+      "label": "MLX Qwen3-ASR",
+      "default_model": "mlx-community/Qwen3-ASR-0.6B-8bit",
+      "models": [
+        {
+          "id": "mlx-community/Qwen3-ASR-0.6B-8bit",
+          "label": "Qwen3-ASR 0.6B 8-bit",
+          "source": "https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-8bit",
+          "upstream": "https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
+          "license": "Apache-2.0"
+        },
+        {
+          "id": "mlx-community/Qwen3-ASR-1.7B-8bit",
+          "label": "Qwen3-ASR 1.7B 8-bit",
+          "source": "https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-8bit",
+          "upstream": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
+          "license": "Apache-2.0"
+        }
+      ]
+    }
+  ]
+}

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 import plistlib
+import json
+import hashlib
 import subprocess
 import tkinter as tk
 from pathlib import Path
@@ -39,22 +41,140 @@ def set_clipboard_text(text: str) -> bool:
 # ── スタートアップ登録（LaunchAgents）─────────────────
 
 _APP_NAME = "com.zen-whisper"
+_NATIVE_APP_PATH = Path("/Applications/zen-whisper.app")
+_NATIVE_BUNDLE_ID = "com.seishirot.zenwhisper"
+_SIGNING_JSON = Path.home() / "Library" / "Application Support" / "zen-whisper" / "install" / "signing.json"
 _PLIST_PATH = Path.home() / "Library" / "LaunchAgents" / f"{_APP_NAME}.plist"
 
 
 def _get_launch_command() -> list[str]:
     """LaunchAgent 用の起動コマンドを構築する。"""
-    # uv run zen-whisper で起動
-    # uv のパスを探す
-    import shutil
+    return ["/usr/bin/open", str(_NATIVE_APP_PATH)]
 
-    uv_path = shutil.which("uv")
-    if uv_path is None:
-        # デフォルトパスを試す
-        uv_path = str(Path.home() / ".local" / "bin" / "uv")
 
-    project_dir = Path(__file__).resolve().parent.parent.parent
-    return [uv_path, "run", "--project", str(project_dir), "zen-whisper"]
+def _native_app_is_installed() -> bool:
+    return _native_app_installation_issue() is None
+
+
+def _native_app_installation_issue() -> str | None:
+    plist_path = _NATIVE_APP_PATH / "Contents" / "Info.plist"
+    if not plist_path.is_file():
+        return f"native app Info.plist not found: {plist_path}"
+    try:
+        with plist_path.open("rb") as f:
+            data = plistlib.load(f)
+        if data.get("CFBundleIdentifier") != _NATIVE_BUNDLE_ID:
+            return f"native app bundle id mismatch: {data.get('CFBundleIdentifier')!r}"
+    except Exception as exc:
+        return f"native app Info.plist unreadable: {exc}"
+    signature_issue = _native_app_signature_issue()
+    if signature_issue is not None:
+        return signature_issue
+    return _native_app_signing_baseline_issue()
+
+
+def _native_app_signature_is_valid() -> bool:
+    return _native_app_signature_issue() is None
+
+
+def _native_app_signature_issue() -> str | None:
+    try:
+        result = subprocess.run(
+            ["/usr/bin/codesign", "--verify", "--strict", str(_NATIVE_APP_PATH)],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        return f"native app signature verification failed: {exc}"
+    if result.returncode == 0:
+        return None
+    output = f"{result.stdout}\n{result.stderr}"
+    if _is_local_trust_only_codesign_failure(output):
+        return None
+    return f"native app signature invalid: {output.strip() or f'codesign exited {result.returncode}'}"
+
+
+def _is_local_trust_only_codesign_failure(output: str) -> bool:
+    if "CSSMERR_TP_NOT_TRUSTED" not in output:
+        return False
+    lowered = output.lower()
+    integrity_terms = (
+        "bundle format",
+        "code object is not signed",
+        "invalid",
+        "main executable failed",
+        "modified",
+        "not signed",
+        "rejected",
+        "resource envelope",
+        "sealed resource",
+        "unsealed",
+    )
+    return not any(term in lowered for term in integrity_terms)
+
+
+def _is_benign_launchctl_unload_failure(output: str) -> bool:
+    lowered = output.lower()
+    benign_terms = (
+        "no such process",
+        "no such file",
+        "not found",
+        "not loaded",
+        "could not find specified service",
+        "bootstrap failed: 3",
+    )
+    return any(term in lowered for term in benign_terms)
+
+
+def _native_app_matches_signing_baseline() -> bool:
+    return _native_app_signing_baseline_issue() is None
+
+
+def _native_app_signing_baseline_issue() -> str | None:
+    try:
+        baseline = json.loads(_SIGNING_JSON.read_text(encoding="utf-8"))
+        if baseline.get("app_path") != str(_NATIVE_APP_PATH):
+            return "native app signing baseline app_path mismatch"
+        expected_hash = baseline.get("executable_sha256")
+        if not isinstance(expected_hash, str) or not expected_hash:
+            return "native app signing baseline missing executable_sha256"
+        executable = _NATIVE_APP_PATH / "Contents" / "MacOS" / "zen-whisper"
+        if not executable.is_file():
+            return f"native app executable not found: {executable}"
+        if _sha256_hex(executable) != expected_hash:
+            return "native app executable hash mismatch"
+        expected_requirement = baseline.get("designated_requirement")
+        if not isinstance(expected_requirement, str) or not expected_requirement:
+            return "native app signing baseline missing designated_requirement"
+        result = subprocess.run(
+            ["/usr/bin/codesign", "-dr", "-", str(_NATIVE_APP_PATH)],
+            check=False,
+            text=True,
+            capture_output=True,
+            timeout=5,
+        )
+    except Exception as exc:
+        return f"native app signing baseline check failed: {exc}"
+    output = f"{result.stdout}\n{result.stderr}"
+    prefix = "designated => "
+    actual = ""
+    for line in output.splitlines():
+        if prefix in line:
+            actual = line.split(prefix, 1)[1].strip()
+            break
+    if actual != expected_requirement:
+        return "native app signing requirement mismatch"
+    return None
+
+
+def _sha256_hex(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def is_startup_registered() -> bool:
@@ -62,43 +182,68 @@ def is_startup_registered() -> bool:
     return _PLIST_PATH.exists()
 
 
-def register_startup() -> None:
+def register_startup() -> bool:
     """LaunchAgents に plist を作成してスタートアップ登録する。"""
     try:
+        native_app_issue = _native_app_installation_issue()
+        if native_app_issue is not None:
+            logger.warning("native macOS app の検証に失敗したためスタートアップ登録を中止します: %s", native_app_issue)
+            return False
         cmd = _get_launch_command()
-        project_dir = Path(__file__).resolve().parent.parent.parent
 
         plist_data = {
             "Label": _APP_NAME,
             "ProgramArguments": cmd,
-            "WorkingDirectory": str(project_dir),
+            "WorkingDirectory": "/Applications",
             "RunAtLoad": True,
             "KeepAlive": False,
-            "StandardOutPath": str(project_dir / "zen-whisper-stdout.log"),
-            "StandardErrorPath": str(project_dir / "zen-whisper-stderr.log"),
+            "StandardOutPath": str(Path.home() / "Library/Logs/zen-whisper/legacy-startup.stdout.log"),
+            "StandardErrorPath": str(Path.home() / "Library/Logs/zen-whisper/legacy-startup.stderr.log"),
         }
 
         _PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        with open(_PLIST_PATH, "wb") as f:
+        staged_plist = _PLIST_PATH.with_suffix(".plist.staging")
+        with open(staged_plist, "wb") as f:
             plistlib.dump(plist_data, f)
+        staged_plist.replace(_PLIST_PATH)
 
-        subprocess.run(["launchctl", "load", str(_PLIST_PATH)], check=True)
+        try:
+            subprocess.run(["/bin/launchctl", "load", str(_PLIST_PATH)], check=True)
+        except Exception:
+            _PLIST_PATH.unlink(missing_ok=True)
+            raise
         logger.info("スタートアップに登録しました: %s", _PLIST_PATH)
+        return True
     except Exception:
         logger.exception("スタートアップの登録に失敗しました")
+        return False
 
 
-def unregister_startup() -> None:
+def unregister_startup() -> bool:
     """LaunchAgents から plist を削除してスタートアップ解除する。"""
     try:
         if _PLIST_PATH.exists():
-            subprocess.run(["launchctl", "unload", str(_PLIST_PATH)], check=False)
+            result = subprocess.run(
+                ["/bin/launchctl", "unload", str(_PLIST_PATH)],
+                check=False,
+                text=True,
+                capture_output=True,
+                timeout=5,
+            )
+            output = f"{result.stdout}\n{result.stderr}"
+            if result.returncode != 0 and not _is_benign_launchctl_unload_failure(output):
+                detail = output.strip() or f"launchctl unload {_PLIST_PATH} exited {result.returncode}"
+                logger.error("スタートアップ解除の launchctl unload に失敗しました: %s", detail)
+                return False
             _PLIST_PATH.unlink()
             logger.info("スタートアップから解除しました")
+            return True
         else:
             logger.debug("スタートアップに登録されていません")
+            return True
     except Exception:
         logger.exception("スタートアップの解除に失敗しました")
+        return False
 
 
 # ── オーバーレイ（NSWindow 属性）──────────────────────
@@ -236,7 +381,7 @@ def paste_via_applescript() -> bool:
     try:
         subprocess.run(
             [
-                "osascript",
+                "/usr/bin/osascript",
                 "-e",
                 'tell application "System Events" to keystroke "v" using command down',
             ],
@@ -254,7 +399,7 @@ def press_enter_via_applescript() -> bool:
     try:
         subprocess.run(
             [
-                "osascript",
+                "/usr/bin/osascript",
                 "-e",
                 'tell application "System Events" to key code 36',
             ],

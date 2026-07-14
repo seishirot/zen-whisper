@@ -1,4 +1,8 @@
-"""クリップボード経由ペーストモジュール。退避→コピー→ペースト→復元を行う。"""
+"""クリップボード経由ペーストモジュール。
+
+Windows CLI では退避→コピー→ペースト→任意 Enter→復元を行う。
+macOS CLI では自動コピー/ペーストを行わず、native menu bar app の利用を案内する。
+"""
 
 from __future__ import annotations
 
@@ -51,9 +55,13 @@ def paste(
     """
     テキストをアクティブウィンドウにペーストする。
 
+    macOS CLI では安全な自動ペースト対象判定を native menu bar app に
+    集約しているため、コピーもペーストも行わずエラー通知だけ返す。
+
+    Windows / non-macOS CLI の実行フロー:
     1. クリップボード退避
     2. テキストをコピー
-    3. Ctrl+V (Windows) / Cmd+V (Mac) でペースト
+    3. Ctrl+V でペースト
     4. 必要なら Enter 送信
     5. クリップボード復元
     """
@@ -61,6 +69,18 @@ def paste(
     delay_sec = cfg.paste_delay_ms / 1000.0
 
     try:
+        if is_mac():
+            logger.warning(
+                "macOS CLI auto-paste is disabled; %d characters were not copied. "
+                "Use the native menu bar app for safe automatic paste.",
+                len(text),
+            )
+            if submit_after_paste:
+                logger.warning("macOS CLI submit-after-paste is disabled")
+            if on_error:
+                on_error("macOS CLI auto-paste/copy is disabled. Use the native menu bar app.")
+            return
+
         # 1. 退避
         if cfg.restore_clipboard:
             saved_text = _get_clipboard_text()
@@ -74,7 +94,6 @@ def paste(
         try:
             pyautogui.hotkey(mod, key)
         except Exception:
-            # Mac では pyautogui が失敗する場合がある → AppleScript フォールバック
             if is_mac():
                 logger.debug("pyautogui ペースト失敗、AppleScript にフォールバック")
                 from src.platform.darwin import paste_via_applescript
@@ -91,8 +110,10 @@ def paste(
 
         logger.info("ペースト完了: %d文字", len(text))
 
-    except Exception:
+    except Exception as exc:
         logger.exception("ペースト処理中にエラーが発生しました")
+        if on_error:
+            on_error(f"ペースト処理中にエラーが発生しました: {exc}")
 
     finally:
         # 5. 復元

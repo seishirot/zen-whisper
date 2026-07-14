@@ -1,7 +1,7 @@
 """スタートアップ自動起動モジュール。プラットフォームに応じた実装に委譲する。
 
 Windows: レジストリ (HKCU\\...\\Run)
-macOS:   LaunchAgents plist (~/.Library/LaunchAgents/)
+macOS:   LaunchAgents plist (~/Library/LaunchAgents/)
 """
 
 from __future__ import annotations
@@ -30,18 +30,18 @@ else:
         logger.warning("スタートアップ登録はこのプラットフォームではサポートされていません")
         return False
 
-    def register() -> None:
+    def register() -> bool:
         logger.warning("スタートアップ登録はこのプラットフォームではサポートされていません")
+        return False
 
-    def unregister() -> None:
+    def unregister() -> bool:
         logger.warning("スタートアップ解除はこのプラットフォームではサポートされていません")
+        return False
 
 
 def toggle() -> bool:
-    """スタートアップ登録をトグルし、新しい状態（登録済み=True）を返す。"""
+    """スタートアップ登録をトグルし、操作後の現在状態（登録済み=True）を返す。"""
     if is_registered():
-        unregister()
-        return False
+        return True if not unregister() else False
     else:
-        register()
-        return True
+        return True if register() else False

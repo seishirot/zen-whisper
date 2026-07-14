@@ -144,5 +144,5 @@ class Transcriber:
             rtf,
         )
         if text:
-            logger.debug("認識結果: %s", text)
+            logger.debug("認識結果メタデータ: 文字数=%d", len(text))
         return text

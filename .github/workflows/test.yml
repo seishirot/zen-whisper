@@ -22,8 +22,22 @@ jobs:
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libportaudio2
+
       - name: Install dependencies
         run: uv sync --group dev
 
       - name: Run tests
         run: uv run pytest tests/ -v
+
+  macos-swift-test:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Swift tests
+        run: swift test --package-path macos/ZenWhisper
