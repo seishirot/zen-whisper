@@ -150,9 +150,11 @@ mise exec -- uv run python src/main.py
 
 For Python CLI, set `[hotkey] submit_toggle` in `config.toml` to add an alternate
 toggle that presses Enter after pasting when it is used to stop recording. In
-the macOS native app, choose `Submit Hotkey` from the menu bar item. If a Python
-CLI postprocessor runs, ZenWhisper pastes its result but suppresses Enter so the
-generated or externally transformed text can be reviewed before submission.
+the macOS native app, choose `Submit Hotkey` from the menu bar item; the
+`Shift+Cmd+Space` preset avoids the custom-shortcut recorder.
+If a Python CLI postprocessor runs, ZenWhisper pastes its result but suppresses
+Enter so the generated or externally transformed text can be reviewed before
+submission.
 
 On macOS, it appears in the menu bar instead of the Python tray.
 

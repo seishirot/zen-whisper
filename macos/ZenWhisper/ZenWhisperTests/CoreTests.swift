@@ -45,14 +45,20 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(HotkeyShortcut.fromStorageValue(custom.storageValue), custom)
         XCTAssertEqual(HotkeyShortcut.parseComboString("cmd+shift+a")?.label, "Shift+Cmd+A")
         XCTAssertEqual(HotkeyShortcut.parseComboString("option+return")?.label, "Option+Return")
+        XCTAssertEqual(HotkeyShortcut.shiftCommandSpace.label, "Shift+Cmd+Space")
+        XCTAssertEqual(HotkeyShortcut.shiftCommandSpace.storageValue, "shift+cmd+space")
         XCTAssertEqual(HotkeyShortcut.controlOptionCommandReturn.label, "Ctrl+Option+Cmd+Return")
         XCTAssertEqual(HotkeyShortcut.controlOptionCommandReturn.storageValue, "ctrl+option+cmd+return")
-        XCTAssertEqual(HotkeyShortcut.submitPresets, [.controlOptionCommandReturn])
+        XCTAssertEqual(HotkeyShortcut.submitPresets, [.shiftCommandSpace, .controlOptionCommandReturn])
         XCTAssertNil(HotkeyShortcut.optionalFromStorageValue(""))
         XCTAssertNil(HotkeyShortcut.optionalFromStorageValue("off"))
         XCTAssertEqual(
             HotkeyShortcut.optionalFromStorageValue("ctrl+option+cmd+return"),
             .controlOptionCommandReturn
+        )
+        XCTAssertEqual(
+            HotkeyShortcut.optionalFromStorageValue("cmd+shift+space"),
+            .shiftCommandSpace
         )
         XCTAssertNil(HotkeyShortcut.parseComboString("space"))
         XCTAssertNil(HotkeyShortcut.parseComboString("shift+a"))

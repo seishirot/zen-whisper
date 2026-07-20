@@ -1002,7 +1002,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func recordCustomSubmitHotkey() {
         closeHotkeyRecorders()
         suspendHotkeysForRecorder()
-        let current = settings.submitHotkey ?? HotkeyShortcut.controlOptionCommandReturn
+        let current = settings.submitHotkey ?? HotkeyShortcut.shiftCommandSpace
         let recorder = HotkeyRecorderWindowController(
             title: "Record Submit Hotkey",
             instruction: "Press the shortcut to record, paste, and send Return after paste. Use Ctrl, Option, or Cmd.",
