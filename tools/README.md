@@ -6,6 +6,7 @@ Qwen3-ASR や CPU 向け ASR の推論速度・精度を調査するための使
 | ファイル | 用途 |
 |---|---|
 | `bench_cpu_asr.py` | CPU 向け候補（faster-whisper int8 / Kotoba faster / whisper.cpp / ReazonSpeech K2）を同一音声で比較 |
+| `bench_reazon_hotwords.py` | Reazon K2 の greedy / modified beam / 動的ホットワードを正例・負例で比較 |
 | `bench_compare.py` | faster-whisper large-v3-turbo vs Qwen3-ASR 1.7B/0.6B を速度(RTF)＋精度(CER)で横断比較 |
 | `bench_qwen.py` | Qwen3-ASR の attn 実装別ベンチ（sdpa / eager / flash_attention_2 / torch.compile） |
 | `diag_qwen.py` | Qwen が GPU/bf16 に正しく載っているか・どこが遅いかの切り分け |
@@ -17,8 +18,17 @@ Qwen3-ASR や CPU 向け ASR の推論速度・精度を調査するための使
 mise exec -- uv run python tools\bench_compare.py
 mise exec -- uv run python tools\bench_qwen.py sdpa
 mise exec -- uv run python tools\bench_cpu_asr.py --audio tools\samples\bench_sample_ja.wav
+mise exec -- uv run --no-sync python tools\bench_reazon_hotwords.py --term mise --term uv --term Python
 mise exec -- uv run python tools\bench_cpu_asr.py --targets faster-whisper,kotoba
 ```
+
+`bench_reazon_hotwords.py` は本体設定を変えず、現在の Reazon と同じ greedy、
+ホットワードなしの modified beam、スコア別の動的ホットワードを比較する。既定では
+実録音 `tools/bench_outputs/recording_16k.wav` を正例、一般文の
+`tools/samples/bench_sample_ja.wav` を誤挿入確認用の負例として使う。モデルは指定精度に
+必要なファイルだけ Hugging Face から取得し、結果を
+`tools/bench_outputs/reazon_hotwords.json` に保存する。`--include-static` を付けると、
+録音ごとの動的指定に加えて、認識器ロード時のホットワードファイル経路も比較できる。
 
 `bench_cpu_asr.py` は文字起こし本文を `tools/bench_outputs/*.txt` に保存し、速度・RTF・
 ピークメモリ（取得できる環境のみ）を標準出力の表に出す。既定は低メモリ寄りで
