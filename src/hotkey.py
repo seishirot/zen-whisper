@@ -24,25 +24,51 @@ def _normalize_key_name(key: str) -> str:
     return key
 
 
+_MODIFIER_ALIASES = {
+    "control": "ctrl",
+    "option": "alt",
+    "windows": "win",
+    "command": "cmd",
+}
+
+
 def _parse_combo(combo: str) -> tuple[set[str], str]:
     """
     "win+shift+j" のような文字列を (修飾キー集合, 通常キー) に分解する。
     Mac では "win" を "cmd" として解釈する。
     """
-    parts = [p.strip().lower() for p in combo.split("+")]
-    modifiers = set()
-    key = ""
-    for p in parts:
+    if not isinstance(combo, str) or not combo.strip():
+        raise ValueError("ホットキーは空にできません")
+    parts = [part.strip().lower() for part in combo.split("+")]
+    if any(not part for part in parts):
+        raise ValueError(f"ホットキーの区切りが不正です: {combo}")
+
+    modifiers: set[str] = set()
+    keys: list[str] = []
+    for raw_part in parts:
+        part = _MODIFIER_ALIASES.get(raw_part, raw_part)
         # "win" は Mac では "cmd" として扱う
-        if p == "win" and sys.platform == "darwin":
-            modifiers.add("cmd")
-        elif p == "cmd" and sys.platform == "win32":
-            modifiers.add("win")
-        elif p in ("win", "cmd", "shift", "ctrl", "alt"):
-            modifiers.add(p)
+        if part == "win" and sys.platform == "darwin":
+            modifier = "cmd"
+        elif part == "cmd" and sys.platform == "win32":
+            modifier = "win"
+        elif part in ("win", "cmd", "shift", "ctrl", "alt"):
+            modifier = part
         else:
-            key = _normalize_key_name(p)
-    return modifiers, key
+            key = _normalize_key_name(part)
+            if _vk_from_key(key) is None:
+                raise ValueError(f"未対応のキーです: {raw_part}")
+            keys.append(key)
+            continue
+        if modifier in modifiers:
+            raise ValueError(f"修飾キーが重複しています: {raw_part}")
+        modifiers.add(modifier)
+
+    if len(keys) != 1:
+        raise ValueError(
+            "ホットキーには通常キーをちょうど1つ指定してください"
+        )
+    return modifiers, keys[0]
 
 
 _SPECIAL_KEY_MAP: dict[str, int] = {
@@ -58,7 +84,7 @@ def _vk_from_key(name: str) -> int | None:
     """キー名を仮想キーコードに変換する。アルファベット1文字または特殊キー名に対応。"""
     if name in _SPECIAL_KEY_MAP:
         return _SPECIAL_KEY_MAP[name]
-    if len(name) == 1 and name.isalpha():
+    if len(name) == 1 and name.isascii() and name.isalpha():
         return ord(name.upper())
     return None
 
@@ -68,6 +94,47 @@ def _combo_list(value: str | list[str]) -> list[str]:
     if isinstance(value, list):
         return [combo for combo in value if combo]
     return [value] if value else []
+
+
+def validate_hotkey_config(cfg: HotkeyConfig) -> list[str]:
+    """Validate syntax and reject overlapping actions without hooks."""
+    errors: list[str] = []
+    entries: list[tuple[str, str]] = []
+    for label, value, required, allow_list in (
+        ("録音トグル", cfg.toggle, True, True),
+        ("貼り付け＋Enter", cfg.submit_toggle, False, True),
+        ("言語切替", cfg.switch_lang, True, False),
+    ):
+        if isinstance(value, str):
+            combos = [value] if value else []
+        elif allow_list and isinstance(value, list) and all(
+            isinstance(item, str) for item in value
+        ):
+            combos = [item for item in value if item]
+        else:
+            errors.append(f"{label}の型が不正です")
+            continue
+        if required and not combos:
+            errors.append(f"{label}は空にできません")
+            continue
+        entries.extend((label, combo) for combo in combos)
+
+    seen: dict[tuple[frozenset[str], str], str] = {}
+    for label, combo in entries:
+        try:
+            modifiers, key = _parse_combo(combo)
+        except ValueError as exc:
+            errors.append(f"{label}「{combo}」: {exc}")
+            continue
+        fingerprint = (frozenset(modifiers), key)
+        previous = seen.get(fingerprint)
+        if previous is not None:
+            errors.append(
+                f"{label}「{combo}」は{previous}と重複しています"
+            )
+        else:
+            seen[fingerprint] = label
+    return errors
 
 
 # ══════════════════════════════════════════════════════
@@ -247,6 +314,9 @@ def start_hotkey_listener(
     on_submit_toggle: Callable[[], None] | None = None,
 ) -> keyboard.Listener:
     """グローバルホットキーリスナーを起動する（デーモンスレッド、キー入力抑制付き）。"""
+    validation_errors = validate_hotkey_config(cfg)
+    if validation_errors:
+        raise ValueError(" / ".join(validation_errors))
     toggle_strs = _combo_list(cfg.toggle)
     submit_toggle_strs = _combo_list(cfg.submit_toggle)
 

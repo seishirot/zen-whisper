@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import sys
-import threading
 from collections.abc import Callable
 
 import numpy as np
@@ -114,38 +113,23 @@ class MlxWhisperBackend:
         repo = _to_mlx_repo(cfg.model_size)
         logger.info("MLX-whisper を初期化: repo=%s", repo)
 
-        timeout_sec = cfg.model_load_timeout_sec
-        error: list[Exception] = []
-        done = threading.Event()
+        def _warmup() -> bool:
+            import mlx_whisper
 
-        def _warmup() -> None:
-            try:
-                import mlx_whisper
+            dummy_audio = np.zeros(ASR_SAMPLE_RATE, dtype=np.float32)
+            mlx_whisper.transcribe(
+                dummy_audio,
+                path_or_hf_repo=repo,
+                language="en",
+            )
+            return True
 
-                dummy_audio = np.zeros(ASR_SAMPLE_RATE, dtype=np.float32)
-                mlx_whisper.transcribe(
-                    dummy_audio,
-                    path_or_hf_repo=repo,
-                    language="en",
-                )
-                done.set()
-            except Exception as e:
-                error.append(e)
-                done.set()
-
-        t = threading.Thread(target=_warmup, daemon=True)
-        t.start()
-        t.join(timeout=timeout_sec)
-
-        if not done.is_set():
-            msg = f"MLX モデルのロードが {timeout_sec}秒 でタイムアウトしました"
-            logger.error(msg)
-            if on_timeout:
-                on_timeout(msg)
-            return
-
-        if error:
-            raise error[0]
+        load_with_timeout(
+            _warmup,
+            cfg.model_load_timeout_sec,
+            "MLX",
+            on_timeout,
+        )
 
         self._mlx_model_repo = repo
         logger.info("MLX-whisper モデルのロードが完了しました")
@@ -162,7 +146,19 @@ class MlxWhisperBackend:
         kwargs: dict[str, object] = {
             "path_or_hf_repo": self._mlx_model_repo,
             "language": language,
+            "beam_size": cfg.beam_size,
+            "no_speech_threshold": cfg.no_speech_threshold,
+            "condition_on_previous_text": (
+                cfg.condition_on_previous_text
+            ),
         }
+        if cfg.hallucination_silence_threshold is not None:
+            kwargs["hallucination_silence_threshold"] = (
+                cfg.hallucination_silence_threshold
+            )
+            # mlx-whisper only applies hallucination silence handling
+            # when word timestamps are enabled.
+            kwargs["word_timestamps"] = True
         hotwords = _whisper_hotwords(hints)
         if hotwords:
             kwargs["initial_prompt"] = f"重要語彙: {hotwords}"

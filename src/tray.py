@@ -17,6 +17,7 @@ from src.config import (
     POSTPROCESSOR_OFF,
     QWEN3_MODEL_LARGE,
     QWEN3_MODEL_SMALL,
+    AppConfig,
     FeedbackConfig,
 )
 from src.postprocessing import (
@@ -124,10 +125,13 @@ class TrayApp:
 
     def __init__(
         self,
-        on_set_language: Callable[[str], None],
-        on_set_engine: Callable[[str, str | None, str | None], None],
+        on_set_language: Callable[[str], bool | None],
+        on_set_engine: Callable[
+            [str, str | None, str | None],
+            bool | None,
+        ],
         on_quit: Callable[[], None],
-        on_set_microphone: Callable[[str], None] | None = None,
+        on_set_microphone: Callable[[str], bool | None] | None = None,
         initial_language: str = "ja",
         initial_engine: str = ENGINE_WHISPER,
         initial_device: str | None = None,
@@ -136,12 +140,14 @@ class TrayApp:
         initial_qwen3_model: str = QWEN3_MODEL_LARGE,
         feedback_config: FeedbackConfig | None = None,
         on_save_config: Callable[[], bool] | None = None,
+        on_set_sound_enabled: Callable[[bool], bool] | None = None,
         profiles: dict[str, Profile] | None = None,
         postprocessors: dict[str, PostprocessorPreset] | None = None,
         initial_profile: str = "",
         initial_postprocessor: str = POSTPROCESSOR_OFF,
-        on_set_profile: Callable[[str], None] | None = None,
-        on_set_postprocessor: Callable[[str], None] | None = None,
+        on_set_profile: Callable[[str], bool | None] | None = None,
+        on_set_postprocessor: Callable[[str], bool | None] | None = None,
+        on_open_settings: Callable[[], None] | None = None,
     ) -> None:
         self._on_set_language = on_set_language
         self._on_set_engine = on_set_engine
@@ -155,12 +161,14 @@ class TrayApp:
         self._qwen3_model = initial_qwen3_model
         self._feedback_config = feedback_config
         self._on_save_config = on_save_config
+        self._on_set_sound_enabled = on_set_sound_enabled
         self._profiles = profiles or {}
         self._postprocessors = postprocessors or {}
         self._profile = initial_profile
         self._postprocessor = initial_postprocessor
         self._on_set_profile = on_set_profile
         self._on_set_postprocessor = on_set_postprocessor
+        self._on_open_settings = on_open_settings
         self._state = TrayState.IDLE
         self._icon: Icon | None = None
 
@@ -173,8 +181,12 @@ class TrayApp:
     def _set_lang(self, lang: str) -> Callable[[Icon, MenuItem], None]:
         """言語切替のコールバック。"""
         def handler(icon: Icon, item: MenuItem) -> None:
+            accepted = self._on_set_language(lang)
+            if accepted is False:
+                self.refresh_menu()
+                self._update_title()
+                return
             self._language = lang
-            self._on_set_language(lang)
             logger.info("言語を %s に切替えました（トレイメニュー）", lang)
             self._update_icon()
         return handler
@@ -188,9 +200,13 @@ class TrayApp:
     def _set_microphone(self, microphone: str) -> Callable[[Icon, MenuItem], None]:
         """マイク切替のコールバック。"""
         def handler(icon: Icon, item: MenuItem) -> None:
-            self._microphone = microphone
             if self._on_set_microphone is not None:
-                self._on_set_microphone(microphone)
+                accepted = self._on_set_microphone(microphone)
+                if accepted is False:
+                    self.refresh_menu()
+                    self._update_title()
+                    return
+            self._microphone = microphone
             logger.info(
                 "マイクを %s に切替えました（トレイメニュー）",
                 microphone or "OS既定",
@@ -270,12 +286,16 @@ class TrayApp:
     ) -> Callable[[Icon, MenuItem], None]:
         """エンジン（および Qwen のモデルサイズ）切替のコールバック。"""
         def handler(icon: Icon, item: MenuItem) -> None:
+            accepted = self._on_set_engine(engine, qwen3_model, device)
+            if accepted is False:
+                self.refresh_menu()
+                self._update_title()
+                return
             self._engine = engine
             if qwen3_model is not None:
                 self._qwen3_model = qwen3_model
             if device is not None:
                 self._device = device
-            self._on_set_engine(engine, qwen3_model, device)
             logger.info(
                 "エンジンを %s%s%s に切替えました（トレイメニュー）",
                 engine,
@@ -317,6 +337,10 @@ class TrayApp:
         logger.info("スタートアップを%sしました", status)
         self.notify(f"スタートアップ: {status}")
 
+    def _open_settings(self, icon: Icon, item: MenuItem) -> None:
+        if self._on_open_settings is not None:
+            self._on_open_settings()
+
     def _is_startup_registered(self, item: MenuItem) -> bool:
         """スタートアップ登録状態を返す。"""
         return is_registered()
@@ -325,12 +349,23 @@ class TrayApp:
         """サウンド有効/無効のトグルコールバック。"""
         if self._feedback_config is None:
             return
-        self._feedback_config.sound_enabled = not self._feedback_config.sound_enabled
-        status = "ON" if self._feedback_config.sound_enabled else "OFF"
+        previous = self._feedback_config.sound_enabled
+        enabled = not previous
+        if self._on_set_sound_enabled is not None:
+            if not self._on_set_sound_enabled(enabled):
+                self.notify("サウンド設定の保存に失敗しました")
+                return
+            self._feedback_config.sound_enabled = enabled
+        else:
+            self._feedback_config.sound_enabled = enabled
+            if self._on_save_config is not None:
+                if not self._on_save_config():
+                    self._feedback_config.sound_enabled = previous
+                    self.notify("サウンド設定の保存に失敗しました")
+                    return
+        status = "ON" if enabled else "OFF"
         logger.info("サウンドを %s に切替えました", status)
         self.notify(f"サウンド: {status}")
-        if self._on_save_config is not None:
-            self._on_save_config()
 
     def _is_sound_enabled(self, item: MenuItem) -> bool:
         """サウンド有効状態を返す。"""
@@ -372,9 +407,13 @@ class TrayApp:
 
     def _set_profile(self, profile_id: str) -> Callable[[Icon, MenuItem], None]:
         def handler(icon: Icon, item: MenuItem) -> None:
-            self._profile = profile_id
             if self._on_set_profile is not None:
-                self._on_set_profile(profile_id)
+                accepted = self._on_set_profile(profile_id)
+                if accepted is False:
+                    self.refresh_menu()
+                    self._update_title()
+                    return
+            self._profile = profile_id
             logger.info(
                 "プロファイルを %s に切替えました（トレイメニュー）",
                 profile_id or "off",
@@ -395,9 +434,13 @@ class TrayApp:
         postprocessor_id: str,
     ) -> Callable[[Icon, MenuItem], None]:
         def handler(icon: Icon, item: MenuItem) -> None:
-            self._postprocessor = postprocessor_id
             if self._on_set_postprocessor is not None:
-                self._on_set_postprocessor(postprocessor_id)
+                accepted = self._on_set_postprocessor(postprocessor_id)
+                if accepted is False:
+                    self.refresh_menu()
+                    self._update_title()
+                    return
+            self._postprocessor = postprocessor_id
             logger.info(
                 "後処理を %s に切替えました（トレイメニュー）",
                 postprocessor_id,
@@ -562,6 +605,7 @@ class TrayApp:
                 f"後処理: {self._postprocessor_label()}",
                 self._build_postprocessor_menu(),
             ),
+            MenuItem("設定...", self._open_settings),
             Menu.SEPARATOR,
             MenuItem(
                 "スタートアップに登録",
@@ -608,6 +652,27 @@ class TrayApp:
         """現在の言語表示を更新する（ホットキーからの切替時に呼ぶ）。"""
         self._language = lang
         self._update_icon()
+
+    def apply_settings(
+        self,
+        cfg: AppConfig,
+        profiles: dict[str, Profile],
+        postprocessors: dict[str, PostprocessorPreset],
+    ) -> None:
+        """Apply a saved settings snapshot to tray labels and menus."""
+        self._language = cfg.recognition.language
+        self._engine = cfg.recognition.engine
+        self._device = cfg.recognition.device
+        self._microphone = cfg.recording.microphone
+        self._sample_rate = cfg.recording.sample_rate
+        self._qwen3_model = cfg.recognition.qwen3_model
+        self._feedback_config = cfg.feedback
+        self._profiles = profiles
+        self._postprocessors = postprocessors
+        self._profile = cfg.enhancement.profile
+        self._postprocessor = cfg.enhancement.postprocessor
+        self.refresh_menu()
+        self._update_title()
 
     def notify(self, message: str, title: str = "zen-whisper") -> None:
         """トレイ通知を表示する。"""

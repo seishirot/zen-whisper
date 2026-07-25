@@ -100,7 +100,9 @@ uv sync --extra qwen3-cuda  # CUDA 12.6 PyTorch on Windows/Linux
 cp config.example.toml config.toml
 ```
 
-Edit `config.toml` to customize Python CLI hotkeys, model size, language, and other settings.
+On Windows, open `設定...` from the tray for normal configuration. Copying and
+editing `config.toml` directly remains available for unsupported or scripted
+setups.
 
 ## Usage
 
@@ -160,13 +162,28 @@ Use the Windows tray icon or macOS menu bar item to:
 - Select ASR engine/model. Windows Python supports Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and MLX Qwen3-ASR entries.
 - Select a domain profile independently from postprocessing (Windows/Python tray)
 - Select postprocessing: off, dictionary only, or a configured CLI preset (Windows/Python tray). The menu and tooltip keep `ローカル` / `外部送信` / `送信先不明` visible.
+- Open the structured settings window to edit app settings, profiles, and
+  arbitrary CLI postprocessors (Windows/Python tray)
 - Toggle sound feedback (Windows/Python tray only)
 - Register/unregister startup or Launch at Login
 - Quit
 
 ## Configuration
 
-Python CLI settings are in `config.toml`; see `config.example.toml` for defaults and descriptions. The macOS native app settings are changed from the menu bar item and stored in macOS app settings.
+Windows/Python settings can be edited from the tray's `設定...` window and are
+stored in `config.toml`; see `config.example.toml` for defaults and
+descriptions. Profile files and local CLI presets are edited from their own
+tabs and stored in `profiles/*.toml` and `postprocessors.toml`. Writes use a
+temporary file plus atomic replacement. Hotkey and logging changes require an
+app restart; other supported settings are applied after saving. Saving is
+blocked while recording, transcribing, or postprocessing. If a tray action
+changes settings after the window was opened, a stale save is rejected and the
+window asks for a reload. Malformed existing TOML is not overwritten, and
+unknown future fields in valid `config.toml` files are retained. The macOS
+native app settings are changed from the menu bar item and stored in macOS app
+settings. Engine and device selectors only show runtimes available in the
+current installation; install the relevant extra and restart ZenWhisper before
+selecting an optional backend.
 
 | Section | Key settings |
 |---|---|
@@ -213,8 +230,9 @@ This menu/config path currently applies to the Python application (primarily
 the Windows tray). The separate native macOS app has not yet been wired to
 these profile and command files.
 
-Create one local `profiles/<id>.toml` per scene or project. See
-`profiles/zen-whisper.toml.example`; profile files are ignored by Git. Explicit
+Create and edit one profile per scene or project from `設定... >
+プロフィール`. The equivalent local file is `profiles/<id>.toml`; see
+`profiles/zen-whisper.toml.example`. Profile files are ignored by Git. Explicit
 `replace_from` entries are applied once, longest match first. `spoken` aliases
 are ASR hints and are not silently rewritten.
 
@@ -228,7 +246,9 @@ The Ollama preset first runs `ollama show qwen3.5:4b`. If the model is missing,
 ZenWhisper stops and asks you to run `ollama pull qwen3.5:4b`; it does not let
 `ollama run` implicitly fetch a model during voice input.
 
-Add or override arbitrary CLIs in the ignored `postprocessors.toml`:
+Add or override arbitrary CLIs from `設定... > 後処理CLI`. The editor keeps the
+command, input mode, model arguments, environment, destination declaration, and
+prompt free-form. The equivalent ignored file is `postprocessors.toml`:
 
 ```toml
 [postprocessors.claude]
@@ -266,7 +286,10 @@ data-only and cannot define commands. Custom presets default to
 also declaring command-specific fields resets its destination to `unknown` and
 clears inherited preflight/environment settings. Enabling a remote/unknown
 preset displays a warning that the transcript, selected profile context, and
-dictionary data are passed to that CLI.
+dictionary data are passed to that CLI. In the settings UI, changing the
+command or environment of a preset currently classified as local also forces
+its destination to `unknown`; classify it as local again only after separately
+verifying the edited command and host.
 
 If a CLI is missing, times out, exits nonzero, or returns empty output,
 ZenWhisper pastes the dictionary-corrected fallback. A submit-after-paste
@@ -312,7 +335,7 @@ To use custom start/stop sounds instead of generated tones:
 - **ONNX Runtime API mismatch with Reazon**: use the locked dependencies from this repo. In particular, do not upgrade `sherpa-onnx` independently unless the Reazon path is re-tested on Windows.
 - **No audio input**: Check that your microphone is set as the default recording device, or select it from the tray `マイク` menu.
 - **NVIDIA Broadcast is not being used**: Select `マイク (NVIDIA Broadcast)` from the Windows/Python tray menu, then check the next recording start line in `zen-whisper.log` for the actual device name and host API.
-- **Model loading timeout**: Large models may take time on first load. Increase `model_load_timeout_sec` if needed.
+- **Model loading warning**: Large native model constructors cannot be cancelled safely. If loading exceeds `model_load_timeout_sec`, ZenWhisper warns but keeps waiting and serializes later model changes so multiple heavyweight loads do not overlap. Increase the value to delay that warning.
 
 ### macOS
 
@@ -321,7 +344,7 @@ To use custom start/stop sounds instead of generated tones:
 
 ### General
 
-- **Hallucination in silent recordings**: Near-silent recordings are discarded before ASR. Check `rms` and `peak` in `zen-whisper.log`; tune `min_audio_rms` and `min_audio_peak` in `[recording]`, plus `no_speech_threshold` and `hallucination_silence_threshold` in `[recognition]` if needed.
+- **Hallucination in silent recordings**: Near-silent recordings are discarded before ASR. Check `rms` and `peak` in `zen-whisper.log`; tune `min_audio_rms` and `min_audio_peak` in `[recording]`, plus `no_speech_threshold` and `hallucination_silence_threshold` in `[recognition]` if needed. Use `hallucination_silence_threshold = "off"` (or leave its settings field blank) to disable that optional threshold.
 - **Logs**: Check `zen-whisper.log` for detailed error information.
 
 ## License

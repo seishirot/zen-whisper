@@ -9,11 +9,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from src.asr.base import RecognitionHints
+from src.toml_storage import (
+    FileFingerprint,
+    atomic_write_toml,
+    file_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 _PROFILES_DIR = _ROOT_DIR / "profiles"
+_PROFILE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 
 class ProfileError(ValueError):
@@ -149,6 +155,99 @@ def load_profiles(directory: Path | None = None) -> dict[str, Profile]:
 
     logger.info("プロファイルを読み込みました: count=%d", len(profiles))
     return profiles
+
+
+def _profile_data(profile: Profile) -> dict[str, object]:
+    if not _PROFILE_ID_RE.fullmatch(profile.profile_id):
+        raise ProfileError(
+            "プロファイルIDは英数字で始まる64文字以内の英数字・_・-で指定してください"
+        )
+    if not isinstance(profile.name, str) or not profile.name.strip():
+        raise ProfileError("name は空でない文字列で指定してください")
+    if not isinstance(profile.context, str):
+        raise ProfileError("context は文字列で指定してください")
+
+    replacements: dict[str, tuple[str, int]] = {}
+    raw_terms: list[dict[str, object]] = []
+    for index, term in enumerate(profile.terms):
+        if not isinstance(term.canonical, str) or not term.canonical.strip():
+            raise ProfileError(
+                f"terms[{index}].canonical は空でない文字列で指定してください"
+            )
+        if not isinstance(term.description, str):
+            raise ProfileError(f"terms[{index}].description は文字列で指定してください")
+        for field_name, values in (
+            ("spoken", term.spoken),
+            ("replace_from", term.replace_from),
+        ):
+            if not isinstance(values, tuple) or not all(
+                isinstance(value, str) and value.strip()
+                for value in values
+            ):
+                raise ProfileError(
+                    f"terms[{index}].{field_name} は空でない文字列の配列で指定してください"
+                )
+
+        canonical = term.canonical.strip()
+        replace_from = tuple(value.strip() for value in term.replace_from)
+        for source_index, source in enumerate(replace_from):
+            previous = replacements.get(source)
+            if previous is not None and previous[0] != canonical:
+                raise ProfileError(
+                    f"terms[{index}].replace_from[{source_index}] が "
+                    f"terms[{previous[1]}] の置換元と重複しています"
+                )
+            replacements[source] = (canonical, index)
+
+        raw_terms.append(
+            {
+                "canonical": canonical,
+                "spoken": [value.strip() for value in term.spoken],
+                "replace_from": list(replace_from),
+                "description": term.description.strip(),
+            }
+        )
+
+    return {
+        "name": profile.name.strip(),
+        "context": profile.context.strip(),
+        "terms": raw_terms,
+    }
+
+
+def save_profile(
+    profile: Profile,
+    directory: Path | None = None,
+    *,
+    expected_fingerprint: FileFingerprint | None = None,
+) -> Path:
+    """Validate and atomically save one data-only profile."""
+    profile_dir = directory or _PROFILES_DIR
+    destination = profile_dir / f"{profile.profile_id}.toml"
+    if destination.is_file():
+        # Do not hide and then overwrite a malformed local profile. The user
+        # may need its original bytes to repair or recover data.
+        _parse_profile(destination)
+    atomic_write_toml(
+        _profile_data(profile),
+        destination,
+        expected_fingerprint=expected_fingerprint,
+    )
+    logger.info(
+        "プロファイルを保存しました: id=%s terms=%d",
+        profile.profile_id,
+        len(profile.terms),
+    )
+    return destination
+
+
+def profile_file_fingerprint(
+    profile_id: str,
+    directory: Path | None = None,
+) -> FileFingerprint:
+    """Return the identity of one profile file."""
+    profile_dir = directory or _PROFILES_DIR
+    return file_fingerprint(profile_dir / f"{profile_id}.toml")
 
 
 def apply_replacements(text: str, profile: Profile | None) -> str:

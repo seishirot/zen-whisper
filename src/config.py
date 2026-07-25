@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-import tomli_w
+from src.toml_storage import (
+    FileFingerprint,
+    atomic_write_toml,
+    file_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -127,25 +132,82 @@ class AppConfig:
 
     def validate(self) -> list[str]:
         """設定値をバリデーションし、警告メッセージのリストを返す。"""
+        def is_number(value: object) -> bool:
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return False
+            try:
+                return math.isfinite(value)
+            except OverflowError:
+                return False
+
         warnings: list[str] = []
-        if self.recording.max_recording_sec <= 0:
+        if (
+            not is_number(self.recording.max_recording_sec)
+            or self.recording.max_recording_sec <= 0
+        ):
             warnings.append("max_recording_sec は正の値である必要があります")
         if self.recording.sample_rate != ASR_SAMPLE_RATE:
             warnings.append(
                 f"sample_rate は ASR/VAD の処理レートとして {ASR_SAMPLE_RATE}Hz 固定です"
             )
-        if self.recording.min_audio_rms < 0:
+        if (
+            not is_number(self.recording.min_audio_rms)
+            or self.recording.min_audio_rms < 0
+        ):
             warnings.append("min_audio_rms は 0 以上である必要があります")
-        if self.recording.min_audio_peak < 0:
+        if (
+            not is_number(self.recording.min_audio_peak)
+            or self.recording.min_audio_peak < 0
+        ):
             warnings.append("min_audio_peak は 0 以上である必要があります")
+        if (
+            not is_number(self.recording.vad_silence_threshold_sec)
+            or self.recording.vad_silence_threshold_sec < 0
+        ):
+            warnings.append(
+                "vad_silence_threshold_sec は 0 以上である必要があります"
+            )
+        if (
+            not is_number(self.recording.min_recording_sec)
+            or self.recording.min_recording_sec < 0
+        ):
+            warnings.append("min_recording_sec は 0 以上である必要があります")
+        if (
+            is_number(self.recording.min_recording_sec)
+            and is_number(self.recording.max_recording_sec)
+            and self.recording.min_recording_sec
+            > self.recording.max_recording_sec
+        ):
+            warnings.append(
+                "min_recording_sec は max_recording_sec 以下である必要があります"
+            )
         if self.recognition.language not in ("ja", "en"):
             warnings.append(f"language '{self.recognition.language}' は未検証です（ja/en 推奨）")
-        if self.recognition.beam_size <= 0:
+        if (
+            not is_number(self.recognition.beam_size)
+            or self.recognition.beam_size <= 0
+        ):
             warnings.append("beam_size は正の値である必要があります")
-        if self.recognition.cpu_threads <= 0:
+        if (
+            not is_number(self.recognition.cpu_threads)
+            or self.recognition.cpu_threads <= 0
+        ):
             warnings.append("cpu_threads は正の値である必要があります")
-        if self.recognition.model_load_timeout_sec <= 0:
+        if (
+            not is_number(self.recognition.model_load_timeout_sec)
+            or self.recognition.model_load_timeout_sec <= 0
+        ):
             warnings.append("model_load_timeout_sec は正の値である必要があります")
+        if (
+            not isinstance(self.recognition.model_size, str)
+            or not self.recognition.model_size.strip()
+        ):
+            warnings.append("model_size は空にできません")
+        if (
+            not isinstance(self.recognition.compute_type, str)
+            or not self.recognition.compute_type.strip()
+        ):
+            warnings.append("compute_type は空にできません")
         if self.recognition.device not in VALID_DEVICES:
             warnings.append(
                 f"device '{self.recognition.device}' は無効です"
@@ -157,11 +219,71 @@ class AppConfig:
             warnings.append(
                 "reazon_precision は 'fp32', 'int8', 'int8-fp32' のいずれかを指定してください"
             )
-        if self.recognition.reazon_chunk_sec <= 0:
+        if (
+            not is_number(self.recognition.reazon_chunk_sec)
+            or self.recognition.reazon_chunk_sec <= 0
+        ):
             warnings.append("reazon_chunk_sec は正の値である必要があります")
-        if self.recognition.reazon_trailing_silence_sec < 0:
+        if (
+            not is_number(
+                self.recognition.reazon_trailing_silence_sec
+            )
+            or self.recognition.reazon_trailing_silence_sec < 0
+        ):
             warnings.append("reazon_trailing_silence_sec は 0 以上である必要があります")
-        if not 0 < self.recording.max_recording_warning_pct <= 100:
+        if (
+            not is_number(self.recognition.qwen3_max_new_tokens)
+            or self.recognition.qwen3_max_new_tokens <= 0
+        ):
+            warnings.append(
+                "qwen3_max_new_tokens は正の値である必要があります"
+            )
+        if self.recognition.qwen3_attn_implementation not in (
+            "auto",
+            "sdpa",
+            "flash_attention_2",
+            "eager",
+        ):
+            warnings.append(
+                "qwen3_attn_implementation は auto, sdpa, "
+                "flash_attention_2, eager のいずれかを指定してください"
+            )
+        if (
+            not isinstance(self.recognition.qwen3_model, str)
+            or not self.recognition.qwen3_model.strip()
+        ):
+            warnings.append("qwen3_model は空にできません")
+        if (
+            not is_number(self.recognition.no_speech_threshold)
+            or not (
+                0.0
+                <= self.recognition.no_speech_threshold
+                <= 1.0
+            )
+        ):
+            warnings.append(
+                "no_speech_threshold は 0〜1 の範囲で指定してください"
+            )
+        if (
+            self.recognition.hallucination_silence_threshold is not None
+            and (
+                not is_number(
+                    self.recognition.hallucination_silence_threshold
+                )
+                or self.recognition.hallucination_silence_threshold < 0
+            )
+        ):
+            warnings.append(
+                "hallucination_silence_threshold は 0 以上で指定してください"
+            )
+        if (
+            not is_number(self.recording.max_recording_warning_pct)
+            or not (
+                0
+                < self.recording.max_recording_warning_pct
+                <= 100
+            )
+        ):
             warnings.append("max_recording_warning_pct は 1〜100 の範囲である必要があります")
         if self.recognition.engine not in VALID_ENGINES:
             warnings.append(
@@ -175,6 +297,47 @@ class AppConfig:
             or not self.enhancement.postprocessor
         ):
             warnings.append("enhancement.postprocessor は空でない文字列で指定してください")
+        if not self.hotkey.toggle:
+            warnings.append("hotkey.toggle は空にできません")
+        if not self.hotkey.switch_lang:
+            warnings.append("hotkey.switch_lang は空にできません")
+        if (
+            not is_number(self.output.paste_delay_ms)
+            or self.output.paste_delay_ms < 0
+        ):
+            warnings.append("paste_delay_ms は 0 以上である必要があります")
+        if self.feedback.sound_type not in ("tone", "custom"):
+            warnings.append("sound_type は tone または custom を指定してください")
+        if (
+            not is_number(self.feedback.volume)
+            or not 0.0 <= self.feedback.volume <= 1.0
+        ):
+            warnings.append("volume は 0〜1 の範囲で指定してください")
+        if self.feedback.sound_type == "custom" and (
+            not self.feedback.custom_start_sound
+            or not self.feedback.custom_stop_sound
+        ):
+            warnings.append(
+                "custom サウンドでは開始音と停止音のパスが必要です"
+            )
+        if (
+            not isinstance(self.logging.level, str)
+            or self.logging.level.upper() not in (
+                "DEBUG",
+                "INFO",
+                "WARNING",
+                "ERROR",
+            )
+        ):
+            warnings.append(
+                "logging.level は DEBUG, INFO, WARNING, ERROR "
+                "のいずれかを指定してください"
+            )
+        if (
+            not isinstance(self.logging.file, str)
+            or not self.logging.file.strip()
+        ):
+            warnings.append("logging.file は空にできません")
         return warnings
 
 
@@ -205,6 +368,13 @@ def _normalize_recording_sample_rate(cfg: AppConfig) -> None:
             ASR_SAMPLE_RATE,
         )
         cfg.recording.sample_rate = ASR_SAMPLE_RATE
+
+
+def _normalize_optional_recognition_values(cfg: AppConfig) -> None:
+    """Decode TOML-safe sentinels used for optional recognition values."""
+    value = cfg.recognition.hallucination_silence_threshold
+    if isinstance(value, str) and value.strip().lower() == "off":
+        cfg.recognition.hallucination_silence_threshold = None
 
 
 def _normalize_enhancement(cfg: AppConfig) -> None:
@@ -259,6 +429,7 @@ def load_config(path: Path | None = None) -> AppConfig:
 
     _normalize_legacy_auto(cfg)
     _normalize_recording_sample_rate(cfg)
+    _normalize_optional_recognition_values(cfg)
     _normalize_enhancement(cfg)
 
     # バリデーション
@@ -270,12 +441,58 @@ def load_config(path: Path | None = None) -> AppConfig:
     return cfg
 
 
-def save_config(cfg: AppConfig, path: Path | None = None) -> bool:
+def config_file_fingerprint(path: Path | None = None) -> FileFingerprint:
+    """Return the identity of the config file used by the settings UI."""
+    return file_fingerprint(path or _CONFIG_PATH)
+
+
+def save_config(
+    cfg: AppConfig,
+    path: Path | None = None,
+    *,
+    expected_fingerprint: FileFingerprint | None = None,
+) -> bool:
     """現在の AppConfig を TOML ファイルに書き出す。"""
     config_path = path or _CONFIG_PATH
     try:
-        with open(config_path, "wb") as f:
-            tomli_w.dump(asdict(cfg), f)
+        existing: dict[str, object] = {}
+        if config_path.is_file():
+            try:
+                with config_path.open("rb") as file:
+                    existing = tomllib.load(file)
+            except Exception:
+                logger.exception(
+                    "既存の設定ファイルが壊れているため上書きしません: %s",
+                    config_path,
+                )
+                return False
+        managed = asdict(cfg)
+        recognition = managed.get("recognition")
+        if (
+            isinstance(recognition, dict)
+            and recognition.get("hallucination_silence_threshold") is None
+        ):
+            # TOML has no null value. Keep the UI's blank/disabled state
+            # round-trippable with an explicit string sentinel.
+            recognition["hallucination_silence_threshold"] = "off"
+        merged = dict(existing)
+        for section_name, section_data in managed.items():
+            existing_section = merged.get(section_name)
+            if (
+                isinstance(existing_section, dict)
+                and isinstance(section_data, dict)
+            ):
+                merged[section_name] = {
+                    **existing_section,
+                    **section_data,
+                }
+            else:
+                merged[section_name] = section_data
+        atomic_write_toml(
+            merged,
+            config_path,
+            expected_fingerprint=expected_fingerprint,
+        )
         logger.info("設定ファイルを保存しました: %s", config_path)
         return True
     except Exception:

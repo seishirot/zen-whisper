@@ -62,6 +62,45 @@ def test_mlx_whisper_receives_profile_terms_as_initial_prompt(monkeypatch):
     assert captured["initial_prompt"] == "重要語彙: ZenWhisper"
 
 
+def test_mlx_whisper_receives_structured_whisper_settings(monkeypatch):
+    captured = {}
+
+    def fake_transcribe(audio, **kwargs):
+        captured.update(kwargs)
+        return {"text": " result "}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "mlx_whisper",
+        types.SimpleNamespace(transcribe=fake_transcribe),
+    )
+    backend = MlxWhisperBackend()
+    backend._mlx_model_repo = "test-repo"
+    cfg = RecognitionConfig(
+        beam_size=3,
+        no_speech_threshold=0.75,
+        condition_on_previous_text=True,
+        hallucination_silence_threshold=1.25,
+    )
+
+    text = backend.transcribe(
+        np.zeros(1600, dtype=np.float32),
+        "ja",
+        cfg,
+    )
+
+    assert text == "result"
+    assert captured == {
+        "path_or_hf_repo": "test-repo",
+        "language": "ja",
+        "beam_size": 3,
+        "no_speech_threshold": 0.75,
+        "condition_on_previous_text": True,
+        "hallucination_silence_threshold": 1.25,
+        "word_timestamps": True,
+    }
+
+
 def test_qwen_receives_full_profile_context():
     captured = {}
 

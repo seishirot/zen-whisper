@@ -29,7 +29,11 @@ def is_reazon_k2_available() -> bool:
                 importlib.util.find_spec("reazonspeech") is not None
                 and importlib.util.find_spec("reazonspeech.k2.asr") is not None
             )
-        except (ImportError, ModuleNotFoundError, ValueError):
+        except Exception as exc:
+            logger.warning(
+                "Reazon K2 の利用可否を確認できません: type=%s",
+                type(exc).__name__,
+            )
             _reazon_k2_available = False
     return _reazon_k2_available
 

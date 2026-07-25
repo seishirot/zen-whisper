@@ -20,6 +20,8 @@ compute_type = "float16"
 beam_size = 5
 # CPU threads for faster-whisper when device resolves to CPU
 cpu_threads = 4
+# Warn after this many seconds. Native model loads cannot be cancelled safely,
+# so ZenWhisper keeps waiting and serializes later model changes.
 model_load_timeout_sec = 300
 # ReazonSpeech K2 fast mode (requires: uv sync --extra reazon)
 reazon_language = "ja"
@@ -44,6 +46,7 @@ reazon_trailing_silence_sec = 0.5
 # The app default is "cuda" on Windows and "mlx" on macOS when omitted.
 # device = "cuda"
 # Hallucination suppression: skip hallucinated text after silence (seconds)
+# Set to "off" to disable this optional threshold.
 hallucination_silence_threshold = 2.0
 # Threshold for "no speech" probability (0.0-1.0)
 no_speech_threshold = 0.6

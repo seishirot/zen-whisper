@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import re
 import subprocess
@@ -22,12 +23,18 @@ from src.platform import (
     terminate_process_tree,
 )
 from src.profiles import Profile, apply_replacements, render_terms
+from src.toml_storage import (
+    FileFingerprint,
+    atomic_write_toml,
+    file_fingerprint,
+)
 
 logger = logging.getLogger(__name__)
 
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 _DEFAULT_PRESETS_PATH = _ROOT_DIR / "postprocessors.default.toml"
 _USER_PRESETS_PATH = _ROOT_DIR / "postprocessors.toml"
+_PRESET_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 
 DATA_DESTINATION_LOCAL = "local"
 DATA_DESTINATION_REMOTE = "remote"
@@ -95,13 +102,21 @@ class PostprocessResult:
     error: str = ""
 
 
-def _read_preset_tables(path: Path) -> dict[str, dict[str, object]]:
+def _read_preset_tables(
+    path: Path,
+    *,
+    strict: bool = False,
+) -> dict[str, dict[str, object]]:
     if not path.is_file():
         return {}
     try:
         with path.open("rb") as file:
             data = tomllib.load(file)
     except Exception as exc:
+        if strict:
+            raise PostprocessorConfigError(
+                f"{path.name} のTOMLを読み込めないため上書きしません"
+            ) from exc
         logger.warning(
             "後処理プリセットを読み込めません: file=%s reason=%s",
             path.name,
@@ -111,16 +126,27 @@ def _read_preset_tables(path: Path) -> dict[str, dict[str, object]]:
 
     raw_presets = data.get("postprocessors", {})
     if not isinstance(raw_presets, dict):
+        if strict:
+            raise PostprocessorConfigError(
+                f"{path.name} の postprocessors がテーブルでないため"
+                "上書きしません"
+            )
         logger.warning(
             "後処理プリセットを読み込めません: file=%s reason=postprocessors is not a table",
             path.name,
         )
         return {}
-    return {
-        str(preset_id): dict(raw)
-        for preset_id, raw in raw_presets.items()
-        if isinstance(raw, dict)
-    }
+    presets: dict[str, dict[str, object]] = {}
+    for preset_id, raw in raw_presets.items():
+        if not isinstance(raw, dict):
+            if strict:
+                raise PostprocessorConfigError(
+                    f"{path.name} のプリセット '{preset_id}' が"
+                    "テーブルでないため上書きしません"
+                )
+            continue
+        presets[str(preset_id)] = dict(raw)
+    return presets
 
 
 def _find_unknown_placeholders(template: str) -> set[str]:
@@ -189,6 +215,7 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
     if (
         not isinstance(timeout_sec, (int, float))
         or isinstance(timeout_sec, bool)
+        or not math.isfinite(timeout_sec)
         or timeout_sec <= 0
     ):
         raise PostprocessorConfigError("timeout_sec は正の数で指定してください")
@@ -302,6 +329,92 @@ def load_postprocessors(
 
     logger.info("後処理プリセットを読み込みました: count=%d", len(presets))
     return presets
+
+
+def _preset_data(preset: PostprocessorPreset) -> dict[str, object]:
+    if not _PRESET_ID_RE.fullmatch(preset.preset_id):
+        raise PostprocessorConfigError(
+            "プリセットIDは英数字で始まる64文字以内の英数字・_・-で指定してください"
+        )
+    raw: dict[str, object] = {
+        "display_name": preset.display_name,
+        "command": preset.command,
+        "input_mode": preset.input_mode,
+        "output_mode": preset.output_mode,
+        "timeout_sec": preset.timeout_sec,
+        "data_destination": preset.data_destination,
+        "prompt_template": preset.prompt_template,
+        "preflight_command": preset.preflight_command,
+        "preflight_failure_message": preset.preflight_failure_message,
+        "environment": dict(preset.environment),
+    }
+    validated = _parse_preset(preset.preset_id, raw)
+    if validated is None:
+        raise PostprocessorConfigError("無効なプリセットは保存できません")
+    return raw
+
+
+def save_postprocessor(
+    preset: PostprocessorPreset,
+    user_path: Path | None = None,
+    *,
+    expected_fingerprint: FileFingerprint | None = None,
+) -> Path:
+    """Validate and atomically upsert one trusted local CLI preset."""
+    destination = user_path or _USER_PRESETS_PATH
+    presets = _read_preset_tables(destination, strict=True)
+    if preset.preset_id in presets:
+        effective = load_postprocessors(user_path=destination)
+        if preset.preset_id not in effective:
+            raise PostprocessorConfigError(
+                f"既存プリセット '{preset.preset_id}' が壊れているか"
+                "無効なため上書きしません"
+            )
+    presets[preset.preset_id] = _preset_data(preset)
+    atomic_write_toml(
+        {"postprocessors": presets},
+        destination,
+        expected_fingerprint=expected_fingerprint,
+    )
+    logger.info("ローカル後処理プリセットを保存しました: id=%s", preset.preset_id)
+    return destination
+
+
+def postprocessors_file_fingerprint(
+    user_path: Path | None = None,
+) -> FileFingerprint:
+    """Return the identity of the local postprocessor file."""
+    return file_fingerprint(user_path or _USER_PRESETS_PATH)
+
+
+def load_local_postprocessors(
+    user_path: Path | None = None,
+) -> dict[str, PostprocessorPreset]:
+    """Load complete local presets for structured settings editing."""
+    destination = user_path or _USER_PRESETS_PATH
+    presets: dict[str, PostprocessorPreset] = {}
+    for preset_id, raw in _read_preset_tables(destination).items():
+        try:
+            preset = _parse_preset(preset_id, raw)
+        except PostprocessorConfigError as exc:
+            logger.warning(
+                "ローカル後処理プリセットを編集用に読み込めません: "
+                "preset=%s reason=%s",
+                preset_id,
+                exc,
+            )
+            continue
+        if preset is not None:
+            presets[preset_id] = preset
+    return presets
+
+
+def load_local_postprocessor_ids(
+    user_path: Path | None = None,
+) -> frozenset[str]:
+    """Return locally declared IDs, including partial bundled overrides."""
+    destination = user_path or _USER_PRESETS_PATH
+    return frozenset(_read_preset_tables(destination))
 
 
 def _render(template: str, values: dict[str, str]) -> str:

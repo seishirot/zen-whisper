@@ -16,7 +16,9 @@ from src.hotkey import (
     _darwin_key_name,
     _parse_combo,
     _vk_from_key,
+    validate_hotkey_config,
 )
+from src.config import HotkeyConfig
 
 
 class TestParseCombo:
@@ -68,6 +70,24 @@ class TestParseCombo:
         mods, key = _parse_combo("win + shift + j")
         assert key == "j"
 
+    def test_control_alias_is_ctrl_not_bare_key(self):
+        mods, key = _parse_combo("control+space")
+        assert mods == {"ctrl"}
+        assert key == "space"
+
+    @pytest.mark.parametrize(
+        "combo",
+        [
+            "ctrl+a+b",
+            "ctrl+foo",
+            "ctrl++a",
+            "ctrl+ctrl+a",
+        ],
+    )
+    def test_rejects_ambiguous_or_unsupported_combo(self, combo):
+        with pytest.raises(ValueError):
+            _parse_combo(combo)
+
     @pytest.mark.skipif(sys.platform != "darwin", reason="macOS only")
     def test_cmd_j_on_mac(self):
         mods, key = _parse_combo("cmd+j")
@@ -99,6 +119,8 @@ class TestVkFromKey:
         assert _vk_from_key("unknown") is None
         assert _vk_from_key("") is None
         assert _vk_from_key("f1") is None  # ファンクションキーは未対応
+        assert _vk_from_key("あ") is None
+        assert _vk_from_key("ß") is None
 
 
 class TestComboList:
@@ -112,6 +134,18 @@ class TestComboList:
 
     def test_list_filters_empty_entries(self):
         assert _combo_list(["shift+space", "", "win+j"]) == ["shift+space", "win+j"]
+
+
+def test_hotkey_validation_rejects_duplicate_actions():
+    cfg = HotkeyConfig(
+        toggle="ctrl+space",
+        submit_toggle="control+space",
+        switch_lang="alt+space",
+    )
+
+    errors = validate_hotkey_config(cfg)
+
+    assert any("重複" in error for error in errors)
 
 
 class TestWindowsModifierMatching:

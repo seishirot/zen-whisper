@@ -5,7 +5,17 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from src.profiles import Profile, ProfileTerm, apply_replacements, load_profiles
+import pytest
+
+from src.profiles import (
+    Profile,
+    ProfileError,
+    ProfileTerm,
+    apply_replacements,
+    load_profiles,
+    save_profile,
+)
+from src.toml_storage import StaleFileError, file_fingerprint
 
 
 def test_load_profile_builds_recognition_hints(tmp_path):
@@ -130,3 +140,68 @@ def test_example_profile_corrects_observed_reazon_variants(tmp_path):
     )
 
     assert result == "ZenWhisper、Ollama、Reazon K2"
+
+
+def test_save_profile_round_trips_structured_terms(tmp_path):
+    profile = Profile(
+        profile_id="project_a",
+        name="Project A",
+        context="Private context",
+        terms=(
+            ProfileTerm(
+                canonical="ZenWhisper",
+                spoken=("ゼンウィスパー",),
+                replace_from=("全ウイスパー",),
+                description="製品名",
+            ),
+        ),
+    )
+
+    saved_path = save_profile(profile, tmp_path)
+    loaded = load_profiles(tmp_path)["project_a"]
+
+    assert saved_path == tmp_path / "project_a.toml"
+    assert loaded == profile
+    assert list(tmp_path.glob(".project_a.toml.*.tmp")) == []
+
+
+def test_save_profile_rejects_unsafe_id(tmp_path):
+    with pytest.raises(ProfileError, match="プロファイルID"):
+        save_profile(
+            Profile(profile_id="../outside", name="Unsafe"),
+            tmp_path,
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_save_profile_preserves_malformed_existing_file(tmp_path):
+    profile_path = tmp_path / "broken.toml"
+    malformed = b"[broken\nvalue = 'keep me'\n"
+    profile_path.write_bytes(malformed)
+
+    with pytest.raises(ProfileError, match="TOML"):
+        save_profile(
+            Profile(profile_id="broken", name="Replacement"),
+            tmp_path,
+        )
+
+    assert profile_path.read_bytes() == malformed
+    assert list(tmp_path.glob(".broken.toml.*.tmp")) == []
+
+
+def test_save_profile_rejects_changed_file_fingerprint(tmp_path):
+    profile_path = tmp_path / "coding.toml"
+    profile_path.write_text('name = "Before"\n', encoding="utf-8")
+    expected = file_fingerprint(profile_path)
+    external = 'name = "External"\n'
+    profile_path.write_text(external, encoding="utf-8")
+
+    with pytest.raises(StaleFileError):
+        save_profile(
+            Profile(profile_id="coding", name="UI"),
+            tmp_path,
+            expected_fingerprint=expected,
+        )
+
+    assert profile_path.read_text(encoding="utf-8") == external

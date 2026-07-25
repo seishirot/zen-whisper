@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import gc
 import logging
+import sys
 import time
 from collections.abc import Callable
 from threading import Lock
@@ -10,7 +12,11 @@ from threading import Lock
 import numpy as np
 
 from src.asr.base import ASRBackend, RecognitionHints
-from src.asr.qwen import Qwen3Backend, is_qwen3_available
+from src.asr.qwen import (
+    Qwen3Backend,
+    is_qwen3_available,
+    is_qwen3_cuda_available,
+)
 from src.asr.reazon import ReazonK2Backend, is_reazon_k2_available
 from src.asr.whisper import (
     FasterWhisperBackend,
@@ -27,6 +33,7 @@ from src.config import (
     ENGINE_WHISPER,
     RecognitionConfig,
 )
+from src.platform import is_mac
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +44,58 @@ def _resolve_engine(cfg: RecognitionConfig) -> str:
         logger.warning("engine='auto' は非推奨です。Whisper として扱います")
         return ENGINE_WHISPER
     return cfg.engine
+
+
+def available_recognition_engines() -> tuple[str, ...]:
+    """Return model families currently usable by this Python installation."""
+    engines = [ENGINE_WHISPER]
+    if not is_mac() and is_reazon_k2_available():
+        engines.append(ENGINE_REAZON_K2)
+    if not is_mac() and is_qwen3_available():
+        engines.append(ENGINE_QWEN3_ASR)
+    return tuple(engines)
+
+
+def available_recognition_devices(engine: str) -> tuple[str, ...]:
+    """Return execution targets supported by an installed engine."""
+    if engine == ENGINE_REAZON_K2:
+        return ("cpu",)
+    if engine == ENGINE_QWEN3_ASR:
+        devices = ["cpu"]
+        if is_qwen3_cuda_available():
+            devices.insert(0, "cuda")
+        return tuple(devices)
+    if is_mac():
+        return ("mlx",)
+    devices = ["cpu"]
+    if is_whisper_cuda_available():
+        devices.insert(0, "cuda")
+    return tuple(devices)
+
+
+def recognition_configuration_error(cfg: RecognitionConfig) -> str:
+    """Describe why a requested engine/device cannot be loaded right now."""
+    if cfg.engine not in available_recognition_engines():
+        if cfg.engine == ENGINE_REAZON_K2:
+            return (
+                "Reazon K2 が未導入です。uv sync --extra reazon を実行して"
+                "ZenWhisperを再起動してください"
+            )
+        if cfg.engine == ENGINE_QWEN3_ASR:
+            return (
+                "Qwen3-ASR が未導入です。qwen3 または qwen3-cuda extraを"
+                "導入してZenWhisperを再起動してください"
+            )
+        return f"認識エンジン {cfg.engine} はこの環境で使用できません"
+
+    devices = available_recognition_devices(cfg.engine)
+    if cfg.device not in devices:
+        available = " / ".join(devices)
+        return (
+            f"{cfg.engine} の実行先 {cfg.device} はこの環境で使用できません。"
+            f"利用可能: {available}"
+        )
+    return ""
 
 
 class Transcriber:
@@ -53,12 +112,15 @@ class Transcriber:
         on_timeout: Callable[[str], None] | None = None,
     ) -> None:
         """モデルをロードする。バックグラウンドスレッドから呼び出すことを想定。"""
-        with self._lock:
-            self._backend = None
-            self._engine = ""
+        self.unload()
 
         engine = _resolve_engine(cfg)
         backend = self._create_backend(engine, cfg)
+        with self._lock:
+            # Own the backend before loading so a partial allocation can still
+            # be cleaned if backend.load() raises.
+            self._backend = backend
+            self._engine = ""
         logger.info(
             "ASR バックエンドをロード中: requested=%s, resolved=%s",
             cfg.engine,
@@ -67,12 +129,15 @@ class Transcriber:
         try:
             backend.load(cfg, on_timeout)
         except Exception:
+            self.unload()
             raise
 
         if backend.is_ready:
             with self._lock:
-                self._backend = backend
-                self._engine = backend.name
+                if self._backend is backend:
+                    self._engine = backend.name
+        else:
+            self.unload()
 
     def _create_backend(self, engine: str, cfg: RecognitionConfig) -> ASRBackend:
         if engine == ENGINE_REAZON_K2:
@@ -99,6 +164,42 @@ class Transcriber:
     @property
     def engine_label(self) -> str:
         return self._engine or "unloaded"
+
+    def unload(self) -> None:
+        """Detach the active backend and release heavyweight model resources."""
+        with self._lock:
+            backend = self._backend
+            self._backend = None
+            self._engine = ""
+
+        if backend is not None:
+            cleanup = getattr(backend, "unload", None)
+            if callable(cleanup):
+                try:
+                    cleanup()
+                except Exception:
+                    logger.exception("ASR バックエンドの明示解放に失敗しました")
+            del backend
+        gc.collect()
+
+        # Do not import optional runtimes just for cleanup. If PyTorch/MLX is
+        # already loaded, ask its allocator to return now-unused cached memory.
+        torch_module = sys.modules.get("torch")
+        cuda = getattr(torch_module, "cuda", None)
+        empty_cache = getattr(cuda, "empty_cache", None)
+        if callable(empty_cache):
+            try:
+                empty_cache()
+            except Exception:
+                logger.debug("PyTorch CUDA キャッシュの解放に失敗しました", exc_info=True)
+
+        mlx_core = sys.modules.get("mlx.core")
+        clear_cache = getattr(mlx_core, "clear_cache", None)
+        if callable(clear_cache):
+            try:
+                clear_cache()
+            except Exception:
+                logger.debug("MLX キャッシュの解放に失敗しました", exc_info=True)
 
     def transcribe(
         self,

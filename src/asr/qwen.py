@@ -26,9 +26,25 @@ def is_qwen3_available() -> bool:
             import qwen_asr  # noqa: F401
 
             _qwen3_available = True
-        except ImportError:
+        except Exception as exc:
+            logger.warning(
+                "Qwen3-ASR の利用可否を確認できません: type=%s",
+                type(exc).__name__,
+            )
             _qwen3_available = False
     return _qwen3_available
+
+
+def is_qwen3_cuda_available() -> bool:
+    """Return whether the installed Qwen/PyTorch runtime can use CUDA."""
+    if not is_qwen3_available():
+        return False
+    try:
+        import torch
+
+        return bool(torch.cuda.is_available())
+    except Exception:
+        return False
 
 
 def _resolve_qwen3_attn(requested: str) -> str:

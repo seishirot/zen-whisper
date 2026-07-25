@@ -17,11 +17,15 @@ from src.postprocessing import (
     DATA_DESTINATION_UNKNOWN,
     PostprocessorPreset,
     _build_invocation,
+    load_local_postprocessor_ids,
+    load_local_postprocessors,
     load_postprocessors,
     process_transcript,
     run_postprocessor,
+    save_postprocessor,
 )
 from src.profiles import Profile, ProfileTerm
+from src.toml_storage import StaleFileError, file_fingerprint
 
 
 def _profile() -> Profile:
@@ -369,6 +373,153 @@ def test_finish_guard_discards_stale_success(monkeypatch):
     assert result.succeeded is False
     assert result.text == "raw"
     assert "結果を破棄" in result.error
+
+
+def test_save_postprocessor_round_trips_local_preset(tmp_path):
+    user_path = tmp_path / "postprocessors.toml"
+    preset = PostprocessorPreset(
+        preset_id="custom_local",
+        display_name="Custom Local",
+        command="custom-cli",
+        timeout_sec=12.5,
+        data_destination=DATA_DESTINATION_LOCAL,
+        prompt_template="Fix: {{transcript}}",
+        environment={"LOCAL_ONLY": "1"},
+    )
+
+    saved_path = save_postprocessor(preset, user_path)
+
+    assert saved_path == user_path
+    assert load_local_postprocessors(user_path) == {"custom_local": preset}
+    assert list(tmp_path.glob(".postprocessors.toml.*.tmp")) == []
+
+
+def test_save_postprocessor_rejects_unsafe_id(tmp_path):
+    with pytest.raises(
+        postprocessing.PostprocessorConfigError,
+        match="プリセットID",
+    ):
+        save_postprocessor(
+            PostprocessorPreset(
+                preset_id="../outside",
+                display_name="Unsafe",
+                command="unsafe",
+            ),
+            tmp_path / "postprocessors.toml",
+        )
+
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf")])
+def test_save_postprocessor_rejects_non_finite_timeout(
+    tmp_path,
+    timeout,
+):
+    with pytest.raises(
+        postprocessing.PostprocessorConfigError,
+        match="timeout_sec",
+    ):
+        save_postprocessor(
+            PostprocessorPreset(
+                preset_id="bad_timeout",
+                display_name="Bad Timeout",
+                command="bad-cli",
+                timeout_sec=timeout,
+            ),
+            tmp_path / "postprocessors.toml",
+        )
+
+
+def test_save_postprocessor_does_not_overwrite_malformed_local_file(
+    tmp_path,
+):
+    user_path = tmp_path / "postprocessors.toml"
+    malformed = b"[postprocessors.broken\ncommand = 'broken'\n"
+    user_path.write_bytes(malformed)
+
+    with pytest.raises(
+        postprocessing.PostprocessorConfigError,
+        match="上書きしません",
+    ):
+        save_postprocessor(
+            PostprocessorPreset(
+                preset_id="safe",
+                display_name="Safe",
+                command="safe-cli",
+            ),
+            user_path,
+        )
+
+    assert user_path.read_bytes() == malformed
+
+
+def test_save_postprocessor_preserves_invalid_existing_target(tmp_path):
+    user_path = tmp_path / "postprocessors.toml"
+    invalid = (
+        "[postprocessors.broken]\n"
+        'display_name = "Broken"\n'
+        'command = ""\n'
+    )
+    user_path.write_text(invalid, encoding="utf-8")
+
+    with pytest.raises(
+        postprocessing.PostprocessorConfigError,
+        match="上書きしません",
+    ):
+        save_postprocessor(
+            PostprocessorPreset(
+                preset_id="broken",
+                display_name="Replacement",
+                command="replacement-cli",
+            ),
+            user_path,
+        )
+
+    assert user_path.read_text(encoding="utf-8") == invalid
+
+
+def test_save_postprocessor_rejects_changed_file_fingerprint(tmp_path):
+    user_path = tmp_path / "postprocessors.toml"
+    user_path.write_text(
+        (
+            "[postprocessors.local]\n"
+            'display_name = "Before"\n'
+            'command = "local-cli"\n'
+        ),
+        encoding="utf-8",
+    )
+    expected = file_fingerprint(user_path)
+    external = (
+        "[postprocessors.local]\n"
+        'display_name = "External"\n'
+        'command = "external-cli"\n'
+    )
+    user_path.write_text(external, encoding="utf-8")
+
+    with pytest.raises(StaleFileError):
+        save_postprocessor(
+            PostprocessorPreset(
+                preset_id="local",
+                display_name="UI",
+                command="ui-cli",
+            ),
+            user_path,
+            expected_fingerprint=expected,
+        )
+
+    assert user_path.read_text(encoding="utf-8") == external
+
+
+def test_local_ids_include_partial_bundled_overrides(tmp_path):
+    user_path = tmp_path / "postprocessors.toml"
+    user_path.write_text(
+        "[postprocessors.codex]\ntimeout_sec = 10\n",
+        encoding="utf-8",
+    )
+
+    assert load_local_postprocessor_ids(user_path) == frozenset({"codex"})
+    assert load_local_postprocessors(user_path) == {}
 
 
 def test_argument_mode_rejects_windows_batch_launcher(monkeypatch):

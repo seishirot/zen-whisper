@@ -55,28 +55,29 @@ def load_with_timeout(
     engine_label: str,
     on_timeout: Callable[[str], None] | None = None,
 ) -> object | None:
-    """Run target in a background thread and wait up to timeout_sec."""
-    result: list[object] = []
-    error: list[Exception] = []
+    """Run one model load synchronously and warn when it exceeds the threshold.
 
-    def _run() -> None:
-        try:
-            result.append(target())
-        except Exception as e:
-            error.append(e)
+    Python cannot safely cancel native model constructors. Running the heavy
+    target in a disposable timeout thread would leave it alive and allow a
+    second model load to start concurrently. A lightweight watchdog therefore
+    reports the threshold while the caller keeps ownership of the real load.
+    """
+    done = threading.Event()
 
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-    t.join(timeout=timeout_sec)
-
-    if t.is_alive():
-        msg = f"{engine_label} モデルのロードが {timeout_sec}秒 でタイムアウトしました"
+    def _watch_timeout() -> None:
+        if done.wait(timeout=timeout_sec):
+            return
+        msg = (
+            f"{engine_label} モデルのロードが {timeout_sec}秒 を超えました。"
+            "安全のため完了まで待機します"
+        )
         logger.error(msg)
         if on_timeout:
             on_timeout(msg)
-        return None
 
-    if error:
-        raise error[0]
-
-    return result[0] if result else None
+    watchdog = threading.Thread(target=_watch_timeout, daemon=True)
+    watchdog.start()
+    try:
+        return target()
+    finally:
+        done.set()
