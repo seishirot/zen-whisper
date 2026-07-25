@@ -9,7 +9,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from src.asr.base import load_with_timeout
+from src.asr.base import RecognitionHints, load_with_timeout
 from src.config import ASR_SAMPLE_RATE, RecognitionConfig
 
 logger = logging.getLogger(__name__)
@@ -25,6 +25,27 @@ _MLX_REPO_MAP: dict[str, str] = {
     "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
     "turbo": "mlx-community/whisper-large-v3-turbo",
 }
+_MAX_WHISPER_HOTWORDS_CHARS = 240
+
+
+def _whisper_hotwords(hints: RecognitionHints | None) -> str:
+    """Keep profile vocabulary within Whisper's limited prompt budget."""
+    if hints is None:
+        return ""
+
+    selected: list[str] = []
+    current_length = 0
+    for word in hints.hotwords:
+        added_length = len(word) + (2 if selected else 0)
+        if current_length + added_length > _MAX_WHISPER_HOTWORDS_CHARS:
+            logger.info(
+                "Whisper のプロファイル語彙を上限で打ち切りました: chars=%d",
+                current_length,
+            )
+            break
+        selected.append(word)
+        current_length += added_length
+    return ", ".join(selected)
 
 
 def _to_mlx_repo(model_size: str) -> str:
@@ -134,14 +155,18 @@ class MlxWhisperBackend:
         audio: np.ndarray,
         language: str,
         cfg: RecognitionConfig,
+        hints: RecognitionHints | None = None,
     ) -> str:
         import mlx_whisper
 
-        result = mlx_whisper.transcribe(
-            audio,
-            path_or_hf_repo=self._mlx_model_repo,
-            language=language,
-        )
+        kwargs: dict[str, object] = {
+            "path_or_hf_repo": self._mlx_model_repo,
+            "language": language,
+        }
+        hotwords = _whisper_hotwords(hints)
+        if hotwords:
+            kwargs["initial_prompt"] = f"重要語彙: {hotwords}"
+        result = mlx_whisper.transcribe(audio, **kwargs)
         return result["text"].strip()
 
 
@@ -197,6 +222,7 @@ class FasterWhisperBackend:
         audio: np.ndarray,
         language: str,
         cfg: RecognitionConfig,
+        hints: RecognitionHints | None = None,
     ) -> str:
         if self._model is None:
             logger.error("モデルがロードされていません")
@@ -213,6 +239,9 @@ class FasterWhisperBackend:
             transcribe_kwargs["hallucination_silence_threshold"] = (
                 cfg.hallucination_silence_threshold
             )
+        hotwords = _whisper_hotwords(hints)
+        if hotwords:
+            transcribe_kwargs["hotwords"] = hotwords
 
         segments, _info = self._model.transcribe(audio, **transcribe_kwargs)
         return "".join(seg.text for seg in segments).strip()

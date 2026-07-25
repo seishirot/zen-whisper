@@ -23,6 +23,8 @@ ENGINE_QWEN3_ASR = "qwen3-asr"
 VALID_ENGINES = (ENGINE_WHISPER, ENGINE_REAZON_K2, ENGINE_QWEN3_ASR)
 VALID_DEVICES = ("cuda", "cpu", "mlx")
 ASR_SAMPLE_RATE = 16000
+POSTPROCESSOR_OFF = "off"
+POSTPROCESSOR_DICTIONARY = "dictionary"
 
 # Qwen3-ASR モデル名定数（トレイメニューでのサイズ切替に使用）
 QWEN3_MODEL_LARGE = "Qwen/Qwen3-ASR-1.7B"  # 高精度・既定
@@ -85,6 +87,12 @@ class OutputConfig:
 
 
 @dataclass
+class EnhancementConfig:
+    profile: str = ""
+    postprocessor: str = POSTPROCESSOR_OFF
+
+
+@dataclass
 class FeedbackConfig:
     sound_enabled: bool = True
     sound_type: str = "tone"  # "tone" (生成音) or "custom" (カスタムファイル)
@@ -112,6 +120,7 @@ class AppConfig:
     recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
     recording: RecordingConfig = field(default_factory=RecordingConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
+    enhancement: EnhancementConfig = field(default_factory=EnhancementConfig)
     feedback: FeedbackConfig = field(default_factory=FeedbackConfig)
     overlay: OverlayConfig = field(default_factory=OverlayConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
@@ -159,6 +168,13 @@ class AppConfig:
                 f"engine '{self.recognition.engine}' は無効です"
                 f"（有効値: {', '.join(VALID_ENGINES)}）"
             )
+        if not isinstance(self.enhancement.profile, str):
+            warnings.append("enhancement.profile は文字列で指定してください")
+        if (
+            not isinstance(self.enhancement.postprocessor, str)
+            or not self.enhancement.postprocessor
+        ):
+            warnings.append("enhancement.postprocessor は空でない文字列で指定してください")
         return warnings
 
 
@@ -191,6 +207,19 @@ def _normalize_recording_sample_rate(cfg: AppConfig) -> None:
         cfg.recording.sample_rate = ASR_SAMPLE_RATE
 
 
+def _normalize_enhancement(cfg: AppConfig) -> None:
+    """Keep malformed enhancement selections from breaking the tray at startup."""
+    if not isinstance(cfg.enhancement.profile, str):
+        logger.warning("enhancement.profile の型が不正なためオフとして扱います")
+        cfg.enhancement.profile = ""
+    if (
+        not isinstance(cfg.enhancement.postprocessor, str)
+        or not cfg.enhancement.postprocessor
+    ):
+        logger.warning("enhancement.postprocessor が不正なためオフとして扱います")
+        cfg.enhancement.postprocessor = POSTPROCESSOR_OFF
+
+
 def load_config(path: Path | None = None) -> AppConfig:
     """TOML 設定ファイルを読み込み AppConfig を返す。ファイルが無ければデフォルト値。"""
     cfg = AppConfig()
@@ -212,16 +241,25 @@ def load_config(path: Path | None = None) -> AppConfig:
         "recognition": cfg.recognition,
         "recording": cfg.recording,
         "output": cfg.output,
+        "enhancement": cfg.enhancement,
         "feedback": cfg.feedback,
         "overlay": cfg.overlay,
         "logging": cfg.logging,
     }
     for section_name, dc_instance in section_map.items():
         if section_name in data:
-            _merge_section(dc_instance, data[section_name])
+            section_data = data[section_name]
+            if not isinstance(section_data, dict):
+                logger.warning(
+                    "設定セクション [%s] がテーブルでないため無視します",
+                    section_name,
+                )
+                continue
+            _merge_section(dc_instance, section_data)
 
     _normalize_legacy_auto(cfg)
     _normalize_recording_sample_rate(cfg)
+    _normalize_enhancement(cfg)
 
     # バリデーション
     warnings = cfg.validate()

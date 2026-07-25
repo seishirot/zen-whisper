@@ -76,6 +76,13 @@ restore_clipboard = false
 # Delay before pasting (milliseconds)
 paste_delay_ms = 100
 
+[enhancement]
+# Domain profile ID = filename without ".toml" in profiles/. Empty disables hints/context.
+profile = ""
+# "off" (default), "dictionary", or a preset ID from postprocessors*.toml.
+# CLI postprocessing can send the transcript, profile context, and terms to its destination.
+postprocessor = "off"
+
 [feedback]
 sound_enabled = true
 # Sound type: "tone" (generated sine wave) or "custom" (file playback)

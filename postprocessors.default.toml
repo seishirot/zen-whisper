@@ -1,0 +1,56 @@
+# Bundled examples for the generic command postprocessor.
+# Commands are parsed into argv and executed with shell = false.
+# Override these entries or add arbitrary CLIs in ignored postprocessors.toml.
+
+[postprocessors.codex]
+display_name = "Codex 校正"
+command = "codex exec --ephemeral --sandbox read-only --ignore-user-config --ignore-rules --skip-git-repo-check --color never -c project_doc_max_bytes=0 -"
+input_mode = "stdin"
+output_mode = "stdout"
+timeout_sec = 30
+data_destination = "remote"
+prompt_template = """
+あなたは音声認識結果の校正器です。
+発言の意味・語調・言語を保ち、明らかな誤認識、表記揺れ、句読点だけを保守的に直してください。
+推測で情報を追加したり、要約したり、回答したりしないでください。
+固有名詞はプロファイルの情報を優先し、校正後の本文だけを出力してください。
+
+プロファイル: {{profile_name}}
+言語: {{language}}
+文脈:
+{{context}}
+
+用語:
+{{terms}}
+
+文字起こし:
+{{transcript}}
+"""
+
+[postprocessors.ollama]
+display_name = "Ollama 校正"
+command = "ollama run qwen3.5:4b --think=false --hidethinking --nowordwrap"
+preflight_command = "ollama show qwen3.5:4b"
+preflight_failure_message = "Ollama の qwen3.5:4b が見つかりません。先に ollama pull qwen3.5:4b を実行してください。"
+input_mode = "stdin"
+output_mode = "stdout"
+timeout_sec = 60
+data_destination = "local"
+environment = { OLLAMA_HOST = "127.0.0.1:11434", OLLAMA_NOHISTORY = "1" }
+prompt_template = """
+あなたは音声認識結果の校正器です。
+発言の意味・語調・言語を保ち、明らかな誤認識、表記揺れ、句読点だけを保守的に直してください。
+推測で情報を追加したり、要約したり、回答したりしないでください。
+固有名詞はプロファイルの情報を優先し、校正後の本文だけを出力してください。
+
+プロファイル: {{profile_name}}
+言語: {{language}}
+文脈:
+{{context}}
+
+用語:
+{{terms}}
+
+文字起こし:
+{{transcript}}
+"""

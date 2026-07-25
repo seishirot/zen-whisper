@@ -44,7 +44,7 @@ config.example.toml # 設定テンプレート（config.toml にコピーして�
 ## Processing Flow
 
 ```
-hotkey.py → sounds.py(開始音) → recorder.py(録音+VAD) → sounds.py(停止音) → transcriber.py → paster.py
+hotkey.py → sounds.py(開始音) → recorder.py(録音+VAD) → sounds.py(停止音) → transcriber.py → profiles.py(任意の辞書置換) → postprocessing.py(任意のCLI) → paster.py
 ```
 
 ## Critical Implementation Notes
@@ -72,7 +72,13 @@ Reazon extra は ReazonSpeech の `pkg/k2-asr` を commit
 ORT API不整合を避けるため、通常依存で `sherpa-onnx==1.13.1` と `sherpa-onnx-core==1.13.1` も固定する。
 `sherpa-onnx` を単独で上げる場合は Windows 実機で Reazon の import/load/実音声を再検証すること。
 
-ZenWhisper 内では LLM整形・句読点補正は行わず、ASR本文をそのまま貼り付ける。
+プロファイルは `profiles/*.toml` のデータ専用設定。対応 ASR へのヒントと、
+明示した `replace_from` の辞書置換で共用する。CLI 後処理は既定オフで、
+`postprocessors.default.toml` とローカルの `postprocessors.toml` から汎用
+`shell=False` コマンドとして読み込む。外部送信／送信先不明のプリセットを
+有効にすると、認識結果・文脈・辞書データが指定 CLI に渡る旨を表示する。
+後処理失敗時は辞書置換までの結果へフォールバックし、送信付きホットキーの
+Enter はキャンセルする。
 
 Windows CUDA GPU 環境・19.6秒の合成音声での参考実測:
 
@@ -100,6 +106,7 @@ Windows CUDA GPU 環境・19.6秒の合成音声での参考実測:
 | `[recognition]` | `engine` (`whisper`/`reazon-k2`/`qwen3-asr`), `language`, `model_size`, `device` (`cuda`/`cpu`/`mlx`), `cpu_threads`, Reazon/Qwen設定 |
 | `[recording]` | `microphone`, `vad_silence_threshold_sec`, `max_recording_sec` |
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |
+| `[enhancement]` | `profile`（`profiles/*.toml` のID）、`postprocessor`（`off`/`dictionary`/プリセットID） |
 | `[feedback]` | `sound_enabled`, `sound_type` (`tone`/`custom`), `volume` |
 | `[overlay]` | `enabled`, `position`, `size` |
 | `[logging]` | `level`, `file` |

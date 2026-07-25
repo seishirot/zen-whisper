@@ -9,7 +9,7 @@ from threading import Lock
 
 import numpy as np
 
-from src.asr.base import ASRBackend
+from src.asr.base import ASRBackend, RecognitionHints
 from src.asr.qwen import Qwen3Backend, is_qwen3_available
 from src.asr.reazon import ReazonK2Backend, is_reazon_k2_available
 from src.asr.whisper import (
@@ -105,6 +105,7 @@ class Transcriber:
         audio: np.ndarray,
         language: str,
         cfg: RecognitionConfig | None = None,
+        hints: RecognitionHints | None = None,
     ) -> str:
         """
         音声データ (float32, 16kHz, mono) を文字起こしする。
@@ -113,6 +114,7 @@ class Transcriber:
             audio: 音声データ配列
             language: 言語コード ("ja" or "en")
             cfg: 認識設定（None の場合はデフォルト値を使用）
+            hints: 選択プロファイルから生成した認識ヒント
 
         Returns:
             認識テキスト
@@ -130,7 +132,7 @@ class Transcriber:
                 return ""
 
             t0 = time.perf_counter()
-            text = backend.transcribe(audio, language, cfg)
+            text = backend.transcribe(audio, language, cfg, hints)
             elapsed = time.perf_counter() - t0
 
         rtf = elapsed / audio_duration if audio_duration > 0 else 0

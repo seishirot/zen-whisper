@@ -76,6 +76,8 @@ class TestAppConfig:
         assert cfg.hotkey.toggle == "shift+space"
         assert cfg.hotkey.submit_toggle == ""
         assert cfg.output.restore_clipboard is True
+        assert cfg.enhancement.profile == ""
+        assert cfg.enhancement.postprocessor == "off"
 
     def test_validate_default_has_no_warnings(self):
         cfg = AppConfig()
@@ -111,6 +113,48 @@ class TestLoadConfig:
         )
         cfg = load_config(toml_path)
         assert cfg.hotkey.submit_toggle == ["ctrl+shift+space", "win+enter"]
+
+    def test_load_enhancement_selection(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text(
+            '[enhancement]\nprofile = "coding"\npostprocessor = "ollama"\n'
+        )
+        cfg = load_config(toml_path)
+        assert cfg.enhancement.profile == "coding"
+        assert cfg.enhancement.postprocessor == "ollama"
+
+    def test_save_and_reload_enhancement_selection(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        cfg = AppConfig()
+        cfg.enhancement.profile = "coding"
+        cfg.enhancement.postprocessor = "codex"
+
+        assert save_config(cfg, toml_path) is True
+        loaded = load_config(toml_path)
+
+        assert loaded.enhancement.profile == "coding"
+        assert loaded.enhancement.postprocessor == "codex"
+
+    def test_invalid_enhancement_types_normalize_to_off(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text(
+            "[enhancement]\nprofile = []\npostprocessor = []\n",
+            encoding="utf-8",
+        )
+
+        cfg = load_config(toml_path)
+
+        assert cfg.enhancement.profile == ""
+        assert cfg.enhancement.postprocessor == "off"
+
+    def test_non_table_enhancement_section_is_ignored(self, tmp_path):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text("enhancement = []\n", encoding="utf-8")
+
+        cfg = load_config(toml_path)
+
+        assert cfg.enhancement.profile == ""
+        assert cfg.enhancement.postprocessor == "off"
 
     def test_load_legacy_auto_normalizes_to_explicit_defaults(self, tmp_path):
         toml_path = tmp_path / "config.toml"

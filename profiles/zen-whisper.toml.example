@@ -1,0 +1,29 @@
+name = "ZenWhisper 開発"
+context = """
+ZenWhisper は Windows / macOS 対応の音声入力ツール。
+現在は Reazon K2、Whisper、Qwen3-ASR と任意の後処理 CLI を検証している。
+"""
+
+[[terms]]
+canonical = "ZenWhisper"
+spoken = ["ゼンウィスパー"]
+replace_from = ["全ウィスパー", "全ウイスパー", "禅ウィスパー"]
+description = "この音声入力ツールの製品名"
+
+[[terms]]
+canonical = "Reazon K2"
+spoken = ["リーゾンケーツー", "リーゾンK2", "リーゾンK"]
+replace_from = ["REAZONK2", "リーゾン系2", "リーズンK", "リーズンK2"]
+description = "ReazonSpeech の K2 ASR バックエンド"
+
+[[terms]]
+canonical = "Qwen3-ASR"
+spoken = ["クウェンスリーエーエスアール"]
+replace_from = ["クウェン3 ASR"]
+description = "Qwen の音声認識モデル"
+
+[[terms]]
+canonical = "Ollama"
+spoken = ["オラマ"]
+replace_from = ["オラーま", "オラマ", "オラアマ"]
+description = "ローカル LLM を実行するツール"

@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import soundfile as sf
 
-from src.asr.base import load_with_timeout
+from src.asr.base import RecognitionHints, load_with_timeout
 from src.config import ASR_SAMPLE_RATE, RecognitionConfig
 
 logger = logging.getLogger(__name__)
@@ -122,6 +122,7 @@ class ReazonK2Backend:
         audio: np.ndarray,
         language: str,
         cfg: RecognitionConfig,
+        hints: RecognitionHints | None = None,
     ) -> str:
         if not self.is_ready:
             logger.error("モデルがロードされていません")

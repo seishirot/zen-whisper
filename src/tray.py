@@ -13,11 +13,19 @@ from src.config import (
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
+    POSTPROCESSOR_DICTIONARY,
+    POSTPROCESSOR_OFF,
     QWEN3_MODEL_LARGE,
     QWEN3_MODEL_SMALL,
     FeedbackConfig,
 )
+from src.postprocessing import (
+    DATA_DESTINATION_LOCAL,
+    DATA_DESTINATION_REMOTE,
+    PostprocessorPreset,
+)
 from src.platform import is_mac
+from src.profiles import Profile
 from src.startup import is_registered, toggle as toggle_startup
 from src.transcriber import (
     is_qwen3_available,
@@ -36,6 +44,7 @@ class TrayState(Enum):
     RECORDING = "recording"
     SPEECH_DETECTED = "speech_detected"
     TRANSCRIBING = "transcribing"
+    POSTPROCESSING = "postprocessing"
 
 
 _STATE_COLORS: dict[TrayState, str] = {
@@ -44,6 +53,7 @@ _STATE_COLORS: dict[TrayState, str] = {
     TrayState.RECORDING: "#FF0000",  # 赤
     TrayState.SPEECH_DETECTED: "#00CC00",  # 緑（音声検知中）
     TrayState.TRANSCRIBING: "#FFD700",  # 黄
+    TrayState.POSTPROCESSING: "#8A2BE2",  # 紫（後処理中）
 }
 
 
@@ -126,6 +136,12 @@ class TrayApp:
         initial_qwen3_model: str = QWEN3_MODEL_LARGE,
         feedback_config: FeedbackConfig | None = None,
         on_save_config: Callable[[], bool] | None = None,
+        profiles: dict[str, Profile] | None = None,
+        postprocessors: dict[str, PostprocessorPreset] | None = None,
+        initial_profile: str = "",
+        initial_postprocessor: str = POSTPROCESSOR_OFF,
+        on_set_profile: Callable[[str], None] | None = None,
+        on_set_postprocessor: Callable[[str], None] | None = None,
     ) -> None:
         self._on_set_language = on_set_language
         self._on_set_engine = on_set_engine
@@ -139,6 +155,12 @@ class TrayApp:
         self._qwen3_model = initial_qwen3_model
         self._feedback_config = feedback_config
         self._on_save_config = on_save_config
+        self._profiles = profiles or {}
+        self._postprocessors = postprocessors or {}
+        self._profile = initial_profile
+        self._postprocessor = initial_postprocessor
+        self._on_set_profile = on_set_profile
+        self._on_set_postprocessor = on_set_postprocessor
         self._state = TrayState.IDLE
         self._icon: Icon | None = None
 
@@ -316,6 +338,125 @@ class TrayApp:
             return False
         return self._feedback_config.sound_enabled
 
+    def _profile_label(self) -> str:
+        if not self._profile:
+            return "オフ"
+        profile = self._profiles.get(self._profile)
+        return profile.name if profile else f"不明 ({self._profile})"
+
+    @staticmethod
+    def _postprocessor_destination_label(preset: PostprocessorPreset) -> str:
+        if preset.data_destination == DATA_DESTINATION_LOCAL:
+            return "ローカル"
+        if preset.data_destination == DATA_DESTINATION_REMOTE:
+            return "外部送信"
+        return "送信先不明"
+
+    def _postprocessor_label(self, postprocessor_id: str | None = None) -> str:
+        selected = self._postprocessor if postprocessor_id is None else postprocessor_id
+        if selected == POSTPROCESSOR_OFF:
+            return "オフ"
+        if selected == POSTPROCESSOR_DICTIONARY:
+            return "辞書置換のみ"
+        preset = self._postprocessors.get(selected)
+        if preset is None:
+            return f"不明 ({selected})"
+        destination = self._postprocessor_destination_label(preset)
+        return f"（{destination}）{preset.display_name}"
+
+    def _is_profile(self, profile_id: str) -> Callable[[MenuItem], bool]:
+        def checked(item: MenuItem) -> bool:
+            return self._profile == profile_id
+
+        return checked
+
+    def _set_profile(self, profile_id: str) -> Callable[[Icon, MenuItem], None]:
+        def handler(icon: Icon, item: MenuItem) -> None:
+            self._profile = profile_id
+            if self._on_set_profile is not None:
+                self._on_set_profile(profile_id)
+            logger.info(
+                "プロファイルを %s に切替えました（トレイメニュー）",
+                profile_id or "off",
+            )
+            self.refresh_menu()
+            self._update_title()
+
+        return handler
+
+    def _is_postprocessor(self, postprocessor_id: str) -> Callable[[MenuItem], bool]:
+        def checked(item: MenuItem) -> bool:
+            return self._postprocessor == postprocessor_id
+
+        return checked
+
+    def _set_postprocessor(
+        self,
+        postprocessor_id: str,
+    ) -> Callable[[Icon, MenuItem], None]:
+        def handler(icon: Icon, item: MenuItem) -> None:
+            self._postprocessor = postprocessor_id
+            if self._on_set_postprocessor is not None:
+                self._on_set_postprocessor(postprocessor_id)
+            logger.info(
+                "後処理を %s に切替えました（トレイメニュー）",
+                postprocessor_id,
+            )
+            self.refresh_menu()
+            self._update_title()
+
+        return handler
+
+    def _build_profile_menu(self) -> Menu:
+        items: list[MenuItem] = [
+            MenuItem(
+                "オフ",
+                self._set_profile(""),
+                checked=self._is_profile(""),
+                radio=True,
+            )
+        ]
+        if self._profiles:
+            items.append(Menu.SEPARATOR)
+            for profile_id, profile in self._profiles.items():
+                items.append(
+                    MenuItem(
+                        profile.name,
+                        self._set_profile(profile_id),
+                        checked=self._is_profile(profile_id),
+                        radio=True,
+                    )
+                )
+        return Menu(*items)
+
+    def _build_postprocessor_menu(self) -> Menu:
+        items: list[MenuItem] = [
+            MenuItem(
+                "オフ",
+                self._set_postprocessor(POSTPROCESSOR_OFF),
+                checked=self._is_postprocessor(POSTPROCESSOR_OFF),
+                radio=True,
+            ),
+            MenuItem(
+                "辞書置換のみ",
+                self._set_postprocessor(POSTPROCESSOR_DICTIONARY),
+                checked=self._is_postprocessor(POSTPROCESSOR_DICTIONARY),
+                radio=True,
+            ),
+        ]
+        if self._postprocessors:
+            items.append(Menu.SEPARATOR)
+            for preset_id, preset in self._postprocessors.items():
+                items.append(
+                    MenuItem(
+                        self._postprocessor_label(preset_id),
+                        self._set_postprocessor(preset_id),
+                        checked=self._is_postprocessor(preset_id),
+                        radio=True,
+                    )
+                )
+        return Menu(*items)
+
     def _quit(self, icon: Icon, item: MenuItem) -> None:
         """終了コールバック。"""
         logger.info("トレイメニューから終了が選択されました")
@@ -413,6 +554,14 @@ class TrayApp:
                     ),
                 ),
             ),
+            MenuItem(
+                f"プロファイル: {self._profile_label()}",
+                self._build_profile_menu(),
+            ),
+            MenuItem(
+                f"後処理: {self._postprocessor_label()}",
+                self._build_postprocessor_menu(),
+            ),
             Menu.SEPARATOR,
             MenuItem(
                 "スタートアップに登録",
@@ -435,7 +584,11 @@ class TrayApp:
 
     def _title_text(self) -> str:
         microphone = self._microphone or "OS既定"
-        return f"zen-whisper - マイク: {microphone}"
+        title = (
+            f"zen-whisper - 後処理: {self._postprocessor_label()}"
+            f" - マイク: {microphone}"
+        )
+        return title[:127]
 
     def _update_title(self) -> None:
         if self._icon is not None:

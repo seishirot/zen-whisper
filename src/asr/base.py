@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
@@ -12,6 +13,14 @@ import numpy as np
 from src.config import RecognitionConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RecognitionHints:
+    """Backend-neutral context supplied by a selected domain profile."""
+
+    context: str = ""
+    hotwords: tuple[str, ...] = ()
 
 
 class ASRBackend(Protocol):
@@ -35,6 +44,7 @@ class ASRBackend(Protocol):
         audio: np.ndarray,
         language: str,
         cfg: RecognitionConfig,
+        hints: RecognitionHints | None = None,
     ) -> str:
         """Transcribe 16kHz mono float32 audio."""
 

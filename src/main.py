@@ -28,7 +28,10 @@ if sys.platform == "win32":
 
 import atexit
 import logging
+import subprocess
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -38,7 +41,10 @@ sys.path.insert(0, str(_ROOT_DIR))
 
 from src.config import (
     ENGINE_QWEN3_ASR,
+    ENGINE_REAZON_K2,
     ENGINE_WHISPER,
+    POSTPROCESSOR_DICTIONARY,
+    POSTPROCESSOR_OFF,
     AppConfig,
     load_config,
     save_config,
@@ -46,7 +52,15 @@ from src.config import (
 from src.hotkey import start_hotkey_listener
 from src.overlay import OverlayIndicator
 from src.paster import paste
-from src.platform import is_mac
+from src.postprocessing import (
+    DATA_DESTINATION_LOCAL,
+    DATA_DESTINATION_REMOTE,
+    PostprocessResult,
+    load_postprocessors,
+    process_transcript,
+)
+from src.platform import is_mac, terminate_process_tree
+from src.profiles import Profile, load_profiles
 from src.recorder import log_available_devices, preload_vad, record
 from src.sounds import SoundPlayer
 from src.transcriber import Transcriber
@@ -126,6 +140,11 @@ class App:
     def __init__(self) -> None:
         self.cfg = load_config()
         _setup_logging(self.cfg)
+        self.profiles = load_profiles()
+        self.postprocessors = load_postprocessors()
+        self._enhancement_lock = threading.RLock()
+        self._enhancement_generation = 0
+        self._active_postprocessor_process: subprocess.Popen[str] | None = None
 
         logger.info("zen-whisper を起動します")
         log_available_devices(self.cfg.recording.sample_rate)
@@ -146,6 +165,12 @@ class App:
             initial_qwen3_model=self.cfg.recognition.qwen3_model,
             feedback_config=self.cfg.feedback,
             on_save_config=self._on_save_config,
+            profiles=self.profiles,
+            postprocessors=self.postprocessors,
+            initial_profile=self.cfg.enhancement.profile,
+            initial_postprocessor=self.cfg.enhancement.postprocessor,
+            on_set_profile=self._on_set_profile,
+            on_set_postprocessor=self._on_set_postprocessor,
         )
 
         self._language = self.cfg.recognition.language
@@ -169,6 +194,183 @@ class App:
     def _on_save_config(self) -> bool:
         """現在の設定を config.toml に保存する。"""
         return save_config(self.cfg)
+
+    # ── プロファイル・後処理 ──────────────────────────
+
+    @staticmethod
+    def _terminate_postprocessor_process(
+        process: subprocess.Popen[str],
+    ) -> None:
+        try:
+            terminate_process_tree(process)
+        except Exception as exc:
+            logger.warning(
+                "後処理プロセスの停止に失敗しました: type=%s",
+                type(exc).__name__,
+            )
+
+    def _on_set_profile(self, profile_id: str) -> None:
+        process = None
+        with self._enhancement_lock:
+            changed = self.cfg.enhancement.profile != profile_id
+            self.cfg.enhancement.profile = profile_id
+            if changed:
+                self._enhancement_generation += 1
+                process = self._active_postprocessor_process
+                self._active_postprocessor_process = None
+            postprocessor_id = self.cfg.enhancement.postprocessor
+        if process is not None:
+            self._terminate_postprocessor_process(process)
+        if not self._on_save_config():
+            self.tray.notify("プロファイル設定の保存に失敗しました。")
+        profile = self.profiles.get(profile_id)
+        notice = f"プロファイル: {profile.name if profile else 'オフ'}"
+        if (
+            profile is not None
+            and self.cfg.recognition.engine == ENGINE_REAZON_K2
+            and postprocessor_id == POSTPROCESSOR_OFF
+        ):
+            notice += (
+                "\nReazon K2 は認識ヒント非対応です。"
+                "補正するには辞書置換または CLI 後処理を選んでください。"
+            )
+        self.tray.notify(notice)
+
+    def _postprocessor_notice(self, postprocessor_id: str) -> str:
+        if postprocessor_id == POSTPROCESSOR_OFF:
+            return "後処理: オフ"
+        if postprocessor_id == POSTPROCESSOR_DICTIONARY:
+            with self._enhancement_lock:
+                profile_id = self.cfg.enhancement.profile
+            if not profile_id:
+                return "後処理: 辞書置換のみ（プロファイル未選択のため変更なし）"
+            return "後処理: 辞書置換のみ"
+
+        preset = self.postprocessors.get(postprocessor_id)
+        if preset is None:
+            return f"後処理プリセット '{postprocessor_id}' が見つかりません。"
+        if preset.data_destination == DATA_DESTINATION_LOCAL:
+            return f"後処理: {preset.display_name}（ローカル）"
+
+        destination = (
+            "外部送信"
+            if preset.data_destination == DATA_DESTINATION_REMOTE
+            else "送信先不明"
+        )
+        return (
+            f"後処理: {preset.display_name}（{destination}）\n"
+            "認識結果、選択プロフィールの文脈、辞書データが指定CLIへ渡されます。"
+        )
+
+    def _on_set_postprocessor(self, postprocessor_id: str) -> None:
+        process = None
+        with self._enhancement_lock:
+            changed = self.cfg.enhancement.postprocessor != postprocessor_id
+            self.cfg.enhancement.postprocessor = postprocessor_id
+            if changed:
+                self._enhancement_generation += 1
+                process = self._active_postprocessor_process
+                self._active_postprocessor_process = None
+        if process is not None:
+            self._terminate_postprocessor_process(process)
+        if not self._on_save_config():
+            self.tray.notify("後処理設定の保存に失敗しました。")
+        self.tray.notify(self._postprocessor_notice(postprocessor_id))
+
+    def _enhancement_selection(self) -> tuple[Profile | None, str, int]:
+        """Snapshot the current profile/postprocessor pair."""
+        with self._enhancement_lock:
+            profile_id = self.cfg.enhancement.profile
+            postprocessor_id = self.cfg.enhancement.postprocessor
+            generation = self._enhancement_generation
+        if not profile_id:
+            return None, postprocessor_id, generation
+        profile = self.profiles.get(profile_id)
+        if profile is None:
+            logger.warning("選択中のプロファイルが見つかりません: %s", profile_id)
+        return profile, postprocessor_id, generation
+
+    @contextmanager
+    def _postprocessor_dispatch_guard(
+        self,
+        expected_generation: int,
+        expected_postprocessor_id: str,
+    ) -> Iterator[bool]:
+        """Serialize the final selection check with process registration."""
+        with self._enhancement_lock:
+            yield (
+                self._enhancement_generation == expected_generation
+                and self.cfg.enhancement.postprocessor
+                == expected_postprocessor_id
+            )
+
+    def _on_postprocessor_started(
+        self,
+        process: subprocess.Popen[str],
+    ) -> None:
+        with self._enhancement_lock:
+            self._active_postprocessor_process = process
+
+    def _on_postprocessor_finished(
+        self,
+        process: subprocess.Popen[str],
+    ) -> None:
+        with self._enhancement_lock:
+            if self._active_postprocessor_process is process:
+                self._active_postprocessor_process = None
+
+    def _cancel_active_postprocessor(self) -> None:
+        process = None
+        with self._enhancement_lock:
+            self._enhancement_generation += 1
+            process = self._active_postprocessor_process
+            self._active_postprocessor_process = None
+        if process is not None:
+            self._terminate_postprocessor_process(process)
+
+    def _apply_postprocessing(
+        self,
+        text: str,
+        profile: Profile | None,
+        postprocessor_id: str,
+        language: str,
+        submit_after_paste: bool,
+        expected_generation: int | None = None,
+    ) -> tuple[str, bool]:
+        guarded_callbacks = {}
+        if expected_generation is not None:
+            state_guard = lambda: self._postprocessor_dispatch_guard(
+                expected_generation,
+                postprocessor_id,
+            )
+            guarded_callbacks = {
+                "start_guard": state_guard,
+                "finish_guard": state_guard,
+                "on_process_started": self._on_postprocessor_started,
+                "on_process_finished": self._on_postprocessor_finished,
+            }
+        result: PostprocessResult = process_transcript(
+            text,
+            profile,
+            postprocessor_id,
+            self.postprocessors,
+            language,
+            **guarded_callbacks,
+        )
+        if result.succeeded:
+            return result.text, submit_after_paste
+
+        if submit_after_paste:
+            self.tray.notify(
+                f"後処理に失敗しました: {result.error}\n"
+                "辞書置換までの結果を貼り付け、Enter送信はキャンセルしました。"
+            )
+        else:
+            self.tray.notify(
+                f"後処理に失敗しました: {result.error}\n"
+                "辞書置換までの結果を貼り付けます。"
+            )
+        return result.text, False
 
     # ── モデルロード ──────────────────────────────────
 
@@ -316,10 +518,17 @@ class App:
                 return
 
             self._set_state(TrayState.TRANSCRIBING)
+            recognition_profile, _, _ = self._enhancement_selection()
+            hints = (
+                recognition_profile.recognition_hints()
+                if recognition_profile is not None
+                else None
+            )
             text = self.transcriber.transcribe(
                 audio,
                 language=self._language,
                 cfg=self.cfg.recognition,
+                hints=hints,
             )
 
             if not text:
@@ -328,6 +537,23 @@ class App:
 
             with self._lock:
                 submit_after_paste = self._submit_after_paste
+
+            # Profile/postprocessor selection may change while ASR is running.
+            # Re-read immediately before optional CLI dispatch so switching a
+            # remote preset off prevents this transcript from being sent.
+            profile, postprocessor_id, enhancement_generation = (
+                self._enhancement_selection()
+            )
+            if postprocessor_id != POSTPROCESSOR_OFF:
+                self._set_state(TrayState.POSTPROCESSING)
+                text, submit_after_paste = self._apply_postprocessing(
+                    text,
+                    profile,
+                    postprocessor_id,
+                    self._language,
+                    submit_after_paste,
+                    expected_generation=enhancement_generation,
+                )
 
             paste(
                 text,
@@ -357,6 +583,7 @@ class App:
         logger.info("クリーンアップ処理を実行中...")
         self._stop_event.set()
         self._exit_event.set()
+        self._cancel_active_postprocessor()
         self.overlay.stop()
         self.tray.stop()
 
@@ -385,6 +612,13 @@ class App:
                 on_submit_toggle=lambda: self._on_toggle(submit_after_paste=True),
             )
             logger.info("ホットキーリスナーを起動しました")
+
+            active_postprocessor = self.cfg.enhancement.postprocessor
+            if active_postprocessor not in (
+                POSTPROCESSOR_OFF,
+                POSTPROCESSOR_DICTIONARY,
+            ):
+                self.tray.notify(self._postprocessor_notice(active_postprocessor))
 
         # トレイをバックグラウンドで実行（ノンブロッキング）
         self.tray.run_detached(setup=on_tray_ready)

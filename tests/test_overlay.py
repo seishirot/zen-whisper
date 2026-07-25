@@ -118,6 +118,7 @@ class TestRecordingTimer:
             TrayState.IDLE,
             TrayState.LOADING,
             TrayState.TRANSCRIBING,
+            TrayState.POSTPROCESSING,
         ],
     )
     def test_non_recording_states_do_not_show_timer(self, state):

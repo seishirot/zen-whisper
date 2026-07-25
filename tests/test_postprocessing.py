@@ -1,0 +1,646 @@
+"""Generic shell-free command postprocessor tests."""
+
+from __future__ import annotations
+
+import ctypes
+import ctypes.wintypes
+import logging
+import subprocess
+import sys
+from contextlib import contextmanager
+
+import pytest
+import src.postprocessing as postprocessing
+from src.platform import is_windows
+from src.postprocessing import (
+    DATA_DESTINATION_LOCAL,
+    DATA_DESTINATION_UNKNOWN,
+    PostprocessorPreset,
+    _build_invocation,
+    load_postprocessors,
+    process_transcript,
+    run_postprocessor,
+)
+from src.profiles import Profile, ProfileTerm
+
+
+def _profile() -> Profile:
+    return Profile(
+        profile_id="coding",
+        name="Coding",
+        context="Project context",
+        terms=(
+            ProfileTerm(
+                canonical="ZenWhisper",
+                spoken=("ゼンウィスパー",),
+                replace_from=("全ウィスパー",),
+            ),
+        ),
+    )
+
+
+def test_bundled_ollama_preset_is_local_and_has_no_pull_preflight():
+    presets = load_postprocessors()
+
+    ollama = presets["ollama"]
+    assert ollama.data_destination == DATA_DESTINATION_LOCAL
+    assert ollama.preflight_command == "ollama show qwen3.5:4b"
+    assert "ollama pull" not in ollama.command
+    assert ollama.environment["OLLAMA_HOST"] == "127.0.0.1:11434"
+
+
+def test_user_can_define_arbitrary_argument_cli(tmp_path):
+    bundled = tmp_path / "bundled.toml"
+    bundled.write_text("", encoding="utf-8")
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.custom]
+display_name = "Custom"
+command = 'custom-cli --prompt "{{prompt}}"'
+input_mode = "argument"
+prompt_template = "Fix: {{transcript}}"
+""",
+        encoding="utf-8",
+    )
+
+    preset = load_postprocessors(bundled, local)["custom"]
+    argv, prompt = _build_invocation(
+        preset,
+        'hello" & calc',
+        None,
+        "ja",
+    )
+
+    assert argv == ["custom-cli", "--prompt", 'Fix: hello" & calc']
+    assert prompt == 'Fix: hello" & calc'
+
+
+def test_unknown_placeholder_skips_only_invalid_preset(tmp_path):
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.good]
+command = "good"
+prompt_template = "{{transcript}}"
+
+[postprocessors.bad]
+command = "bad"
+prompt_template = "{{missing}} {{transcript}}"
+""",
+        encoding="utf-8",
+    )
+
+    presets = load_postprocessors(tmp_path / "missing.toml", local)
+
+    assert list(presets) == ["good"]
+
+
+def test_stdin_command_rejects_all_dynamic_placeholders(tmp_path):
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.bad]
+command = 'tool --label "{{transcript}}"'
+input_mode = "stdin"
+prompt_template = "{{transcript}}"
+""",
+        encoding="utf-8",
+    )
+
+    presets = load_postprocessors(tmp_path / "missing.toml", local)
+
+    assert presets == {}
+
+
+def test_argument_command_rejects_placeholder_executable(tmp_path):
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.bad]
+command = '"{{prompt}}" --run'
+input_mode = "argument"
+prompt_template = "{{transcript}}"
+""",
+        encoding="utf-8",
+    )
+
+    presets = load_postprocessors(tmp_path / "missing.toml", local)
+
+    assert presets == {}
+
+
+def test_replacing_bundled_command_resets_command_specific_security_fields(tmp_path):
+    bundled = tmp_path / "bundled.toml"
+    bundled.write_text(
+        """
+[postprocessors.local]
+display_name = "Local"
+command = "local run"
+input_mode = "stdin"
+data_destination = "local"
+preflight_command = "local show"
+preflight_failure_message = "missing"
+environment = { LOCAL_ONLY = "1" }
+prompt_template = "{{transcript}}"
+""",
+        encoding="utf-8",
+    )
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.local]
+command = "remote run"
+""",
+        encoding="utf-8",
+    )
+
+    preset = load_postprocessors(bundled, local)["local"]
+
+    assert preset.command == "remote run"
+    assert preset.data_destination == DATA_DESTINATION_UNKNOWN
+    assert preset.preflight_command == ""
+    assert preset.preflight_failure_message == ""
+    assert preset.environment == {}
+
+
+def test_replacing_bundled_environment_resets_inherited_destination(tmp_path):
+    bundled = tmp_path / "bundled.toml"
+    bundled.write_text(
+        """
+[postprocessors.ollama]
+display_name = "Ollama"
+command = "ollama run model"
+data_destination = "local"
+environment = { OLLAMA_HOST = "127.0.0.1:11434" }
+prompt_template = "{{transcript}}"
+""",
+        encoding="utf-8",
+    )
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.ollama]
+environment = { OLLAMA_HOST = "remote.example:11434" }
+""",
+        encoding="utf-8",
+    )
+
+    preset = load_postprocessors(bundled, local)["ollama"]
+
+    assert preset.environment["OLLAMA_HOST"] == "remote.example:11434"
+    assert preset.data_destination == DATA_DESTINATION_UNKNOWN
+
+
+def test_stdin_runner_uses_shell_false_and_empty_working_directory(monkeypatch):
+    calls = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            calls.append((argv, kwargs))
+            assert kwargs["shell"] is False
+            assert kwargs["stdin"] is subprocess.PIPE
+            assert list(postprocessing.Path(kwargs["cwd"]).iterdir()) == []
+
+        def communicate(self, input=None, timeout=None):
+            assert input == "Fix secret transcript"
+            return " corrected ", ""
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="fake",
+        display_name="Fake",
+        command="fake-cli --quiet",
+        prompt_template="Fix {{transcript}}",
+    )
+
+    result = run_postprocessor(preset, "secret transcript", None, "ja")
+
+    assert result.succeeded is True
+    assert result.text == "corrected"
+    assert calls[0][0] == ["fake-cli", "--quiet"]
+
+
+def test_process_start_is_registered_before_dispatch_guard_releases(monkeypatch):
+    events = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            events.append("popen")
+
+        def communicate(self, input=None, timeout=None):
+            events.append("communicate")
+            return "corrected", ""
+
+    @contextmanager
+    def start_guard():
+        events.append("guard-enter")
+        yield True
+        events.append("guard-exit")
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="guarded",
+        display_name="Guarded",
+        command="guarded-cli",
+    )
+
+    result = run_postprocessor(
+        preset,
+        "raw",
+        None,
+        "ja",
+        start_guard=start_guard,
+        on_process_started=lambda process: events.append("registered"),
+        on_process_finished=lambda process: events.append("finished"),
+    )
+
+    assert result.succeeded is True
+    assert events == [
+        "guard-enter",
+        "popen",
+        "registered",
+        "guard-exit",
+        "communicate",
+        "finished",
+    ]
+
+
+def test_preflight_is_registered_and_main_command_is_guarded_again(monkeypatch):
+    events = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+            events.append(("popen", argv))
+
+        def wait(self, timeout=None):
+            events.append(("wait", self.argv))
+            return 0
+
+        def communicate(self, input=None, timeout=None):
+            events.append(("communicate", self.argv))
+            return "corrected", ""
+
+    @contextmanager
+    def start_guard():
+        events.append(("guard-enter", None))
+        yield True
+        events.append(("guard-exit", None))
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="guarded-preflight",
+        display_name="Guarded preflight",
+        command="tool run",
+        preflight_command="tool show",
+    )
+
+    result = run_postprocessor(
+        preset,
+        "raw",
+        None,
+        "ja",
+        start_guard=start_guard,
+        on_process_started=lambda process: events.append(
+            ("started", process.argv)
+        ),
+        on_process_finished=lambda process: events.append(
+            ("finished", process.argv)
+        ),
+    )
+
+    assert result.succeeded is True
+    assert events == [
+        ("guard-enter", None),
+        ("popen", ["tool", "show"]),
+        ("started", ["tool", "show"]),
+        ("guard-exit", None),
+        ("wait", ["tool", "show"]),
+        ("finished", ["tool", "show"]),
+        ("guard-enter", None),
+        ("popen", ["tool", "run"]),
+        ("started", ["tool", "run"]),
+        ("guard-exit", None),
+        ("communicate", ["tool", "run"]),
+        ("finished", ["tool", "run"]),
+    ]
+
+
+def test_finish_guard_discards_stale_success(monkeypatch):
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            pass
+
+        def communicate(self, input=None, timeout=None):
+            return "stale result", ""
+
+    @contextmanager
+    def rejected_finish():
+        yield False
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="stale",
+        display_name="Stale",
+        command="stale-cli",
+    )
+
+    result = run_postprocessor(
+        preset,
+        "raw",
+        None,
+        "ja",
+        finish_guard=rejected_finish,
+    )
+
+    assert result.succeeded is False
+    assert result.text == "raw"
+    assert "結果を破棄" in result.error
+
+
+def test_argument_mode_rejects_windows_batch_launcher(monkeypatch):
+    calls = []
+
+    monkeypatch.setattr(
+        postprocessing,
+        "command_uses_windows_batch",
+        lambda executable, environment: True,
+    )
+    monkeypatch.setattr(
+        postprocessing.subprocess,
+        "Popen",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    preset = PostprocessorPreset(
+        preset_id="batch",
+        display_name="Batch",
+        command='batch-cli "{{prompt}}"',
+        input_mode="argument",
+        prompt_template="{{transcript}}",
+    )
+
+    result = run_postprocessor(preset, "untrusted & transcript", None, "ja")
+
+    assert result.succeeded is False
+    assert ".cmd/.bat" in result.error
+    assert calls == []
+
+
+def test_preflight_failure_prevents_main_command(monkeypatch):
+    calls = []
+
+    class FakeProcess:
+        def __init__(self, argv, **kwargs):
+            calls.append(argv)
+
+        def wait(self, timeout=None):
+            return 1
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="local",
+        display_name="Local",
+        command="local run",
+        preflight_command="local show model",
+        preflight_failure_message="Model is missing",
+    )
+
+    result = run_postprocessor(preset, "original", None, "ja")
+
+    assert calls == [["local", "show", "model"]]
+    assert result.succeeded is False
+    assert result.text == "original"
+    assert result.error == "Model is missing"
+
+
+def test_timeout_cleanup_has_no_unbounded_final_wait(monkeypatch):
+    class FakeStream:
+        closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeProcess:
+        pid = 123
+
+        def __init__(self):
+            self.stdin = FakeStream()
+            self.stdout = FakeStream()
+            self.stderr = FakeStream()
+            self.killed = False
+            self.wait_timeouts = []
+
+        def communicate(self, input=None, timeout=None):
+            raise subprocess.TimeoutExpired("fake", timeout)
+
+        def poll(self):
+            return None if not self.killed else 1
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout=None):
+            self.wait_timeouts.append(timeout)
+            return 1
+
+    process = FakeProcess()
+    monkeypatch.setattr(postprocessing, "terminate_process_tree", lambda process: None)
+
+    postprocessing._finish_timed_out_process(process, "fake")
+
+    assert process.killed is True
+    assert process.wait_timeouts == [5.0]
+    assert process.stdin.closed is True
+    assert process.stdout.closed is True
+    assert process.stderr.closed is True
+
+
+def test_command_failure_keeps_dictionary_result_and_does_not_log_transcript(
+    monkeypatch,
+    caplog,
+):
+    secret = "private spoken text"
+
+    class FakeProcess:
+        returncode = 2
+
+        def __init__(self, argv, **kwargs):
+            pass
+
+        def communicate(self, input=None, timeout=None):
+            return "", f"echoed {secret}"
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="fake",
+        display_name="Fake",
+        command="fake",
+        prompt_template="{{transcript}}",
+    )
+
+    with caplog.at_level(logging.WARNING):
+        result = process_transcript(
+            f"全ウィスパー {secret}",
+            _profile(),
+            "fake",
+            {"fake": preset},
+            "ja",
+        )
+
+    assert result.succeeded is False
+    assert result.text == f"ZenWhisper {secret}"
+    assert secret not in caplog.text
+
+
+def _is_windows_process_alive(pid: int) -> bool:
+    process_query_limited_information = 0x1000
+    still_active = 259
+    handle = ctypes.windll.kernel32.OpenProcess(
+        process_query_limited_information,
+        False,
+        pid,
+    )
+    if not handle:
+        return False
+    try:
+        exit_code = ctypes.wintypes.DWORD()
+        if not ctypes.windll.kernel32.GetExitCodeProcess(
+            handle,
+            ctypes.byref(exit_code),
+        ):
+            return False
+        return exit_code.value == still_active
+    finally:
+        ctypes.windll.kernel32.CloseHandle(handle)
+
+
+def _force_kill_windows_process(pid: int) -> None:
+    if not pid or not _is_windows_process_alive(pid):
+        return
+    from src.platform.windows import _system_executable
+
+    subprocess.run(
+        [
+            _system_executable("taskkill.exe"),
+            "/PID",
+            str(pid),
+            "/T",
+            "/F",
+        ],
+        shell=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
+@pytest.mark.skipif(not is_windows(), reason="Windows process-tree regression")
+def test_timeout_terminates_spawned_windows_child_process(tmp_path):
+    parent_script = tmp_path / "spawn_child.py"
+    child_pid_path = tmp_path / "child.pid"
+    parent_script.write_text(
+        """
+import subprocess
+import sys
+import time
+
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+with open(sys.argv[1], "w", encoding="utf-8") as file:
+    file.write(str(child.pid))
+time.sleep(60)
+""",
+        encoding="utf-8",
+    )
+    command = subprocess.list2cmdline(
+        [sys.executable, str(parent_script), str(child_pid_path)]
+    )
+    preset = PostprocessorPreset(
+        preset_id="timeout-tree",
+        display_name="Timeout tree",
+        command=command,
+        timeout_sec=1.0,
+    )
+    child_pid = 0
+
+    try:
+        result = run_postprocessor(preset, "private transcript", None, "ja")
+        assert child_pid_path.is_file()
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+
+        assert result.succeeded is False
+        assert "タイムアウト" in result.error
+        assert _is_windows_process_alive(child_pid) is False
+    finally:
+        _force_kill_windows_process(child_pid)
+
+
+@pytest.mark.skipif(not is_windows(), reason="Windows process-tree regression")
+def test_preflight_timeout_terminates_spawned_windows_child_process(tmp_path):
+    preflight_script = tmp_path / "spawn_preflight_child.py"
+    child_pid_path = tmp_path / "preflight-child.pid"
+    preflight_script.write_text(
+        """
+import subprocess
+import sys
+import time
+
+child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+with open(sys.argv[1], "w", encoding="utf-8") as file:
+    file.write(str(child.pid))
+time.sleep(60)
+""",
+        encoding="utf-8",
+    )
+    preflight_command = subprocess.list2cmdline(
+        [sys.executable, str(preflight_script), str(child_pid_path)]
+    )
+    main_command = subprocess.list2cmdline(
+        [sys.executable, "-c", "print('unused')"]
+    )
+    preset = PostprocessorPreset(
+        preset_id="preflight-timeout-tree",
+        display_name="Preflight timeout tree",
+        command=main_command,
+        preflight_command=preflight_command,
+        timeout_sec=1.0,
+    )
+    child_pid = 0
+
+    try:
+        result = run_postprocessor(preset, "private transcript", None, "ja")
+        assert child_pid_path.is_file()
+        child_pid = int(child_pid_path.read_text(encoding="utf-8"))
+
+        assert result.succeeded is False
+        assert "事前確認がタイムアウト" in result.error
+        assert _is_windows_process_alive(child_pid) is False
+    finally:
+        _force_kill_windows_process(child_pid)
+
+
+def test_off_mode_does_not_apply_dictionary():
+    result = process_transcript(
+        "全ウィスパー",
+        _profile(),
+        "off",
+        {},
+        "ja",
+    )
+
+    assert result.text == "全ウィスパー"
+    assert result.applied is False

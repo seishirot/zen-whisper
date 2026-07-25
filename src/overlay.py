@@ -20,6 +20,7 @@ _STATE_COLORS: dict[TrayState, str] = {
     TrayState.RECORDING: "#FF3B30",
     TrayState.SPEECH_DETECTED: "#34C759",
     TrayState.TRANSCRIBING: "#FFD700",
+    TrayState.POSTPROCESSING: "#AF52DE",
 }
 
 _STATE_LABELS: dict[TrayState, str] = {
@@ -28,6 +29,7 @@ _STATE_LABELS: dict[TrayState, str] = {
     TrayState.RECORDING: "録音中…",
     TrayState.SPEECH_DETECTED: "録音中…",
     TrayState.TRANSCRIBING: "処理中…",
+    TrayState.POSTPROCESSING: "校正中…",
 }
 
 # レイアウト定数

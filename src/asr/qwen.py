@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 import numpy as np
 
-from src.asr.base import load_with_timeout
+from src.asr.base import RecognitionHints, load_with_timeout
 from src.asr.whisper import _resolve_device
 from src.config import ASR_SAMPLE_RATE, RecognitionConfig
 
@@ -119,10 +119,16 @@ class Qwen3Backend:
         audio: np.ndarray,
         language: str,
         cfg: RecognitionConfig,
+        hints: RecognitionHints | None = None,
     ) -> str:
         if self._model is None:
             logger.error("モデルがロードされていません")
             return ""
         lang = _QWEN3_LANG_MAP.get(language, "Japanese")
-        results = self._model.transcribe(audio=(audio, ASR_SAMPLE_RATE), language=lang)
+        context = hints.context if hints is not None else ""
+        results = self._model.transcribe(
+            audio=(audio, ASR_SAMPLE_RATE),
+            context=context,
+            language=lang,
+        )
         return results[0].text.strip()

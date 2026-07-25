@@ -5,6 +5,8 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes
 import logging
+import shutil
+import subprocess
 import time
 import tkinter as tk
 import winreg
@@ -13,6 +15,94 @@ from pathlib import Path
 import win32clipboard
 
 logger = logging.getLogger(__name__)
+
+
+# ── 子プロセス ─────────────────────────────────────────
+
+def split_command(command: str) -> list[str]:
+    """Split a command line with the same quoting rules as CreateProcessW."""
+    command = command.strip()
+    if not command:
+        return []
+
+    argc = ctypes.c_int()
+    command_line_to_argv = ctypes.windll.shell32.CommandLineToArgvW
+    command_line_to_argv.argtypes = [
+        ctypes.wintypes.LPCWSTR,
+        ctypes.POINTER(ctypes.c_int),
+    ]
+    command_line_to_argv.restype = ctypes.POINTER(ctypes.c_wchar_p)
+    argv = command_line_to_argv(command, ctypes.byref(argc))
+    if not argv:
+        raise ValueError("CommandLineToArgvW failed")
+
+    try:
+        return [argv[index] for index in range(argc.value)]
+    finally:
+        local_free = ctypes.windll.kernel32.LocalFree
+        local_free.argtypes = [ctypes.c_void_p]
+        local_free.restype = ctypes.c_void_p
+        local_free(ctypes.cast(argv, ctypes.c_void_p))
+
+
+def subprocess_run_options() -> dict[str, object]:
+    """Prevent one-shot postprocessors from flashing a console window."""
+    return {"creationflags": subprocess.CREATE_NO_WINDOW}
+
+
+def command_uses_windows_batch(
+    executable: str,
+    environment: dict[str, str],
+) -> bool:
+    """Return whether CreateProcess resolves a command through .cmd/.bat."""
+    resolved = shutil.which(executable, path=environment.get("PATH"))
+    command_path = Path(resolved or executable)
+    return command_path.suffix.lower() in (".cmd", ".bat")
+
+
+def _system_executable(name: str) -> str:
+    """Resolve a trusted executable from the Windows system directory."""
+    buffer = ctypes.create_unicode_buffer(32768)
+    get_system_directory = ctypes.windll.kernel32.GetSystemDirectoryW
+    get_system_directory.argtypes = [ctypes.wintypes.LPWSTR, ctypes.wintypes.UINT]
+    get_system_directory.restype = ctypes.wintypes.UINT
+    length = get_system_directory(buffer, len(buffer))
+    if length == 0 or length >= len(buffer):
+        return name
+    return str(Path(buffer.value) / name)
+
+
+def terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    """Terminate an exact spawned PID and its Windows child-process tree."""
+    if process.poll() is not None:
+        return
+    try:
+        subprocess.run(
+            [
+                _system_executable("taskkill.exe"),
+                "/PID",
+                str(process.pid),
+                "/T",
+                "/F",
+            ],
+            shell=False,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5.0,
+            check=False,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except Exception as exc:
+        logger.warning(
+            "子プロセスツリーの終了に失敗しました: type=%s",
+            type(exc).__name__,
+        )
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
 
 
 # ── オーディオエンドポイント ─────────────────────────

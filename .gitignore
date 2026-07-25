@@ -72,6 +72,8 @@ dmypy.json
 
 # User config (copy from config.example.toml)
 config.toml
+postprocessors.toml
+profiles/*.toml
 
 # Local audio artifacts
 *.flac

@@ -30,7 +30,7 @@ dependencies = [
     "sherpa-onnx==1.13.1",
     "sherpa-onnx-core==1.13.1",
     # Windows 専用
-    "faster-whisper>=1.0.0; sys_platform == 'win32'",
+    "faster-whisper>=1.0.2; sys_platform == 'win32'",
     "pywin32>=306; sys_platform == 'win32'",
     # Mac 専用
     "mlx-whisper>=0.4; sys_platform == 'darwin'",
@@ -73,7 +73,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src"]
-force-include = { "assets/vad" = "assets/vad" }
+
+[tool.hatch.build.targets.wheel.force-include]
+"assets/vad" = "assets/vad"
+"postprocessors.default.toml" = "postprocessors.default.toml"
+"profiles/README.md" = "profiles/README.md"
+"profiles/zen-whisper.toml.example" = "profiles/zen-whisper.toml.example"
 
 [project.gui-scripts]
 zen-whisper = "src.main:main"

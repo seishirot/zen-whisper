@@ -1,14 +1,16 @@
 # zen-whisper
 
-Fully local voice-to-text input tool. Toggle recording with a hotkey, transcribe with Whisper, and paste into the active window. After dependencies and models are installed, audio stays on your machine.
+Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe with Whisper, and paste into the active window. ASR audio stays on your machine after dependencies and models are installed. Optional command postprocessing is off by default and may send the transcript/profile data to the configured destination when explicitly enabled.
 
-完全ローカルの音声入力ツール。ホットキーでトグル録音 → Whisper で文字起こし → アクティブウィンドウにペースト。依存関係とモデルの取得後は、音声データを外部に送信せずローカルで処理します。
+ローカル優先の音声入力ツール。ホットキーでトグル録音 → Whisper で文字起こし → アクティブウィンドウにペースト。ASR の音声データはローカルで処理します。任意の CLI 後処理は既定でオフで、明示的に有効化した場合だけ認識結果・プロファイル情報を設定先へ渡します。
 
 ## Features
 
 - **Hotkey toggle recording** — press to start, press again to stop (or auto-stop on silence via VAD)
 - **Local ASR transcription** — no data leaves your machine after models are installed
 - **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
+- **Domain profiles** — reusable project context, preferred spellings, pronunciations, and exact error mappings
+- **Optional CLI cleanup** — generic shell-free presets, including Codex (remote) and Ollama (loopback local)
 - **Tray / menu bar** — runs in the background with a Windows tray icon or macOS menu bar item showing recording state
 - **Microphone selection** — pick the recording input from the Windows tray or macOS menu bar, including virtual mics like NVIDIA Broadcast
 - **Floating overlay** — Windows/Python draggable microphone widget with real-time VAD visual feedback
@@ -138,7 +140,9 @@ mise exec -- uv run python src/main.py
 2. Press the hotkey (default: `Shift+Space`) to **start recording**
 3. Speak into your microphone
 4. Press the hotkey again to **stop recording** (or wait for silence auto-stop)
-5. If paste is allowed, transcribed text is pasted into the active window. On
+5. The selected profile supplies supported ASR hints; optional dictionary/CLI
+   postprocessing runs if enabled
+6. If paste is allowed, the resulting text is pasted into the active window. On
    macOS native, unsafe or unverifiable targets fall back to copy-only or skip
    copying.
 
@@ -154,6 +158,8 @@ Use the Windows tray icon or macOS menu bar item to:
 - Switch transcription language
 - Select microphone input, or refresh the microphone list after devices change
 - Select ASR engine/model. Windows Python supports Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and MLX Qwen3-ASR entries.
+- Select a domain profile independently from postprocessing (Windows/Python tray)
+- Select postprocessing: off, dictionary only, or a configured CLI preset (Windows/Python tray). The menu and tooltip keep `ローカル` / `外部送信` / `送信先不明` visible.
 - Toggle sound feedback (Windows/Python tray only)
 - Register/unregister startup or Launch at Login
 - Quit
@@ -168,6 +174,7 @@ Python CLI settings are in `config.toml`; see `config.example.toml` for defaults
 | `[recognition]` | `engine` (`whisper`/`reazon-k2`/`qwen3-asr`), `language`, `model_size`, `compute_type`, `device` (`cuda`/`cpu`/`mlx`) |
 | `[recording]` | `microphone`, `vad_silence_threshold_sec`, `min_audio_rms`, `min_audio_peak`, `max_recording_sec` |
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |
+| `[enhancement]` | `profile` (a filename from `profiles/`), `postprocessor` (`off`/`dictionary`/preset ID) |
 | `[feedback]` | `sound_enabled`, `sound_type` (`tone`/`custom`), `volume` |
 | `[overlay]` | `enabled`, `position`, `size` |
 | `[logging]` | `level`, `file` |
@@ -191,7 +198,83 @@ settings instead of `config.toml`. Choose `Recognition Model` from the menu bar
 item to select MLX Whisper or MLX Qwen3-ASR. It intentionally does not include
 the Windows/Python CPU, CUDA, or Reazon K2 menu entries.
 
-ZenWhisper does not run LLM cleanup or punctuation rewriting internally. It pastes the raw ASR text.
+### Profiles and optional postprocessing
+
+Postprocessing is `off` by default. Profile selection is independent, so a
+profile can supply recognition hints while the raw ASR result is still pasted:
+
+- faster-whisper receives the profile's canonical/spoken terms as `hotwords`
+- MLX Whisper receives the compact term list as an initial prompt
+- Qwen3-ASR receives the profile context and terms through its `context`
+- Reazon K2 does not consume recognition hints; use dictionary-only or CLI
+  postprocessing when correcting its output
+
+This menu/config path currently applies to the Python application (primarily
+the Windows tray). The separate native macOS app has not yet been wired to
+these profile and command files.
+
+Create one local `profiles/<id>.toml` per scene or project. See
+`profiles/zen-whisper.toml.example`; profile files are ignored by Git. Explicit
+`replace_from` entries are applied once, longest match first. `spoken` aliases
+are ASR hints and are not silently rewritten.
+
+The bundled `postprocessors.default.toml` contains:
+
+- `codex`: remote Codex CLI cleanup
+- `ollama`: local `qwen3.5:4b` cleanup, pinned to
+  `127.0.0.1:11434`
+
+The Ollama preset first runs `ollama show qwen3.5:4b`. If the model is missing,
+ZenWhisper stops and asks you to run `ollama pull qwen3.5:4b`; it does not let
+`ollama run` implicitly fetch a model during voice input.
+
+Add or override arbitrary CLIs in the ignored `postprocessors.toml`:
+
+```toml
+[postprocessors.claude]
+display_name = "Claude 校正"
+command = 'claude -p "{{prompt}}"'
+input_mode = "argument"
+output_mode = "stdout"
+timeout_sec = 30
+data_destination = "remote"
+prompt_template = """
+次の文字起こしを保守的に校正し、本文だけ返してください。
+文脈: {{context}}
+用語:
+{{terms}}
+文字起こし:
+{{transcript}}
+"""
+```
+
+`command` is parsed with the current OS quoting rules before placeholder
+substitution and is always executed with `shell = false`. Pipes, redirects, and
+`&&` are not interpreted; explicitly invoke a wrapper script for a complex
+flow. Supported placeholders are `{{prompt}}`, `{{transcript}}`, `{{context}}`,
+`{{terms}}`, `{{profile_name}}`, and `{{language}}`. With `input_mode =
+"stdin"`, put placeholders in `prompt_template`; `command` itself must remain
+static so transcript/profile data cannot leak through the process command line.
+Argument mode exposes the prompt in the child process command line. On Windows,
+argument mode rejects `.cmd` / `.bat` launchers because the OS may parse their
+arguments through `cmd.exe`; invoke the underlying `.exe`, `node`, or `python`
+entry point instead.
+
+`postprocessors.toml` is trusted executable configuration; profiles are
+data-only and cannot define commands. Custom presets default to
+`data_destination = "unknown"`. Replacing a bundled preset's `command` without
+also declaring command-specific fields resets its destination to `unknown` and
+clears inherited preflight/environment settings. Enabling a remote/unknown
+preset displays a warning that the transcript, selected profile context, and
+dictionary data are passed to that CLI.
+
+If a CLI is missing, times out, exits nonzero, or returns empty output,
+ZenWhisper pastes the dictionary-corrected fallback. A submit-after-paste
+hotkey cancels Enter in that failure case so unreviewed fallback text is not
+sent automatically. Transcript and CLI output bodies are not written to the
+ZenWhisper log. A timeout stops ZenWhisper waiting for the invoked process, but
+cannot retract data already handed to a CLI or guarantee cancellation inside an
+external/local model service.
 
 ### Microphone selection
 

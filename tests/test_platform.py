@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import src.platform as platform_module
 from src.platform import is_mac, is_windows, paste_hotkey
 
 
@@ -51,6 +52,64 @@ class TestPasteHotkey:
         assert isinstance(result, tuple)
         assert len(result) == 2
         assert all(isinstance(s, str) for s in result)
+
+
+def test_posix_postprocessor_starts_in_new_session(monkeypatch) -> None:
+    monkeypatch.setattr(platform_module, "is_windows", lambda: False)
+
+    assert platform_module.subprocess_run_options() == {
+        "start_new_session": True,
+    }
+
+
+def test_posix_process_tree_termination_targets_process_group(monkeypatch) -> None:
+    calls = []
+
+    class FakeProcess:
+        pid = 4321
+        killed = False
+
+        def poll(self):
+            return None
+
+        def kill(self):
+            self.killed = True
+
+    process = FakeProcess()
+    monkeypatch.setattr(platform_module, "is_windows", lambda: False)
+    monkeypatch.setattr(
+        platform_module.os,
+        "killpg",
+        lambda pid, sig: calls.append((pid, sig)),
+        raising=False,
+    )
+
+    platform_module.terminate_process_tree(process)
+
+    assert calls == [(4321, platform_module._SIGKILL)]
+    assert process.killed is False
+
+
+def test_posix_process_group_is_killed_after_parent_has_exited(monkeypatch) -> None:
+    calls = []
+
+    class FakeProcess:
+        pid = 4321
+
+        def poll(self):
+            return 0
+
+    monkeypatch.setattr(platform_module, "is_windows", lambda: False)
+    monkeypatch.setattr(
+        platform_module.os,
+        "killpg",
+        lambda pid, sig: calls.append((pid, sig)),
+        raising=False,
+    )
+
+    platform_module.terminate_process_tree(FakeProcess())
+
+    assert calls == [(4321, platform_module._SIGKILL)]
 
 
 def test_mac_legacy_startup_targets_signed_native_app() -> None:
