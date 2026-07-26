@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "postprocessors": {
+    "claude": {
+      "display_name": "Claude Code 校正",
+      "executable": "claude",
+      "arguments": [
+        "--print",
+        "--model",
+        "haiku",
+        "--safe-mode",
+        "--no-session-persistence",
+        "--permission-mode",
+        "dontAsk",
+        "--tools",
+        "",
+        "--output-format",
+        "text"
+      ],
+      "preflight_executable": "claude",
+      "preflight_arguments": [
+        "--version"
+      ],
+      "preflight_failure_message": "Claude Code が見つかりません。Claude Code CLI をインストールして認証を完了してください。",
+      "input_mode": "stdin",
+      "data_destination": "remote",
+      "timeout_sec": 60,
+      "prompt_template": "あなたは音声認識結果の校正器です。\n発言の意味・語調・言語を保ち、明らかな誤認識、表記揺れ、句読点だけを保守的に直してください。\n推測で情報を追加したり、要約したり、回答したりしないでください。\n固有名詞はプロファイルの情報を優先し、校正後の本文だけを出力してください。\n\nプロファイル: {{profile_name}}\n言語: {{language}}\n文脈:\n{{context}}\n\n用語:\n{{terms}}\n\n文字起こし:\n{{transcript}}\n",
+      "environment": {}
+    },
+    "ollama": {
+      "display_name": "Ollama 校正",
+      "executable": "ollama",
+      "arguments": [
+        "run",
+        "qwen3.5:4b",
+        "--think=false",
+        "--hidethinking",
+        "--nowordwrap"
+      ],
+      "preflight_executable": "ollama",
+      "preflight_arguments": [
+        "show",
+        "qwen3.5:4b"
+      ],
+      "preflight_failure_message": "Ollama の qwen3.5:4b が見つかりません。先に ollama pull qwen3.5:4b を実行してください。",
+      "input_mode": "stdin",
+      "data_destination": "local",
+      "timeout_sec": 60,
+      "prompt_template": "あなたは音声認識結果の校正器です。\n発言の意味・語調・言語を保ち、明らかな誤認識、表記揺れ、句読点だけを保守的に直してください。\n推測で情報を追加したり、要約したり、回答したりしないでください。\n固有名詞はプロファイルの情報を優先し、校正後の本文だけを出力してください。\n\nプロファイル: {{profile_name}}\n言語: {{language}}\n文脈:\n{{context}}\n\n用語:\n{{terms}}\n\n文字起こし:\n{{transcript}}\n",
+      "environment": {
+        "OLLAMA_HOST": "127.0.0.1:11434",
+        "OLLAMA_NOHISTORY": "1"
+      }
+    }
+  }
+}

@@ -30,6 +30,7 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(StatusIconFactory.kind(for: .transcribing), .processing)
         XCTAssertEqual(StatusIconFactory.kind(for: .copySkipped("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .copyFailed("x")), .warning)
+        XCTAssertEqual(StatusIconFactory.kind(for: .enhancementWarning("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .hotkeyError("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .backendRepairRequired("x")), .warning)
     }
@@ -81,6 +82,7 @@ final class CoreTests: XCTestCase {
             AppState.copied(pasteDispatched: true, reason: "clipboard kept").title,
             "Paste tried"
         )
+        XCTAssertEqual(AppState.enhancementWarning("safe fallback").title, "Fallback")
         XCTAssertEqual(StatusText.copyOnlyReason("paste event unavailable"), "No paste")
         XCTAssertEqual(
             AppDelegate.copySkippedReasonAfterRestoredPasteFailure("paste event unavailable"),

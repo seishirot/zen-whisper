@@ -50,6 +50,14 @@ struct SettingsHotkeyRecorderSession {
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     typealias SaveHandler = (SettingsSaveRequest) -> SettingsSaveOutcome
+    typealias ProfileSaveHandler = (
+        EnhancementProfile,
+        EnhancementFileFingerprint?
+    ) -> Result<EnhancementCatalogSnapshot, Error>
+    typealias ExternalDestinationConfirmationHandler = (
+        EnhancementPostprocessorPreset,
+        String
+    ) -> Bool
     typealias PrimaryHotkeyRecorder = (
         HotkeyShortcut,
         @escaping (HotkeyShortcut?) -> Void
@@ -68,6 +76,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         static let engine = "settings.engine"
         static let model = "settings.model"
         static let language = "settings.language"
+        static let profile = "settings.profile"
+        static let newProfile = "settings.newProfile"
+        static let editProfile = "settings.editProfile"
+        static let postprocessing = "settings.postprocessing"
+        static let enhancementMessage = "settings.enhancementMessage"
         static let silenceAutoStop = "settings.silenceAutoStop"
         static let microphone = "settings.microphone"
         static let outputMode = "settings.outputMode"
@@ -102,9 +115,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
     var onCancelHotkeyRecording: (() -> Void)?
     var onRequestAudioInputDevices: (() -> [AudioInputDevice])?
+    var onSaveProfile: ProfileSaveHandler? {
+        didSet { refreshEnabledState() }
+    }
+    var onConfirmExternalDestination: ExternalDestinationConfirmationHandler?
 
     private let registry: ModelRegistry
     private var editorState: SettingsEditorState
+    private var enhancementCatalog: EnhancementCatalogSnapshot
     private var audioInputDevices: [AudioInputDevice] = []
     private var hotkeyRecorderSession = SettingsHotkeyRecorderSession()
     private var isBusy = false
@@ -117,6 +135,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var engineChoices: [String] = []
     private var modelChoices: [String] = []
     private var languageChoices: [String] = []
+    private var profileChoices: [String?] = []
+    private var postprocessingChoices: [PostprocessingSelection] = []
 
     private let primaryHotkeyPopup = NSPopUpButton()
     private let recordPrimaryHotkeyButton = NSButton()
@@ -125,6 +145,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let enginePopup = NSPopUpButton()
     private let modelPopup = NSPopUpButton()
     private let languagePopup = NSPopUpButton()
+    private let profilePopup = NSPopUpButton()
+    private let newProfileButton = NSButton()
+    private let editProfileButton = NSButton()
+    private let postprocessingPopup = NSPopUpButton()
+    private let enhancementMessageLabel = NSTextField(wrappingLabelWithString: "")
     private let silenceAutoStopCheckbox = NSButton()
     private let microphonePopup = NSPopUpButton()
     private let microphoneMessageLabel = NSTextField(wrappingLabelWithString: "")
@@ -141,13 +166,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var footerStack: NSStackView?
     private var isUpdatingWindowLayout = false
     private var shouldCenterWindowOnFirstShow: Bool
+    private var profileEditorWindowController: ProfileEditorWindowController?
 
     init(
         registry: ModelRegistry,
         settings: SettingsSnapshot,
-        launchAtLoginStatus: LoginItemStatus
+        launchAtLoginStatus: LoginItemStatus,
+        enhancementCatalog: EnhancementCatalogSnapshot = EnhancementCatalogSnapshot()
     ) {
         self.registry = registry
+        self.enhancementCatalog = enhancementCatalog
         editorState = SettingsEditorState(
             settings: settings,
             launchAtLoginStatus: launchAtLoginStatus,
@@ -168,6 +196,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.setFrameAutosaveName(Layout.frameAutosaveName)
 
         super.init(window: window)
+        reconcileDraftPostprocessorApproval()
         window.delegate = self
         window.identifier = NSUserInterfaceItemIdentifier(AccessibilityIdentifier.window)
         window.setAccessibilityLabel("Zen Whisper Settings")
@@ -199,13 +228,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         authoritativeSettings: SettingsSnapshot,
         launchAtLoginStatus: LoginItemStatus,
         audioInputDevices: [AudioInputDevice],
-        isBusy: Bool
+        isBusy: Bool,
+        enhancementCatalog: EnhancementCatalogSnapshot? = nil
     ) {
         editorState.synchronize(
             authoritativeSettings: authoritativeSettings,
             launchAtLoginStatus: launchAtLoginStatus
         )
         replaceAudioInputDevices(audioInputDevices)
+        if let enhancementCatalog {
+            self.enhancementCatalog = enhancementCatalog
+        }
+        reconcileDraftPostprocessorApproval()
         self.isBusy = isBusy
         render()
     }
@@ -239,6 +273,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     func windowWillClose(_ notification: Notification) {
         cancelActiveHotkeyRecording()
+        if let editorWindow = profileEditorWindowController?.window,
+           window?.attachedSheet === editorWindow {
+            window?.endSheet(editorWindow)
+        }
+        profileEditorWindowController?.close()
+        profileEditorWindowController = nil
     }
 
     private func configureControls() {
@@ -286,6 +326,37 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             identifier: AccessibilityIdentifier.language,
             action: #selector(languageChanged)
         )
+        configurePopup(
+            profilePopup,
+            label: "Recognition profile",
+            identifier: AccessibilityIdentifier.profile,
+            action: #selector(profileChanged)
+        )
+        configureButton(
+            newProfileButton,
+            title: "New…",
+            label: "Create recognition profile",
+            identifier: AccessibilityIdentifier.newProfile,
+            action: #selector(createProfile)
+        )
+        configureButton(
+            editProfileButton,
+            title: "Edit…",
+            label: "Edit selected recognition profile",
+            identifier: AccessibilityIdentifier.editProfile,
+            action: #selector(editProfile)
+        )
+        configurePopup(
+            postprocessingPopup,
+            label: "Post-processing",
+            identifier: AccessibilityIdentifier.postprocessing,
+            action: #selector(postprocessingChanged)
+        )
+        enhancementMessageLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
+        enhancementMessageLabel.textColor = .secondaryLabelColor
+        enhancementMessageLabel.identifier =
+            NSUserInterfaceItemIdentifier(AccessibilityIdentifier.enhancementMessage)
+        enhancementMessageLabel.setAccessibilityLabel("Enhancement data destination and status")
         configureCheckbox(
             silenceAutoStopCheckbox,
             title: "Automatically stop after silence",
@@ -395,6 +466,17 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 makeLabeledRow(title: "Language:", control: languagePopup)
             ]
         )
+        let enhancementSection = makeSection(
+            title: "Enhancement",
+            views: [
+                makeLabeledRow(
+                    title: "Profile:",
+                    control: makeControlRow(profilePopup, newProfileButton, editProfileButton)
+                ),
+                makeLabeledRow(title: "Post-process:", control: postprocessingPopup),
+                enhancementMessageLabel
+            ]
+        )
         let recordingSection = makeSection(
             title: "Recording",
             views: [
@@ -428,6 +510,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let stack = NSStackView(views: [
             shortcutSection,
             recognitionSection,
+            enhancementSection,
             recordingSection,
             outputSection,
             generalSection,
@@ -441,7 +524,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         stack.setContentCompressionResistancePriority(.required, for: .vertical)
         stack.setContentHuggingPriority(.required, for: .vertical)
 
-        for view in [shortcutSection, recognitionSection, recordingSection, outputSection, generalSection,
+        for view in [shortcutSection, recognitionSection, enhancementSection, recordingSection, outputSection, generalSection,
                      busyMessageLabel, validationMessageLabel] {
             view.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         }
@@ -594,6 +677,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func render() {
         renderHotkeys()
         renderRecognition()
+        renderEnhancement()
         renderRecording()
         renderOutput()
         if editorState.launchAtLoginSelectionIsIndeterminate {
@@ -687,6 +771,146 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
+    private func renderEnhancement() {
+        let selection = editorState.draftSettings.enhancement
+        let sortedProfiles = enhancementCatalog.profiles.values.sorted {
+            $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+        }
+        profileChoices = [nil] + sortedProfiles.map(\.id)
+        if let selectedID = selection.profileID,
+           enhancementCatalog.profiles[selectedID] == nil {
+            profileChoices.append(selectedID)
+        }
+        profilePopup.removeAllItems()
+        for profileID in profileChoices {
+            guard let profileID else {
+                profilePopup.addItem(withTitle: "Off")
+                continue
+            }
+            if let profile = enhancementCatalog.profiles[profileID] {
+                profilePopup.addItem(withTitle: profile.name)
+                profilePopup.lastItem?.toolTip = profile.id
+            } else {
+                profilePopup.addItem(withTitle: "Unavailable — \(profileID)")
+                profilePopup.lastItem?.toolTip = profileID
+            }
+        }
+        if let index = profileChoices.firstIndex(of: selection.profileID) {
+            profilePopup.selectItem(at: index)
+        }
+
+        postprocessingChoices = [.off, .dictionary]
+        let sortedPostprocessors = enhancementCatalog.postprocessors.values.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
+        }
+        postprocessingChoices.append(contentsOf: sortedPostprocessors.map { .preset($0.id) })
+        if let presetID = selection.postprocessing.presetID,
+           enhancementCatalog.postprocessors[presetID] == nil {
+            postprocessingChoices.append(.preset(presetID))
+        }
+        postprocessingPopup.removeAllItems()
+        for choice in postprocessingChoices {
+            switch choice {
+            case .off:
+                postprocessingPopup.addItem(withTitle: "Off")
+            case .dictionary:
+                postprocessingPopup.addItem(withTitle: "Dictionary Replacement")
+            case .preset(let presetID):
+                if let preset = enhancementCatalog.postprocessors[presetID] {
+                    postprocessingPopup.addItem(withTitle: preset.displayName)
+                    postprocessingPopup.lastItem?.toolTip = preset.id
+                } else {
+                    postprocessingPopup.addItem(withTitle: "Unavailable — \(presetID)")
+                    postprocessingPopup.lastItem?.toolTip = presetID
+                }
+            }
+        }
+        if let index = postprocessingChoices.firstIndex(of: selection.postprocessing) {
+            postprocessingPopup.selectItem(at: index)
+        }
+
+        enhancementMessageLabel.stringValue = enhancementMessage(
+            for: selection,
+            engine: editorState.draftSettings.engine
+        )
+        enhancementMessageLabel.textColor = enhancementMessageColor(for: selection)
+    }
+
+    private func enhancementMessage(
+        for selection: EnhancementSelection,
+        engine: String
+    ) -> String {
+        var messages: [String] = []
+        if selection.profileID != nil, engine != "mlx-whisper" {
+            messages.append(
+                "This recognition engine does not support profile hints. Dictionary replacement applies only when Dictionary Replacement or a CLI preset is selected."
+            )
+        }
+        switch selection.postprocessing {
+        case .off, .dictionary:
+            messages.append("Data destination: Local. No transcript is sent by post-processing.")
+        case .preset(let id):
+            guard let preset = enhancementCatalog.postprocessors[id] else {
+                messages.append(
+                    "The selected post-processor is unavailable. Dictionary replacement will be used as a safe fallback."
+                )
+                break
+            }
+            switch preset.destination {
+            case .local:
+                messages.append("Data destination: Local process.")
+            case .remote:
+                messages.append(
+                    "Data destination: Remote service. The transcript, recognition language, profile name, profile context, and terms are passed to this CLI and may leave this Mac."
+                )
+            case .unknown:
+                messages.append(
+                    "Data destination: Unknown. The transcript, recognition language, profile name, profile context, and terms are passed to this CLI and may leave this Mac. Review the command before continuing."
+                )
+            }
+            if preset.destination != .local,
+               selection.approvedPostprocessorRevision != preset.reviewRevision {
+                messages.append(
+                    "This exact command revision requires approval before it can run."
+                )
+            }
+            messages.append("Automatic Enter is disabled whenever CLI post-processing is selected.")
+        }
+        return messages.joined(separator: " ")
+    }
+
+    private func enhancementMessageColor(
+        for selection: EnhancementSelection
+    ) -> NSColor {
+        guard let presetID = selection.postprocessing.presetID,
+              let preset = enhancementCatalog.postprocessors[presetID] else {
+            return selection.postprocessing.isCLI ? .systemOrange : .secondaryLabelColor
+        }
+        return preset.destination == .local ? .secondaryLabelColor : .systemOrange
+    }
+
+    private func reconcileDraftPostprocessorApproval() {
+        let selection = editorState.draftSettings.enhancement
+        guard selection.approvedPostprocessorRevision != nil else {
+            return
+        }
+        let currentRevision: String?
+        if let presetID = selection.postprocessing.presetID,
+           let preset = enhancementCatalog.postprocessors[presetID],
+           preset.destination != .local {
+            currentRevision = preset.reviewRevision
+        } else {
+            currentRevision = nil
+        }
+        guard selection.approvedPostprocessorRevision != currentRevision else {
+            return
+        }
+        // Preserve the stale baseline value. Clearing only the draft marks
+        // Settings dirty and gives the user a one-click review-and-save path.
+        editorState.draftSettings.enhancement
+            .approvedPostprocessorRevision = nil
+    }
+
     private func renderRecording() {
         let settings = editorState.draftSettings
         silenceAutoStopCheckbox.state = settings.silenceAutoStopEnabled ? .on : .off
@@ -752,6 +976,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             enginePopup,
             modelPopup,
             languagePopup,
+            profilePopup,
+            postprocessingPopup,
             silenceAutoStopCheckbox,
             microphonePopup,
             outputModePopup,
@@ -763,12 +989,24 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             runtimeControlsEnabled && onRecordPrimaryHotkey != nil
         recordSubmitHotkeyButton.isEnabled =
             runtimeControlsEnabled && onRecordSubmitHotkey != nil
+        newProfileButton.isEnabled =
+            runtimeControlsEnabled && onSaveProfile != nil
+        editProfileButton.isEnabled =
+            runtimeControlsEnabled
+            && onSaveProfile != nil
+            && editorState.draftSettings.enhancement.profileID.flatMap {
+                enhancementCatalog.profiles[$0]
+            } != nil
         launchAtLoginCheckbox.isEnabled = !isSaving
         cancelButton.isEnabled = !isSaving
 
         busyMessageLabel.isHidden = !isBusy
         if let issue = editorState.validationIssue {
             validationMessageLabel.stringValue = issue.message
+            validationMessageLabel.isHidden = false
+        } else if !enhancementConfigurationFitsBudget {
+            validationMessageLabel.stringValue =
+                "The selected profile and post-processor are too large to use together. Reduce profile terms or context, or shorten the CLI arguments and environment."
             validationMessageLabel.isHidden = false
         } else if hasSaveError {
             validationMessageLabel.isHidden = false
@@ -780,8 +1018,61 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         saveButton.isEnabled =
             !isSaving
             && onSave != nil
-            && editorState.canSave(isBusy: isBusy)
+            && canSaveCurrentDraft
+            && enhancementConfigurationFitsBudget
         updateWindowSizeConstraints()
+    }
+
+    private var requiresPostprocessorConsent: Bool {
+        let selection = editorState.draftSettings.enhancement
+        guard let presetID = selection.postprocessing.presetID,
+              let preset = enhancementCatalog.postprocessors[presetID],
+              preset.destination != .local else {
+            return false
+        }
+        return selection.approvedPostprocessorRevision != preset.reviewRevision
+    }
+
+    private var canSaveCurrentDraft: Bool {
+        guard editorState.validationIssue == nil else {
+            return false
+        }
+        if requiresPostprocessorConsent {
+            return !isBusy
+        }
+        return editorState.canSave(isBusy: isBusy)
+    }
+
+    private var enhancementConfigurationFitsBudget: Bool {
+        let selection = editorState.draftSettings.enhancement
+        let profile = selection.profileID.flatMap {
+            enhancementCatalog.profiles[$0]
+        }
+        switch selection.postprocessing {
+        case .off:
+            return EnhancementCatalogLimits.enhancementPayloadFitsBudget(
+                profile: profile,
+                preset: nil
+            )
+        case .dictionary:
+            return EnhancementCatalogLimits.enhancementPayloadFitsBudget(
+                profile: profile,
+                preset: nil,
+                includesDictionaryPostprocessor: true
+            )
+        case .preset(let id):
+            if let preset = enhancementCatalog.postprocessors[id] {
+                return EnhancementCatalogLimits.enhancementPayloadFitsBudget(
+                    profile: profile,
+                    preset: preset
+                )
+            }
+            return EnhancementCatalogLimits.enhancementPayloadFitsBudget(
+                profile: profile,
+                preset: nil,
+                includesDictionaryPostprocessor: true
+            )
+        }
     }
 
     private func updateWindowSizeConstraints() {
@@ -921,6 +1212,81 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         didEdit()
     }
 
+    @objc private func profileChanged() {
+        guard profileChoices.indices.contains(profilePopup.indexOfSelectedItem) else {
+            return
+        }
+        editorState.draftSettings.enhancement.profileID =
+            profileChoices[profilePopup.indexOfSelectedItem]
+        didEdit()
+    }
+
+    @objc private func postprocessingChanged() {
+        guard postprocessingChoices.indices.contains(postprocessingPopup.indexOfSelectedItem) else {
+            return
+        }
+        let newSelection =
+            postprocessingChoices[postprocessingPopup.indexOfSelectedItem]
+        if newSelection != editorState.draftSettings.enhancement.postprocessing {
+            editorState.draftSettings.enhancement.postprocessing = newSelection
+            editorState.draftSettings.enhancement.approvedPostprocessorRevision = nil
+        }
+        didEdit()
+    }
+
+    @objc private func createProfile() {
+        presentProfileEditor(profile: nil, expectedFingerprint: nil)
+    }
+
+    @objc private func editProfile() {
+        guard let profileID = editorState.draftSettings.enhancement.profileID,
+              let profile = enhancementCatalog.profiles[profileID] else {
+            return
+        }
+        presentProfileEditor(
+            profile: profile,
+            expectedFingerprint: enhancementCatalog.fingerprints.profiles[profileID]
+        )
+    }
+
+    private func presentProfileEditor(
+        profile: EnhancementProfile?,
+        expectedFingerprint: EnhancementFileFingerprint?
+    ) {
+        guard profileEditorWindowController == nil,
+              let onSaveProfile,
+              let parentWindow = window else {
+            return
+        }
+        let editor = ProfileEditorWindowController(
+            profile: profile,
+            expectedFingerprint: expectedFingerprint
+        )
+        editor.onSave = onSaveProfile
+        editor.onSaved = { [weak self] catalog, profileID in
+            guard let self else {
+                return
+            }
+            self.enhancementCatalog = catalog
+            self.editorState.draftSettings.enhancement.profileID = profileID
+            self.didEdit()
+        }
+        editor.onDismiss = { [weak self, weak editor] in
+            guard let self else {
+                return
+            }
+            if let editorWindow = editor?.window,
+               parentWindow.attachedSheet === editorWindow {
+                parentWindow.endSheet(editorWindow)
+            }
+            self.profileEditorWindowController = nil
+        }
+        profileEditorWindowController = editor
+        if let editorWindow = editor.window {
+            parentWindow.beginSheet(editorWindow)
+        }
+    }
+
     @objc private func silenceAutoStopChanged() {
         editorState.draftSettings.silenceAutoStopEnabled =
             silenceAutoStopCheckbox.state == .on
@@ -972,8 +1338,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func save() {
         guard !isSaving,
-              editorState.canSave(isBusy: isBusy),
-              let onSave else {
+              canSaveCurrentDraft,
+              enhancementConfigurationFitsBudget,
+              let onSave,
+              confirmExternalDestinationIfNeeded() else {
             return
         }
         editorState.normalizeDraft()
@@ -1009,6 +1377,64 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                 "Could not save settings: \(error.localizedDescription)"
         }
         render()
+    }
+
+    private func confirmExternalDestinationIfNeeded() -> Bool {
+        guard let presetID = editorState.draftSettings.enhancement.postprocessing.presetID,
+              let preset = enhancementCatalog.postprocessors[presetID],
+              preset.destination != .local else {
+            return true
+        }
+        let revision = preset.reviewRevision
+        if editorState.draftSettings.enhancement.approvedPostprocessorRevision
+            == revision {
+            return true
+        }
+        guard let informativeText = Self.externalDestinationConsentText(
+            for: preset
+        ) else {
+            return true
+        }
+        let confirmed: Bool
+        if let onConfirmExternalDestination {
+            confirmed = onConfirmExternalDestination(preset, informativeText)
+        } else {
+            let alert = NSAlert()
+            alert.alertStyle = .warning
+            switch preset.destination {
+            case .remote:
+                alert.messageText = "Allow Remote Post-Processing?"
+            case .unknown:
+                alert.messageText = "Allow Post-Processing With an Unknown Destination?"
+            case .local:
+                return true
+            }
+            alert.informativeText = informativeText
+            alert.addButton(withTitle: "Allow and Save")
+            alert.addButton(withTitle: "Cancel")
+            confirmed = alert.runModal() == .alertFirstButtonReturn
+        }
+        guard confirmed else {
+            return false
+        }
+        editorState.draftSettings.enhancement.approvedPostprocessorRevision =
+            revision
+        return true
+    }
+
+    static func externalDestinationConsentText(
+        for preset: EnhancementPostprocessorPreset
+    ) -> String? {
+        let dataNotice =
+            "The transcript, recognition language, profile name, profile context, and terms are passed to this CLI and may leave this Mac."
+        switch preset.destination {
+        case .remote:
+            return "\"\(preset.displayName)\" uses a remote service. \(dataNotice)"
+        case .unknown:
+            return "The destination for \"\(preset.displayName)\" could not be verified. \(dataNotice) Review its local configuration before continuing."
+        case .local:
+            return nil
+        }
     }
 
     private func confirmDiscardBeforeClosing() {

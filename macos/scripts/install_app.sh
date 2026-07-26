@@ -246,6 +246,7 @@ EXECUTABLE="$(/usr/bin/find "$SWIFT_DIR/.build" -path "*/release/zen-whisper" -t
 
 /bin/cp "$BACKEND_DIR/src/zen_whisper_mac_backend/resources/model_registry.json" "$APP_STAGING/Contents/Resources/backend/model_registry.json"
 /bin/cp "$BACKEND_DIR/src/zen_whisper_mac_backend/resources/model_registry.json" "$APP_STAGING/Contents/Resources/model_registry.json"
+/bin/cp "$SWIFT_DIR/ZenWhisper/Resources/postprocessors.default.json" "$APP_STAGING/Contents/Resources/postprocessors.default.json"
 /bin/cp "$BUILD_DIR"/backend-dist/zen_whisper_mac_backend-*.whl "$APP_STAGING/Contents/Resources/backend/"
 /bin/cp "$BUILD_DIR/requirements-mlx.txt" "$APP_STAGING/Contents/Resources/backend/requirements-mlx.txt"
 /bin/cp "$REPO_ROOT/.mise.toml" "$APP_STAGING/Contents/Resources/backend/.mise.toml"

@@ -4,7 +4,6 @@ enum BackendClientError: Error {
     case backendPythonMissing(URL)
     case processAlreadyRunning
     case processNotRunning
-    case missingText
     case healthTimeout(String)
     case staleSocketRemovalFailed(String)
     case authTokenWriteFailed(String)
@@ -29,6 +28,9 @@ struct BackendStopResult: Equatable {
 }
 
 final class BackendClient: @unchecked Sendable {
+    static let recognitionTimeoutSeconds: TimeInterval = 600
+    static let responseGraceSeconds: TimeInterval = 15
+
     private let paths: AppPaths
     private var process: Process?
     private let authToken = "\(UUID().uuidString)-\(UUID().uuidString)"
@@ -180,18 +182,40 @@ final class BackendClient: @unchecked Sendable {
         _ = try send(request, expectedType: "ready", timeoutSeconds: 300)
     }
 
-    func transcribe(audioURL: URL, engine: String, model: String, language: String) throws -> String {
+    func transcribe(
+        audioURL: URL,
+        engine: String,
+        model: String,
+        language: String,
+        profile: EnhancementProfile? = nil,
+        postprocessor: BackendPostprocessorRequest = .off
+    ) throws -> BackendTranscriptionResult {
         let request = BackendRequest.transcribe(
             audioPath: audioURL.path,
             engine: engine,
             model: model,
-            language: language
+            language: language,
+            profile: profile,
+            postprocessor: postprocessor
         )
-        let response = try send(request, expectedType: "result", timeoutSeconds: 600)
-        guard let text = response["text"] as? String else {
-            throw BackendClientError.missingText
-        }
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let response = try send(
+            request,
+            expectedType: "result",
+            timeoutSeconds: Self.transcriptionTimeout(postprocessor: postprocessor)
+        )
+        return try decodeBackendTranscriptionResult(
+            response,
+            requireEnhancementMetadata:
+                profile != nil || postprocessor.requestsStructuredEnhancementResponse
+        )
+    }
+
+    static func transcriptionTimeout(
+        postprocessor: BackendPostprocessorRequest
+    ) -> TimeInterval {
+        recognitionTimeoutSeconds
+            + postprocessor.additionalClientTimeoutSeconds
+            + responseGraceSeconds
     }
 
     private func send(

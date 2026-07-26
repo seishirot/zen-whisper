@@ -1,7 +1,7 @@
 import Darwin
 import Foundation
 
-enum UnixSocketError: Error {
+enum UnixSocketError: Error, Equatable {
     case pathTooLong
     case socketFailed(Int32)
     case connectFailed(Int32)
@@ -9,16 +9,19 @@ enum UnixSocketError: Error {
     case writeFailed(Int32)
     case readFailed(Int32)
     case emptyResponse
+    case requestTooLarge
     case responseTooLarge
 }
 
 struct UnixSocketClient {
+    static let maxRequestBytes = 524_288
     static let maxResponseBytes = 1_048_576
 
     let socketPath: String
     var timeoutSeconds: TimeInterval = 30
 
     func request(_ message: [String: Any]) throws -> [String: Any] {
+        let payload = try Self.encodeRequest(message)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw UnixSocketError.socketFailed(errno)
@@ -59,8 +62,6 @@ struct UnixSocketClient {
             throw UnixSocketError.connectFailed(errno)
         }
 
-        var payload = try JSONSerialization.data(withJSONObject: message)
-        payload.append(0x0A)
         try payload.withUnsafeBytes { bytes in
             var written = 0
             while written < payload.count {
@@ -102,5 +103,14 @@ struct UnixSocketClient {
             throw UnixSocketError.emptyResponse
         }
         return try decodeBackendResponseObject(response)
+    }
+
+    static func encodeRequest(_ message: [String: Any]) throws -> Data {
+        var payload = try JSONSerialization.data(withJSONObject: message)
+        payload.append(0x0A)
+        guard payload.count <= maxRequestBytes else {
+            throw UnixSocketError.requestTooLarge
+        }
+        return payload
     }
 }

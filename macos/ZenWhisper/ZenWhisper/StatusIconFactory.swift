@@ -28,7 +28,8 @@ struct StatusIconFactory {
             return .processing
         case .copied:
             return .copied
-        case .copySkipped, .copyFailed, .modelUnavailable, .backendRepairRequired, .microphoneError,
+        case .copySkipped, .copyFailed, .enhancementWarning, .modelUnavailable,
+             .backendRepairRequired, .microphoneError,
              .hotkeyError, .appSignatureChanged, .error:
             return .warning
         }

@@ -158,7 +158,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         switch state {
         case .preloading, .transcribing, .repairingBackend:
             return true
-        case .idle, .inputWaiting, .pasteUnavailable, .recording, .copied, .copySkipped, .copyFailed, .modelUnavailable,
+        case .idle, .inputWaiting, .pasteUnavailable, .recording, .copied, .copySkipped,
+             .copyFailed, .enhancementWarning, .modelUnavailable,
              .backendRepairRequired, .microphoneError, .hotkeyError, .appSignatureChanged, .error:
             return false
         }
@@ -514,6 +515,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             return "Copy Skipped: \(reason)"
         case .copyFailed(let message):
             return "Copy Failed: \(StatusText.visibleErrorSummary(message))"
+        case .enhancementWarning(let message):
+            return "Enhancement Fallback: \(message)"
         case .modelUnavailable(let message):
             return "Model Not Available: \(StatusText.visibleErrorSummary(message))"
         case .backendRepairRequired(let message):
@@ -540,7 +543,8 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     private func canRetryPreload(_ state: AppState) -> Bool {
         switch state {
-        case .modelUnavailable, .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed:
+        case .modelUnavailable, .inputWaiting, .pasteUnavailable, .copied, .copySkipped,
+             .copyFailed, .enhancementWarning:
             return true
         case .idle, .recording, .preloading, .transcribing, .backendRepairRequired,
              .repairingBackend, .microphoneError, .hotkeyError, .appSignatureChanged, .error:
@@ -627,7 +631,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             }
             return ("Accept Signature Change", .acceptSignatureChange)
         case .idle, .inputWaiting, .recording, .preloading, .transcribing, .copied,
-             .copySkipped, .copyFailed, .repairingBackend, .hotkeyError, .error:
+             .copySkipped, .copyFailed, .enhancementWarning, .repairingBackend,
+             .hotkeyError, .error:
             return nil
         }
     }

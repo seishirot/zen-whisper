@@ -1,5 +1,44 @@
 import Foundation
 
+enum BackendPostprocessorRequest: Equatable, Sendable {
+    case off
+    case dictionary
+    case preset(EnhancementPostprocessorPreset)
+
+    static let maximumPresetTimeoutSeconds: TimeInterval =
+        EnhancementCatalogLimits.maximumPresetTimeoutSeconds
+
+    var requestsStructuredEnhancementResponse: Bool {
+        self != .off
+    }
+
+    var additionalClientTimeoutSeconds: TimeInterval {
+        guard case .preset(let preset) = self else {
+            return 0
+        }
+        let boundedPresetTimeout = min(
+            max(0, preset.timeoutSeconds),
+            Self.maximumPresetTimeoutSeconds
+        )
+        let preflightTimeout: TimeInterval = preset.preflightExecutable.isEmpty ? 0 : 10
+        return preflightTimeout + boundedPresetTimeout
+    }
+
+    fileprivate var backendPayload: [String: Any]? {
+        switch self {
+        case .off:
+            return nil
+        case .dictionary:
+            return ["mode": "dictionary"]
+        case .preset(let preset):
+            return [
+                "mode": "preset",
+                "preset": preset.backendPayload
+            ]
+        }
+    }
+}
+
 struct BackendRequest {
     static func health() -> [String: Any] {
         ["type": "health", "request_id": UUID().uuidString]
@@ -15,8 +54,15 @@ struct BackendRequest {
         ]
     }
 
-    static func transcribe(audioPath: String, engine: String, model: String, language: String) -> [String: Any] {
-        [
+    static func transcribe(
+        audioPath: String,
+        engine: String,
+        model: String,
+        language: String,
+        profile: EnhancementProfile? = nil,
+        postprocessor: BackendPostprocessorRequest = .off
+    ) -> [String: Any] {
+        var request: [String: Any] = [
             "type": "transcribe",
             "request_id": UUID().uuidString,
             "audio_path": audioPath,
@@ -24,6 +70,13 @@ struct BackendRequest {
             "model": model,
             "language": language
         ]
+        if let profile {
+            request["profile"] = profile.backendPayload
+        }
+        if let postprocessorPayload = postprocessor.backendPayload {
+            request["postprocessor"] = postprocessorPayload
+        }
+        return request
     }
 
     static func shutdown() -> [String: Any] {
@@ -31,13 +84,45 @@ struct BackendRequest {
     }
 }
 
-enum BackendProtocolError: Error, Equatable {
+enum BackendProtocolError: Error, Equatable, Sendable {
     case invalidJSON
     case invalidBackendError(String)
+    case invalidTranscriptionResult(String)
     case backendError(code: String, message: String, recoverable: Bool)
     case unexpectedResponse(String)
     case requestIDMismatch(expected: String, actual: String?)
     case protocolMismatch(expected: Int, actual: Int?)
+}
+
+enum BackendEnhancementOutcome: String, Equatable, Sendable {
+    case raw
+    case dictionary
+    case cli
+    case cliFallback = "cli_fallback"
+}
+
+struct BackendEnhancementResult: Equatable, Sendable {
+    let outcome: BackendEnhancementOutcome
+    let cliSelected: Bool
+    let succeeded: Bool
+    let applied: Bool
+    let warningCode: String?
+    let error: String?
+
+    static let legacyRaw = BackendEnhancementResult(
+        outcome: .raw,
+        cliSelected: false,
+        succeeded: true,
+        applied: false,
+        warningCode: nil,
+        error: nil
+    )
+}
+
+struct BackendTranscriptionResult: Equatable, Sendable {
+    let text: String
+    let hintsApplied: Bool
+    let enhancement: BackendEnhancementResult
 }
 
 private let nonRecoverableBackendErrorCodes: Set<String> = [
@@ -94,6 +179,130 @@ func validateBackendResponse(
         throw BackendProtocolError.unexpectedResponse(type)
     }
     return response
+}
+
+func decodeBackendTranscriptionResult(
+    _ response: [String: Any],
+    requireEnhancementMetadata: Bool = false
+) throws -> BackendTranscriptionResult {
+    guard let text = response["text"] as? String else {
+        throw BackendProtocolError.invalidTranscriptionResult("missing text")
+    }
+
+    if requireEnhancementMetadata,
+       response["hints_applied"] == nil || response["enhancement"] == nil {
+        throw BackendProtocolError.invalidTranscriptionResult(
+            "missing enhancement metadata"
+        )
+    }
+
+    let hintsApplied: Bool
+    if let value = response["hints_applied"] {
+        guard let decoded = value as? Bool else {
+            throw BackendProtocolError.invalidTranscriptionResult("invalid hints_applied")
+        }
+        hintsApplied = decoded
+    } else {
+        hintsApplied = false
+    }
+
+    let enhancement: BackendEnhancementResult
+    if let value = response["enhancement"] {
+        guard let object = value as? [String: Any] else {
+            throw BackendProtocolError.invalidTranscriptionResult("invalid enhancement")
+        }
+        enhancement = try decodeBackendEnhancementResult(object)
+    } else {
+        enhancement = .legacyRaw
+    }
+
+    return BackendTranscriptionResult(
+        text: text.trimmingCharacters(in: .whitespacesAndNewlines),
+        hintsApplied: hintsApplied,
+        enhancement: enhancement
+    )
+}
+
+private func decodeBackendEnhancementResult(
+    _ object: [String: Any]
+) throws -> BackendEnhancementResult {
+    guard let outcomeValue = object["outcome"] as? String,
+          let outcome = BackendEnhancementOutcome(rawValue: outcomeValue) else {
+        throw BackendProtocolError.invalidTranscriptionResult("invalid enhancement outcome")
+    }
+    guard let cliSelected = object["cli_selected"] as? Bool else {
+        throw BackendProtocolError.invalidTranscriptionResult("invalid enhancement cli_selected")
+    }
+    guard let succeeded = object["succeeded"] as? Bool else {
+        throw BackendProtocolError.invalidTranscriptionResult("invalid enhancement succeeded")
+    }
+    guard let applied = object["applied"] as? Bool else {
+        throw BackendProtocolError.invalidTranscriptionResult("invalid enhancement applied")
+    }
+
+    let warningCode = try optionalNonemptyString(
+        object["warning_code"],
+        field: "enhancement warning_code"
+    )
+    let error = try optionalNonemptyString(
+        object["error"],
+        field: "enhancement error"
+    )
+
+    let outcomeSelectsCLI = outcome == .cli || outcome == .cliFallback
+    guard cliSelected == outcomeSelectsCLI else {
+        throw BackendProtocolError.invalidTranscriptionResult(
+            "contradictory enhancement cli_selected"
+        )
+    }
+    switch outcome {
+    case .raw:
+        guard succeeded, !applied, warningCode == nil, error == nil else {
+            throw BackendProtocolError.invalidTranscriptionResult(
+                "contradictory raw enhancement"
+            )
+        }
+    case .dictionary:
+        guard succeeded, warningCode == nil, error == nil else {
+            throw BackendProtocolError.invalidTranscriptionResult(
+                "contradictory dictionary enhancement"
+            )
+        }
+    case .cli:
+        guard succeeded, applied, warningCode == nil, error == nil else {
+            throw BackendProtocolError.invalidTranscriptionResult(
+                "contradictory cli enhancement"
+            )
+        }
+    case .cliFallback:
+        guard !succeeded, applied, warningCode != nil, error != nil else {
+            throw BackendProtocolError.invalidTranscriptionResult(
+                "contradictory cli fallback enhancement"
+            )
+        }
+    }
+
+    return BackendEnhancementResult(
+        outcome: outcome,
+        cliSelected: cliSelected,
+        succeeded: succeeded,
+        applied: applied,
+        warningCode: warningCode,
+        error: error
+    )
+}
+
+private func optionalNonemptyString(
+    _ value: Any?,
+    field: String
+) throws -> String? {
+    guard let value, !(value is NSNull) else {
+        return nil
+    }
+    guard let string = value as? String, !string.isEmpty else {
+        throw BackendProtocolError.invalidTranscriptionResult("invalid \(field)")
+    }
+    return string
 }
 
 private func backendError(from response: [String: Any]) throws -> BackendProtocolError {

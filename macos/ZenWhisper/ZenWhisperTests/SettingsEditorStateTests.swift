@@ -161,6 +161,7 @@ final class SettingsEditorStateTests: XCTestCase {
             .copied(pasteDispatched: false, reason: nil),
             .copySkipped("reason"),
             .copyFailed("reason"),
+            .enhancementWarning("reason"),
             .modelUnavailable("reason"),
             .backendRepairRequired("reason"),
             .microphoneError("reason"),

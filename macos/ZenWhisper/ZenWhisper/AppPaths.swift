@@ -65,6 +65,14 @@ struct AppPaths {
         appSupport.appendingPathComponent("recordings", isDirectory: true)
     }
 
+    var profilesDirectory: URL {
+        appSupport.appendingPathComponent("profiles", isDirectory: true)
+    }
+
+    var postprocessorsFile: URL {
+        appSupport.appendingPathComponent("postprocessors.json")
+    }
+
     var huggingFaceHome: URL {
         appSupport.appendingPathComponent("models/huggingface", isDirectory: true)
     }
@@ -76,6 +84,7 @@ struct AppPaths {
         try createPrivateRuntimeDirectory(runtimeDirectory)
         try validateSocketPathLength()
         try createPrivateDirectory(recordings)
+        try createPrivateDirectory(profilesDirectory)
         try createPrivateDirectory(huggingFaceHome)
         return deleteStaleRecordings()
     }

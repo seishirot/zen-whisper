@@ -8,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var registry: ModelRegistry!
     private var settingsStore: SettingsStore!
     private var settings: SettingsSnapshot!
+    private var enhancementCatalogStore: EnhancementCatalogStore!
+    private var enhancementCatalog = EnhancementCatalogSnapshot()
     private var statusController: StatusController!
     private var backend: BackendClient!
     private var recorder: AudioRecorder!
@@ -28,11 +30,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var stateBeforeHotkeyError: AppState?
     private var timer: Timer?
     private var statusResetTimer: Timer?
+    private var pendingEnhancementWarningMessage: String?
     private var pasteTargetCacheTimer: Timer?
     private var pasteTargetAtRecordingStart: PasteTargetSnapshot?
     private var pasteApplicationAtRecordingStart: PasteApplicationTarget?
     private var lastKnownPasteTarget: PasteTargetSnapshot?
     private var lastKnownPasteTargetDate: Date?
+    private var enhancementCatalogForCurrentRecording: EnhancementCatalogSnapshot?
     private var startupDiagnostics: [String] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -47,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             registry = try ModelRegistry.loadDefault()
             settingsStore = SettingsStore(registry: registry)
             settings = settingsStore.load()
+            enhancementCatalogStore = EnhancementCatalogStore(paths: paths)
+            refreshEnhancementCatalog()
             backend = BackendClient(paths: paths)
             recorder = AudioRecorder(paths: paths)
             statusController = StatusController()
@@ -304,6 +310,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func beginRecording() {
         do {
+            pendingEnhancementWarningMessage = nil
+            refreshEnhancementCatalog()
+            enhancementCatalogForCurrentRecording = enhancementCatalog
+            synchronizeSettingsWindow()
             pasteApplicationAtRecordingStart = capturePasteApplicationTarget(stage: "recording start")
             pasteTargetAtRecordingStart = capturePasteTarget(stage: "recording start", allowCached: true)
             try recorder.start(deviceUID: settings.microphoneDeviceUID)
@@ -319,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             timer = recordingTimer
             RunLoop.main.add(recordingTimer, forMode: .common)
         } catch {
+            enhancementCatalogForCurrentRecording = nil
             setState(.microphoneError(String(describing: error)))
         }
     }
@@ -339,6 +350,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func stopRecordingAndTranscribe(submitAfterPaste: Bool = false) {
         timer?.invalidate()
         submitAfterPasteForCurrentRecording = false
+        let transcriptionCatalog = enhancementCatalogForCurrentRecording ?? enhancementCatalog
+        enhancementCatalogForCurrentRecording = nil
         let stopApplication = capturePasteApplicationTarget(stage: "recording stop")
         let stopTarget = capturePasteTarget(stage: "recording stop", allowCached: true)
         do {
@@ -356,25 +369,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let engine = settings.engine
             let model = registry.validModel(settings.lastModelByEngine[engine], for: engine)
             let language = settings.language
+            let enhancementRequest = EnhancementRequestResolver.resolve(
+                selection: settings.enhancement,
+                catalog: transcriptionCatalog
+            )
+            if let warningCode = enhancementRequest.warningCode {
+                logInfo("enhancement request warning code=\(warningCode)")
+            }
+            let shouldSubmitAfterPaste = Self.shouldSubmitAfterPaste(
+                requested: submitAfterPaste,
+                cliWasSelected: enhancementRequest.cliWasSelected
+            )
+            let profileHadRecognitionHints = enhancementRequest.profile.map {
+                !$0.context.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !$0.terms.isEmpty
+            } ?? false
             let backend = self.backend!
             DispatchQueue.global(qos: .userInitiated).async {
                 do {
-                    let text = try backend.transcribe(
+                    let result = try backend.transcribe(
                         audioURL: audioURL,
                         engine: engine,
                         model: model,
-                        language: language
+                        language: language,
+                        profile: enhancementRequest.profile,
+                        postprocessor: enhancementRequest.postprocessor
                     )
                     DispatchQueue.main.async {
                         self.removeRecordingFile(audioURL, context: "post-transcription recording cleanup")
+                        self.logEnhancementResult(result.enhancement)
                         self.handleTranscript(
-                            text,
+                            result.text,
                             startTarget: startTarget,
                             stopTarget: stopTarget,
                             startApplication: startApplication,
                             stopApplication: stopApplication,
-                            submitAfterPaste: submitAfterPaste
+                            submitAfterPaste: shouldSubmitAfterPaste
                         )
+                        let warningCode = Self.preferredEnhancementWarningCode(
+                            requestWarningCode: enhancementRequest.warningCode,
+                            backendWarningCode: result.enhancement.warningCode,
+                            engine: engine,
+                            profileHadRecognitionHints: profileHadRecognitionHints,
+                            hintsApplied: result.hintsApplied
+                        )
+                        if let warningCode {
+                            self.enqueueEnhancementWarning(code: warningCode)
+                        }
                     }
                 } catch {
                     DispatchQueue.main.async {
@@ -710,7 +751,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .copied = state else {
             return
         }
-        setState(readyState())
+        presentPendingEnhancementWarningOrReady()
     }
 
     private func removeRecordingFile(_ url: URL, context: String) {
@@ -739,7 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard case .copySkipped = state else {
             return
         }
-        setState(readyState())
+        presentPendingEnhancementWarningOrReady()
     }
 
     private func setCopyFailedTransient(_ reason: String) {
@@ -759,6 +800,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func resetCopyFailedState(_ timer: Timer) {
         guard case .copyFailed = state else {
+            return
+        }
+        presentPendingEnhancementWarningOrReady()
+    }
+
+    private func enqueueEnhancementWarning(code: String) {
+        let message = Self.visibleEnhancementWarningMessage(code: code)
+        logInfo("showing enhancement fallback warning")
+        switch state {
+        case .copied, .copySkipped, .copyFailed:
+            pendingEnhancementWarningMessage = message
+        default:
+            pendingEnhancementWarningMessage = nil
+            setEnhancementWarningTransient(message)
+        }
+    }
+
+    private func presentPendingEnhancementWarningOrReady() {
+        guard let message = pendingEnhancementWarningMessage else {
+            setState(readyState())
+            return
+        }
+        pendingEnhancementWarningMessage = nil
+        setEnhancementWarningTransient(message)
+    }
+
+    private func setEnhancementWarningTransient(_ message: String) {
+        setState(.enhancementWarning(message))
+        statusResetTimer?.invalidate()
+        let resetTimer = Timer(
+            timeInterval: 2.4,
+            target: self,
+            selector: #selector(resetEnhancementWarningState(_:)),
+            userInfo: nil,
+            repeats: false
+        )
+        statusResetTimer = resetTimer
+        RunLoop.main.add(resetTimer, forMode: .common)
+    }
+
+    @objc private func resetEnhancementWarningState(_ timer: Timer) {
+        guard case .enhancementWarning = state else {
             return
         }
         setState(readyState())
@@ -904,6 +987,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         rememberPasteTarget(stage: "settings open")
         refreshLaunchAtLoginState()
+        refreshEnhancementCatalog()
 
         let controller: SettingsWindowController
         if let settingsWindowController {
@@ -912,7 +996,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let newController = SettingsWindowController(
                 registry: registry,
                 settings: settings,
-                launchAtLoginStatus: launchAtLoginStatus
+                launchAtLoginStatus: launchAtLoginStatus,
+                enhancementCatalog: enhancementCatalog
             )
             newController.onSave = { [weak self] request in
                 guard let self else {
@@ -938,6 +1023,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             newController.onRequestAudioInputDevices = {
                 AudioDeviceManager.inputDevices()
             }
+            newController.onSaveProfile = { [weak self] profile, fingerprint in
+                guard let self, let store = self.enhancementCatalogStore else {
+                    return .failure(SettingsApplicationError.appUnavailable)
+                }
+                do {
+                    _ = try store.saveProfile(
+                        profile,
+                        expectedFingerprint: fingerprint
+                    )
+                    self.refreshEnhancementCatalog()
+                    return .success(self.enhancementCatalog)
+                } catch {
+                    return .failure(error)
+                }
+            }
             settingsWindowController = newController
             controller = newController
         }
@@ -956,7 +1056,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             authoritativeSettings: settings,
             launchAtLoginStatus: launchAtLoginStatus,
             audioInputDevices: AudioDeviceManager.inputDevices(),
-            isBusy: state.blocksSettingsChanges
+            isBusy: state.blocksSettingsChanges,
+            enhancementCatalog: enhancementCatalog
         )
     }
 
@@ -1428,7 +1529,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .restart:
             switch state {
             case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied,
-                 .copySkipped, .copyFailed, .microphoneError:
+                 .copySkipped, .copyFailed, .enhancementWarning, .microphoneError:
                 restartBackendForModelChange()
             case .idle, .recording, .preloading, .transcribing,
                  .backendRepairRequired, .repairingBackend, .hotkeyError,
@@ -1438,7 +1539,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .preload:
             switch state {
             case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied,
-                 .copySkipped, .copyFailed:
+                 .copySkipped, .copyFailed, .enhancementWarning:
                 preloadSelectedModel()
             case .idle, .recording, .preloading, .transcribing,
                  .backendRepairRequired, .repairingBackend, .microphoneError,
@@ -1496,7 +1597,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func saveSettingsAndPreloadSelectedModel() {
         saveSettingsOnly()
         switch state {
-        case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied, .copySkipped, .copyFailed:
+        case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied, .copySkipped,
+             .copyFailed, .enhancementWarning:
             preloadSelectedModel()
         case .idle, .recording, .preloading, .transcribing, .backendRepairRequired,
              .repairingBackend, .microphoneError, .hotkeyError, .appSignatureChanged, .error:
@@ -1507,7 +1609,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func saveSettingsAndRestartBackendForModelChange() {
         saveSettingsOnly()
         switch state {
-        case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied, .copySkipped, .copyFailed, .microphoneError:
+        case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied, .copySkipped,
+             .copyFailed, .enhancementWarning, .microphoneError:
             restartBackendForModelChange()
         case .idle, .recording, .preloading, .transcribing, .backendRepairRequired,
              .repairingBackend, .hotkeyError, .appSignatureChanged, .error:
@@ -1659,9 +1762,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if case .copied = newState {
         } else if case .copySkipped = newState {
         } else if case .copyFailed = newState {
+        } else if case .enhancementWarning = newState {
         } else {
             statusResetTimer?.invalidate()
             statusResetTimer = nil
+            pendingEnhancementWarningMessage = nil
         }
         state = newState
         statusController.update(state: newState)
@@ -1674,6 +1779,142 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             appLogger.info(message)
         } else {
             NSLog("zen-whisper: %@", message)
+        }
+    }
+
+    private func refreshEnhancementCatalog() {
+        guard let enhancementCatalogStore else {
+            return
+        }
+        enhancementCatalog = enhancementCatalogStore.load()
+        invalidateStalePostprocessorApprovalIfNeeded()
+        guard !enhancementCatalog.issues.isEmpty else {
+            return
+        }
+        let reasonCodes = Set(
+            enhancementCatalog.issues.map { $0.reason.rawValue }
+        ).sorted().joined(separator: ",")
+        logInfo(
+            "enhancement catalog loaded with issues count="
+                + "\(enhancementCatalog.issues.count) reasons=\(reasonCodes)"
+        )
+    }
+
+    private func invalidateStalePostprocessorApprovalIfNeeded() {
+        guard settings != nil,
+              settings.enhancement.approvedPostprocessorRevision != nil else {
+            return
+        }
+        guard !Self.postprocessorApprovalIsCurrent(
+            selection: settings.enhancement,
+            catalog: enhancementCatalog
+        ) else {
+            return
+        }
+        settings.enhancement.approvedPostprocessorRevision = nil
+        settingsStore.save(settings)
+        logInfo("invalidated stale postprocessor approval")
+    }
+
+    private func logEnhancementResult(_ result: BackendEnhancementResult) {
+        let allowedWarningCodes: Set<String> = [
+            "PREFLIGHT_FAILED",
+            "PREFLIGHT_TIMEOUT",
+            "EXECUTABLE_NOT_FOUND",
+            "CLI_LAUNCH_FAILED",
+            "CLI_CANCELLED",
+            "CLI_TIMEOUT",
+            "CLI_COMMUNICATION_FAILED",
+            "CLI_FAILED",
+            "CLI_OUTPUT_EMPTY",
+            "CLI_OUTPUT_TOO_LARGE"
+        ]
+        let warningCode: String
+        if let candidate = result.warningCode,
+           allowedWarningCodes.contains(candidate) {
+            warningCode = candidate
+        } else {
+            warningCode = result.warningCode == nil ? "none" : "UNKNOWN"
+        }
+        logInfo(
+            "enhancement result outcome=\(result.outcome.rawValue) "
+                + "cli_selected=\(result.cliSelected) "
+                + "succeeded=\(result.succeeded) "
+                + "applied=\(result.applied) "
+                + "warning_code=\(warningCode)"
+        )
+    }
+
+    nonisolated static func shouldSubmitAfterPaste(
+        requested: Bool,
+        cliWasSelected: Bool
+    ) -> Bool {
+        requested && !cliWasSelected
+    }
+
+    nonisolated static func postprocessorApprovalIsCurrent(
+        selection: EnhancementSelection,
+        catalog: EnhancementCatalogSnapshot
+    ) -> Bool {
+        guard case .preset(let presetID) = selection.postprocessing,
+              !catalog.blocksAllPostprocessors,
+              !catalog.blockedPostprocessorIDs.contains(presetID),
+              let preset = catalog.postprocessors[presetID],
+              preset.destination != .local else {
+            return false
+        }
+        return selection.approvedPostprocessorRevision == preset.reviewRevision
+    }
+
+    nonisolated static func preferredEnhancementWarningCode(
+        requestWarningCode: String?,
+        backendWarningCode: String?,
+        engine: String,
+        profileHadRecognitionHints: Bool,
+        hintsApplied: Bool
+    ) -> String? {
+        if let backendWarningCode {
+            return backendWarningCode
+        }
+        if let requestWarningCode {
+            return requestWarningCode
+        }
+        if engine == "mlx-whisper", profileHadRecognitionHints, !hintsApplied {
+            return "HINTS_NOT_APPLIED"
+        }
+        return nil
+    }
+
+    nonisolated static func visibleEnhancementWarningMessage(code: String) -> String {
+        switch code.uppercased() {
+        case "PROFILE_UNAVAILABLE":
+            return "Selected profile was unavailable; transcription continued without its hints."
+        case "POSTPROCESSOR_UNAVAILABLE":
+            return "Selected post-processor was unavailable; dictionary fallback was used."
+        case "POSTPROCESSOR_CONSENT_REQUIRED":
+            return "Post-processor needs confirmation; dictionary fallback was used."
+        case "POSTPROCESSOR_CATALOG_INVALID", "POSTPROCESSOR_BLOCKED":
+            return "Post-processor configuration was invalid; dictionary fallback was used."
+        case "ENHANCEMENT_CONFIGURATION_TOO_LARGE":
+            return "Enhancement configuration was too large; safe fallback was used."
+        case "PREFLIGHT_FAILED", "PREFLIGHT_TIMEOUT":
+            return "Post-processor readiness check failed; dictionary fallback was used."
+        case "EXECUTABLE_NOT_FOUND", "CLI_LAUNCH_FAILED":
+            return "Post-processor could not start; dictionary fallback was used."
+        case "CLI_TIMEOUT":
+            return "Post-processing timed out; dictionary fallback was used."
+        case "CLI_CANCELLED":
+            return "Post-processing was cancelled; dictionary fallback was used."
+        case "CLI_COMMUNICATION_FAILED", "CLI_FAILED":
+            return "Post-processing failed; dictionary fallback was used."
+        case "CLI_OUTPUT_EMPTY":
+            return "Post-processor returned no text; dictionary fallback was used."
+        case "CLI_OUTPUT_TOO_LARGE":
+            return "Post-processor output was too large; dictionary fallback was used."
+        case "HINTS_NOT_APPLIED":
+            return "Recognition hints were not applied; transcription continued safely."
+        default:
+            return "Enhancement could not be applied; safe fallback was used. See logs."
         }
     }
 
@@ -1773,7 +2014,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func shouldPollPasteTarget(in state: AppState) -> Bool {
         switch state {
-        case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed:
+        case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed,
+             .enhancementWarning:
             return true
         case .idle, .recording, .preloading, .transcribing, .modelUnavailable,
              .backendRepairRequired, .repairingBackend, .microphoneError,

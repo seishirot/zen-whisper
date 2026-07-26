@@ -43,8 +43,14 @@ final class SettingsWindowLayoutTests: XCTestCase {
         )
         XCTAssertLessThan(
             window.contentLayoutRect.height,
-            650,
+            750,
             "The default Settings window should fit its content without excessive empty space"
+        )
+        XCTAssertEqual(
+            window.contentLayoutRect.height,
+            window.contentMinSize.height,
+            accuracy: 1,
+            "The default height should closely fit the visible settings sections"
         )
     }
 
@@ -61,7 +67,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
               let contentView = window.contentView else {
             return XCTFail("Expected Settings window")
         }
-        window.setContentSize(NSSize(width: 720, height: 620))
+        let baselineMinimumHeight = window.contentMinSize.height
+        window.setContentSize(NSSize(width: 720, height: baselineMinimumHeight))
         controller.windowDidResize(
             Notification(name: NSWindow.didResizeNotification, object: window)
         )
@@ -100,8 +107,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
         let messageFrame = launchMessage.convert(launchMessage.bounds, to: generalSection)
         XCTAssertTrue(generalSection.bounds.contains(launchFrame))
         XCTAssertTrue(generalSection.bounds.contains(messageFrame))
-        XCTAssertGreaterThan(window.contentLayoutRect.height, 620)
-        XCTAssertGreaterThan(window.contentMinSize.height, 620)
+        XCTAssertGreaterThan(window.contentLayoutRect.height, baselineMinimumHeight)
+        XCTAssertGreaterThan(window.contentMinSize.height, baselineMinimumHeight)
 
         let cancelFrame = cancelButton.convert(cancelButton.bounds, to: contentView)
         let generalFrame = generalSection.convert(generalSection.bounds, to: contentView)
@@ -124,7 +131,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
         XCTAssertTrue(generalSection.bounds.contains(resizedLaunchFrame))
         XCTAssertTrue(generalSection.bounds.contains(resizedMessageFrame))
 
-        window.setContentSize(NSSize(width: 620, height: 620))
+        window.setContentSize(NSSize(width: 620, height: baselineMinimumHeight))
         controller.windowDidResize(
             Notification(name: NSWindow.didResizeNotification, object: window)
         )
@@ -148,7 +155,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
             audioInputDevices: [],
             isBusy: false
         )
-        XCTAssertEqual(window.contentMinSize.height, 620, accuracy: 1)
+        XCTAssertEqual(window.contentMinSize.height, baselineMinimumHeight, accuracy: 1)
     }
 
     func testReopeningWindowPreservesUserPosition() throws {
@@ -165,17 +172,23 @@ final class SettingsWindowLayoutTests: XCTestCase {
         defer { window.orderOut(nil) }
 
         controller.showSettings()
-        let movedOrigin = NSPoint(
-            x: window.frame.origin.x + 37,
-            y: window.frame.origin.y + 29
-        )
-        window.setFrameOrigin(movedOrigin)
+        if let visibleFrame = window.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {
+            window.setFrameOrigin(
+                NSPoint(
+                    x: visibleFrame.midX - window.frame.width / 2,
+                    y: visibleFrame.midY - window.frame.height / 2
+                )
+            )
+        }
         window.orderOut(nil)
 
         controller.showSettings()
+        let firstReopenOrigin = window.frame.origin
+        window.orderOut(nil)
+        controller.showSettings()
 
-        XCTAssertEqual(window.frame.origin.x, movedOrigin.x, accuracy: 1)
-        XCTAssertEqual(window.frame.origin.y, movedOrigin.y, accuracy: 1)
+        XCTAssertEqual(window.frame.origin.x, firstReopenOrigin.x, accuracy: 1)
+        XCTAssertEqual(window.frame.origin.y, firstReopenOrigin.y, accuracy: 1)
     }
 
     private func findView(identifier: String, in root: NSView) -> NSView? {

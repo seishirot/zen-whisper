@@ -240,6 +240,33 @@ def test_installer_resolves_swift_with_xcrun() -> None:
     assert "\nswift build " not in install_app
 
 
+def test_install_app_packages_bundled_postprocessor_catalog() -> None:
+    install_app = INSTALL_APP.read_text(encoding="utf-8")
+    catalog_store = (
+        REPO_ROOT
+        / "macos/ZenWhisper/ZenWhisper/EnhancementCatalogStore.swift"
+    ).read_text(encoding="utf-8")
+
+    copy_command = (
+        '/bin/cp "$SWIFT_DIR/ZenWhisper/Resources/postprocessors.default.json" '
+        '"$APP_STAGING/Contents/Resources/postprocessors.default.json"'
+    )
+    assert copy_command in install_app
+    assert install_app.index(copy_command) < install_app.index(
+        '/usr/bin/codesign --force --deep --sign "$IDENTITY" "$APP_TEMP"'
+    )
+    main_lookup = "postprocessorsURL(in: Bundle.main)"
+    assert main_lookup in catalog_store
+    resource_bundle_probe = 'let resourceBundleName = "ZenWhisper_ZenWhisper.bundle"'
+    assert resource_bundle_probe in catalog_store
+    assert "Bundle(url: candidate)" in catalog_store
+    assert catalog_store.index(main_lookup) < catalog_store.index(
+        resource_bundle_probe
+    )
+    assert "postprocessorsURL(in: Bundle.module)" not in catalog_store
+    assert "let bundles = [Bundle.main, Bundle.module]" not in catalog_store
+
+
 def test_native_installer_removes_legacy_python_launch_agent() -> None:
     install_app = INSTALL_APP.read_text(encoding="utf-8")
 

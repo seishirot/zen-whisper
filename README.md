@@ -170,10 +170,14 @@ Use the Windows tray icon or macOS menu bar item to:
 - Open `Settings…` to edit the native macOS app settings in one window. The
   existing menu items remain available for quick changes and stay synchronized
   with the window.
-- Select a domain profile independently from postprocessing (Windows/Python tray)
-- Select postprocessing: off, dictionary only, or a configured CLI preset (Windows/Python tray). The menu and tooltip keep `ローカル` / `外部送信` / `送信先不明` visible.
-- Open the structured settings window to edit app settings, profiles, and
-  arbitrary CLI postprocessors (Windows/Python tray)
+- Select a domain profile independently from postprocessing (Windows/Python
+  tray or macOS native Settings)
+- Select postprocessing: off, dictionary only, or a configured CLI preset
+  (Windows/Python tray or macOS native Settings). The UI keeps local, remote,
+  or unknown destination status visible before enabling a preset.
+- Open the structured settings window to edit app settings and profiles.
+  Windows/Python also edits arbitrary CLI definitions in the window; macOS
+  native reads trusted local definitions from its Application Support JSON.
 - Toggle sound feedback (Windows/Python tray only)
 - Register/unregister startup or Launch at Login
 - Quit
@@ -245,10 +249,14 @@ the Windows/Python CPU, CUDA, or Reazon K2 menu entries.
 
 Choose `Settings…` from the macOS status menu to edit the recording and submit
 hotkeys, language, MLX recognition engine and model, silence auto-stop,
-microphone, output mode, unverified paste fallback, and Launch at Login. The
-menu shortcuts remain available; changes saved from either surface update the
-other surface across restarts. Runtime settings use the shared macOS app
-preferences; Launch at Login is managed separately through its LaunchAgent.
+microphone, profile, postprocessing mode, output mode, unverified paste
+fallback, and Launch at Login. Profiles can be created or edited from the
+Enhancement section. Postprocessing can be off, dictionary-only, or one of the
+available CLI presets. The menu shortcuts remain available; changes saved from
+either surface update the other surface across restarts. Runtime selections use
+the shared macOS app preferences; profile/preset definitions use private files
+under Application Support, and Launch at Login is managed separately through
+its LaunchAgent.
 
 The window edits a snapshot. `Save` becomes available only after a real change,
 `Cancel` restores the last committed values, and closing a dirty window asks
@@ -262,15 +270,18 @@ the partial result and keeps only the failed Launch at Login change dirty for
 retry. An unreadable LaunchAgent is shown as `Needs Attention`/indeterminate
 instead of being treated as disabled; choosing On or Off replaces that state.
 
-A previously saved microphone that is currently disconnected remains selected
-and is shown as unavailable instead of being silently replaced. Choose `System
-Default` explicitly to clear that saved device. The device list is refreshed
-when the settings window becomes active. The native window supports keyboard
-navigation, VoiceOver labels, and resizing.
+A previously saved microphone, profile, or postprocessor that is currently
+unavailable remains selected and is shown as unavailable instead of being
+silently replaced. Choose `System Default` explicitly to clear a saved
+microphone; choose another profile or postprocessor to replace an unavailable
+selection. The device list is refreshed when the settings window becomes
+active. The native window supports keyboard navigation, VoiceOver labels, and
+resizing.
 
-Profiles, dictionary replacement, arbitrary CLI postprocessors, and Reazon K2
-remain outside the native macOS settings window. Configure those through the
-Windows/Python application where supported.
+MLX Whisper consumes profile context and terms as an initial prompt. MLX
+Qwen3-ASR does not currently accept profile hints; the Settings window states
+this explicitly, while dictionary and CLI postprocessing still work. Reazon K2
+remains Windows/Python-only.
 
 ### Profiles and optional postprocessing
 
@@ -283,15 +294,47 @@ profile can supply recognition hints while the raw ASR result is still pasted:
 - Reazon K2 does not consume recognition hints; use dictionary-only or CLI
   postprocessing when correcting its output
 
-This menu/config path currently applies to the Python application (primarily
-the Windows tray). The separate native macOS app has not yet been wired to
-these profile and command files.
+On Windows/Python, create and edit one profile per scene or project from
+`設定... > プロフィール`. The equivalent local file is
+`profiles/<id>.toml`; see `profiles/zen-whisper.toml.example`.
 
-Create and edit one profile per scene or project from `設定... >
-プロフィール`. The equivalent local file is `profiles/<id>.toml`; see
-`profiles/zen-whisper.toml.example`. Profile files are ignored by Git. Explicit
-`replace_from` entries are applied once, longest match first. `spoken` aliases
-are ASR hints and are not silently rewritten.
+On macOS native, use `Settings… > Enhancement > New…` or `Edit…`. Profiles are
+private JSON files in
+`~/Library/Application Support/zen-whisper/profiles/<id>.json`. The native app
+and Windows/Python implementation share field meanings and replacement
+semantics, but JSON and TOML files are intentionally not file-format
+compatible. A native profile has this shape:
+
+```json
+{
+  "version": 1,
+  "profile_id": "project",
+  "name": "Project",
+  "context": "Project-specific recognition context",
+  "terms": [
+    {
+      "canonical": "ZenWhisper",
+      "spoken": ["Zen Whisper"],
+      "replace_from": ["Zen Whisper"],
+      "description": "Application name"
+    }
+  ]
+}
+```
+
+Profile files are data-only and cannot define commands. Explicit
+`replace_from` entries are literal, case-sensitive replacements applied once,
+longest match first. `spoken` aliases are recognition hints and are never
+silently treated as replacements.
+
+The native loader accepts at most 256 terms per profile and 128 aliases in
+each `spoken` or `replace_from` list. Context is limited to 64 KiB, individual
+strings to 8 KiB, and a catalog document to 1 MiB. A selected profile plus its
+dictionary/CLI payload must remain within 256 KiB and 4,096 JSON values; the
+Settings window blocks oversized combinations before saving, while the runtime
+uses a visible safe fallback if files change afterward. Native CLI presets are
+also limited to 256 arguments, 128 environment entries, and a 300-second
+timeout.
 
 The bundled `postprocessors.default.toml` contains:
 
@@ -300,9 +343,17 @@ The bundled `postprocessors.default.toml` contains:
 - `ollama`: local `qwen3.5:4b` cleanup, pinned to
   `127.0.0.1:11434`
 
+The macOS native app bundles equivalent `claude` and `ollama` presets as JSON.
+It shows each preset's declared destination before saving the selection and
+requires confirmation for `remote` or `unknown`. Approval is stored against
+the exact normalized preset revision; changing its destination, executable,
+arguments, preflight, input mode, environment, prompt, or timeout blocks CLI
+execution and uses dictionary fallback until that revision is approved.
+
 The Ollama preset first runs `ollama show qwen3.5:4b`. If the model is missing,
-ZenWhisper stops and asks you to run `ollama pull qwen3.5:4b`; it does not let
-`ollama run` implicitly fetch a model during voice input.
+ZenWhisper shows a safe readiness-fallback warning; run
+`ollama pull qwen3.5:4b` before trying again. It does not let `ollama run`
+implicitly fetch a model during voice input.
 
 Add or override arbitrary CLIs from `設定... > 後処理CLI`. The editor keeps the
 command, input mode, model arguments, environment, destination declaration, and
@@ -330,6 +381,43 @@ prompt_template = """
 """
 ```
 
+For macOS native, place local definitions or bundled-preset overrides in
+`~/Library/Application Support/zen-whisper/postprocessors.json`. The Settings
+window selects these presets; definition editing remains an explicit trusted
+file operation. Native presets separate the executable and argument array, so
+there is no command string for a shell to reinterpret:
+
+```json
+{
+  "version": 1,
+  "postprocessors": {
+    "custom": {
+      "display_name": "Custom cleanup",
+      "executable": "/absolute/path/to/custom-cleaner",
+      "arguments": ["--prompt", "{{prompt}}"],
+      "preflight_executable": "/usr/bin/test",
+      "preflight_arguments": [
+        "-x",
+        "/absolute/path/to/custom-cleaner"
+      ],
+      "preflight_failure_message": "Custom cleanup is unavailable.",
+      "input_mode": "argument",
+      "data_destination": "unknown",
+      "timeout_sec": 30,
+      "prompt_template": "{{transcript}}",
+      "environment": {}
+    }
+  }
+}
+```
+
+Native preset IDs `off` and `dictionary` are reserved. Supported placeholders
+are the same as Windows/Python. In `stdin` mode, invocation arguments must be
+static and all transcript/profile values travel only through standard input.
+In `argument` mode, `arguments` must contain `{{prompt}}`, which exposes the
+rendered prompt in the child process argument list. `preflight_executable` is
+optional and is always run without standard input before the main command.
+
 `command` is parsed with the current OS quoting rules before placeholder
 substitution and is always executed with `shell = false`. Pipes, redirects, and
 `&&` are not interpreted; explicitly invoke a wrapper script for a complex
@@ -342,30 +430,43 @@ argument mode rejects `.cmd` / `.bat` launchers because the OS may parse their
 arguments through `cmd.exe`; invoke the underlying `.exe`, `node`, or `python`
 entry point instead.
 
-`postprocessors.toml` is trusted executable configuration; profiles are
-data-only and cannot define commands. Custom presets default to
-`data_destination = "unknown"`. Replacing a bundled preset's `command` without
-also declaring command-specific fields resets its destination to `unknown` and
-clears inherited preflight/environment settings. Enabling a remote/unknown
-preset displays a warning that the transcript, selected profile context, and
-dictionary data are passed to that CLI. In the settings UI, changing the
-command or environment of a preset currently classified as local also forces
-its destination to `unknown`; classify it as local again only after separately
-verifying the edited command and host. Custom CLI processes inherit the
-ZenWhisper process environment, so do not configure an executable you do not
-trust.
+`postprocessors.toml` and the native `postprocessors.json` are trusted
+executable configuration; profiles are data-only and cannot define commands.
+The native app writes profiles with private `0700`/`0600` permissions, a
+temporary file plus atomic replacement, and an on-disk fingerprint check. It
+refuses to overwrite malformed or externally changed JSON and preserves
+unknown fields from valid future-format files. Custom presets default to
+`data_destination = "unknown"`. On macOS, changing a bundled or custom
+executable, argument list, preflight, input mode, or environment cannot inherit
+an old `local` classification. A hand-edited `data_destination = "local"` is
+treated as `unknown` unless it matches the exact command revision recorded by
+the app's trusted configuration save path. It remains runnable after the
+remote/unknown disclosure is accepted. A malformed local catalog blocks
+bundled presets instead of silently exposing a bundled command with the same
+ID. Enabling a remote/unknown preset displays a warning that the transcript,
+selected profile context, and dictionary data are passed to that CLI. Custom
+CLI processes receive a
+constrained ZenWhisper environment plus their explicit preset environment, so
+do not configure an executable you do not trust. The macOS backend starts with
+a restricted system `PATH`; CLI children receive a separate deterministic path
+containing system, Homebrew/local, user-bin, and mise locations.
 
-If a CLI is missing, times out, exits nonzero, or returns empty output,
-ZenWhisper pastes the dictionary-corrected fallback. A submit-after-paste
-hotkey always cancels Enter when a CLI preset was selected, whether the CLI
+If a CLI is missing, times out, exits nonzero, returns empty output, or exceeds
+the bounded output limit, ZenWhisper pastes the dictionary-corrected fallback.
+A transient menu-bar warning makes that fallback visible without displaying
+untrusted backend/configuration text. A submit-after-paste hotkey always
+cancels Enter when a CLI preset was selected, whether the CLI
 succeeded or failed, so generated or externally transformed text is not sent
 automatically. Dictionary-only replacement remains eligible for automatic
 Enter. Before paste, CLI output line breaks and control characters are
 collapsed to spaces so they cannot act as embedded terminal Enter/control
-input. Transcript and CLI output bodies are not written to the ZenWhisper log.
-A timeout stops ZenWhisper waiting for the invoked process, but cannot retract
-data already handed to a CLI or guarantee cancellation inside an external/local
-model service.
+input. Transcript bodies, profile context/terms, dictionary contents, CLI
+arguments/environment values, and CLI output bodies are not written to the
+ZenWhisper log.
+Timeout, app quit, and backend shutdown terminate and reap the directly invoked
+CLI process group. This cannot retract data already handed to a CLI or
+guarantee cancellation inside a separately managed local or remote model
+service.
 
 ### Microphone selection
 

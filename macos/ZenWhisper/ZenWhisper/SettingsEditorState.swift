@@ -198,6 +198,11 @@ struct SettingsEditorState {
                     local: localSettings.allowUnverifiedPasteFallback,
                     baseline: previousBaseline.allowUnverifiedPasteFallback,
                     authoritative: authoritativeSettings.allowUnverifiedPasteFallback
+                ),
+                enhancement: Self.mergeField(
+                    local: localSettings.enhancement,
+                    baseline: previousBaseline.enhancement,
+                    authoritative: authoritativeSettings.enhancement
                 )
             ),
             using: registry
@@ -221,6 +226,12 @@ struct SettingsEditorState {
         using registry: ModelRegistry
     ) -> SettingsSnapshot {
         let engine = registry.validEngine(settings.engine)
+        let enhancement = EnhancementSelection(
+            profileID: settings.enhancement.profileID,
+            postprocessing: settings.enhancement.postprocessing,
+            approvedPostprocessorRevision:
+                settings.enhancement.approvedPostprocessorRevision
+        )
         return SettingsSnapshot(
             hotkey: settings.hotkey,
             submitHotkey: settings.submitHotkey,
@@ -232,7 +243,8 @@ struct SettingsEditorState {
                 ? nil
                 : settings.microphoneDeviceUID,
             outputMode: settings.outputMode,
-            allowUnverifiedPasteFallback: settings.allowUnverifiedPasteFallback
+            allowUnverifiedPasteFallback: settings.allowUnverifiedPasteFallback,
+            enhancement: enhancement
         )
     }
 

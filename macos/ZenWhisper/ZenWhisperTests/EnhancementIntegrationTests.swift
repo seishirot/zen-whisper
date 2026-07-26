@@ -1,0 +1,699 @@
+import AppKit
+import XCTest
+@testable import ZenWhisper
+
+final class EnhancementRequestResolverTests: XCTestCase {
+    func testResolverUsesImmutableCatalogValuesAndPreservesCLIIntentOnFallback() {
+        let profile = EnhancementProfile(id: "work", name: "Work")
+        let preset = EnhancementPostprocessorPreset(
+            id: "local",
+            displayName: "Local",
+            executable: "local-tool",
+            destination: .local
+        )
+        let catalog = EnhancementCatalogSnapshot(
+            profiles: ["work": profile],
+            postprocessors: ["local": preset]
+        )
+
+        let resolved = EnhancementRequestResolver.resolve(
+            selection: EnhancementSelection(
+                profileID: "work",
+                postprocessing: .preset("local")
+            ),
+            catalog: catalog
+        )
+        XCTAssertEqual(resolved.profile, profile)
+        XCTAssertEqual(resolved.postprocessor, .preset(preset))
+        XCTAssertTrue(resolved.cliWasSelected)
+        XCTAssertNil(resolved.warningCode)
+
+        let unavailable = EnhancementRequestResolver.resolve(
+            selection: EnhancementSelection(
+                profileID: "missing-profile",
+                postprocessing: .preset("missing-tool")
+            ),
+            catalog: catalog
+        )
+        XCTAssertNil(unavailable.profile)
+        XCTAssertEqual(unavailable.postprocessor, .dictionary)
+        XCTAssertTrue(
+            unavailable.cliWasSelected,
+            "A missing CLI preset must still suppress automatic Enter"
+        )
+        XCTAssertEqual(unavailable.warningCode, "POSTPROCESSOR_UNAVAILABLE")
+    }
+
+    func testResolverRequiresExactConsentRevisionForRemoteAndUnknownPresets() {
+        for destination in [
+            EnhancementDataDestination.remote,
+            EnhancementDataDestination.unknown
+        ] {
+            let preset = EnhancementPostprocessorPreset(
+                id: destination.rawValue,
+                displayName: destination.rawValue,
+                executable: "tool",
+                destination: destination
+            )
+            let catalog = EnhancementCatalogSnapshot(
+                postprocessors: [preset.id: preset]
+            )
+
+            for approval in [nil, "sha256:stale"] {
+                let blocked = EnhancementRequestResolver.resolve(
+                    selection: EnhancementSelection(
+                        postprocessing: .preset(preset.id),
+                        approvedPostprocessorRevision: approval
+                    ),
+                    catalog: catalog
+                )
+                XCTAssertEqual(blocked.postprocessor, .dictionary)
+                XCTAssertTrue(blocked.cliWasSelected)
+                XCTAssertEqual(
+                    blocked.warningCode,
+                    "POSTPROCESSOR_CONSENT_REQUIRED"
+                )
+            }
+
+            let approved = EnhancementRequestResolver.resolve(
+                selection: EnhancementSelection(
+                    postprocessing: .preset(preset.id),
+                    approvedPostprocessorRevision: preset.reviewRevision
+                ),
+                catalog: catalog
+            )
+            XCTAssertEqual(approved.postprocessor, .preset(preset))
+            XCTAssertNil(approved.warningCode)
+        }
+    }
+
+    func testSettingsStoreRoundTripsEnhancementSelection() throws {
+        let suiteName = "ZenWhisper.EnhancementIntegrationTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let registry = try ModelRegistry.loadDefault()
+        let store = SettingsStore(defaults: defaults, registry: registry)
+        var settings = store.load()
+        settings.enhancement = EnhancementSelection(
+            profileID: "work",
+            postprocessing: .preset("local"),
+            approvedPostprocessorRevision: "sha256:reviewed"
+        )
+
+        store.save(settings)
+
+        XCTAssertEqual(store.load().enhancement, settings.enhancement)
+
+        settings.enhancement = EnhancementSelection(
+            profileID: "work",
+            postprocessing: .dictionary,
+            approvedPostprocessorRevision: "sha256:must-not-persist"
+        )
+        store.save(settings)
+        XCTAssertNil(store.load().enhancement.approvedPostprocessorRevision)
+    }
+
+    func testCombinedEnhancementValueBudgetFallsBackBeforeBackend() {
+        let profile = makeCombinedBudgetProfile()
+        let preset = makeCombinedBudgetPreset()
+        XCTAssertTrue(
+            EnhancementCatalogLimits.jsonPayloadFitsBudget(
+                profile.backendPayload
+            )
+        )
+        XCTAssertTrue(
+            EnhancementCatalogLimits.jsonPayloadFitsBudget(
+                preset.backendPayload
+            )
+        )
+        XCTAssertFalse(
+            EnhancementCatalogLimits.enhancementPayloadFitsBudget(
+                profile: profile,
+                preset: preset
+            ),
+            "Compact aliases can exceed the combined value budget without exceeding the byte budget"
+        )
+
+        let resolved = EnhancementRequestResolver.resolve(
+            selection: EnhancementSelection(
+                profileID: profile.id,
+                postprocessing: .preset(preset.id)
+            ),
+            catalog: EnhancementCatalogSnapshot(
+                profiles: [profile.id: profile],
+                postprocessors: [preset.id: preset]
+            )
+        )
+
+        XCTAssertEqual(resolved.profile, profile)
+        XCTAssertEqual(resolved.postprocessor, .dictionary)
+        XCTAssertTrue(resolved.cliWasSelected)
+        XCTAssertEqual(
+            resolved.warningCode,
+            "ENHANCEMENT_CONFIGURATION_TOO_LARGE"
+        )
+    }
+}
+
+@MainActor
+final class SettingsEnhancementUITests: XCTestCase {
+    func testEnhancementControlsRenderSelectionDestinationAndUnavailableIDs() throws {
+        let registry = try ModelRegistry.loadDefault()
+        var settings = makeSettings()
+        settings.enhancement = EnhancementSelection(
+            profileID: "work",
+            postprocessing: .preset("remote")
+        )
+        let catalog = EnhancementCatalogSnapshot(
+            profiles: [
+                "work": EnhancementProfile(id: "work", name: "Work")
+            ],
+            postprocessors: [
+                "remote": EnhancementPostprocessorPreset(
+                    id: "remote",
+                    displayName: "Remote Tool",
+                    executable: "remote-tool",
+                    destination: .remote
+                )
+            ]
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: settings,
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: catalog
+        )
+        guard let contentView = controller.window?.contentView,
+              let profile = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.profile,
+                  in: contentView
+              ) as? NSPopUpButton,
+              let postprocessing = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.postprocessing,
+                  in: contentView
+              ) as? NSPopUpButton,
+              let message = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.enhancementMessage,
+                  in: contentView
+              ) as? NSTextField else {
+            return XCTFail("Expected enhancement controls")
+        }
+
+        XCTAssertEqual(profile.titleOfSelectedItem, "Work")
+        XCTAssertEqual(postprocessing.titleOfSelectedItem, "Remote Tool")
+        XCTAssertTrue(message.stringValue.contains("Remote service"))
+        XCTAssertTrue(message.stringValue.contains("Automatic Enter is disabled"))
+
+        controller.synchronize(
+            authoritativeSettings: settings,
+            launchAtLoginStatus: .disabled,
+            audioInputDevices: [],
+            isBusy: false,
+            enhancementCatalog: EnhancementCatalogSnapshot()
+        )
+
+        XCTAssertEqual(profile.titleOfSelectedItem, "Unavailable — work")
+        XCTAssertEqual(postprocessing.titleOfSelectedItem, "Unavailable — remote")
+        XCTAssertTrue(message.stringValue.contains("safe fallback"))
+    }
+
+    func testUnsupportedHintEngineDoesNotClaimDisabledDictionaryReplacementApplies() throws {
+        let registry = try ModelRegistry.loadDefault()
+        var settings = makeSettings()
+        settings.engine = "mlx-qwen3-asr"
+        settings.enhancement = EnhancementSelection(
+            profileID: "work",
+            postprocessing: .off
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: settings,
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: EnhancementCatalogSnapshot(
+                profiles: [
+                    "work": EnhancementProfile(id: "work", name: "Work")
+                ]
+            )
+        )
+        guard let contentView = controller.window?.contentView,
+              let message = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier
+                      .enhancementMessage,
+                  in: contentView
+              ) as? NSTextField else {
+            return XCTFail("Expected enhancement status message")
+        }
+
+        XCTAssertTrue(message.stringValue.contains("does not support profile hints"))
+        XCTAssertTrue(message.stringValue.contains("applies only when"))
+        XCTAssertFalse(message.stringValue.contains("still applies"))
+    }
+
+    func testProfileEditorCreatesStructuredTermsThroughNativeControls() throws {
+        let controller = ProfileEditorWindowController(
+            profile: nil,
+            expectedFingerprint: nil
+        )
+        var savedProfile: EnhancementProfile?
+        controller.onSave = { profile, fingerprint in
+            XCTAssertNil(fingerprint)
+            savedProfile = profile
+            return .success(
+                EnhancementCatalogSnapshot(profiles: [profile.id: profile])
+            )
+        }
+        guard let contentView = controller.window?.contentView,
+              let addTerm = findView(
+                  identifier: ProfileEditorWindowController.AccessibilityIdentifier.addTerm,
+                  in: contentView
+              ) as? NSButton,
+              let canonical = findView(
+                  identifier: ProfileEditorWindowController.AccessibilityIdentifier.canonical,
+                  in: contentView
+              ) as? NSTextField,
+              let spoken = findView(
+                  identifier: ProfileEditorWindowController.AccessibilityIdentifier.spoken,
+                  in: contentView
+              ) as? NSTextView,
+              let replaceFrom = findView(
+                  identifier: ProfileEditorWindowController.AccessibilityIdentifier.replaceFrom,
+                  in: contentView
+              ) as? NSTextView,
+              let description = findView(
+                  identifier: ProfileEditorWindowController.AccessibilityIdentifier.description,
+                  in: contentView
+              ) as? NSTextField,
+              let save = findView(
+                  identifier: ProfileEditorWindowController.AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected profile editor controls")
+        }
+
+        addTerm.performClick(nil)
+        canonical.stringValue = "ZenWhisper"
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: canonical)
+        )
+        spoken.string = "Zen Whisper\nゼンウィスパー"
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: spoken)
+        )
+        replaceFrom.string = "Zen Whisper"
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: replaceFrom)
+        )
+        description.stringValue = "Application name"
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: description)
+        )
+
+        XCTAssertTrue(save.isEnabled)
+        save.performClick(nil)
+
+        let profile = try XCTUnwrap(savedProfile)
+        XCTAssertTrue(profile.id.hasPrefix("profile-"))
+        XCTAssertEqual(profile.name, "New Profile")
+        XCTAssertEqual(
+            profile.terms,
+            [
+                EnhancementTerm(
+                    canonical: "ZenWhisper",
+                    spoken: ["Zen Whisper", "ゼンウィスパー"],
+                    replaceFrom: ["Zen Whisper"],
+                    description: "Application name"
+                )
+            ]
+        )
+    }
+
+    func testUnknownDestinationWarningAndConsentEnumerateAllSharedData() throws {
+        let registry = try ModelRegistry.loadDefault()
+        var settings = makeSettings()
+        let preset = EnhancementPostprocessorPreset(
+            id: "unknown",
+            displayName: "Unknown Tool",
+            executable: "unknown-tool",
+            destination: .unknown
+        )
+        settings.enhancement = EnhancementSelection(
+            postprocessing: .preset(preset.id)
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: settings,
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: EnhancementCatalogSnapshot(
+                postprocessors: [preset.id: preset]
+            )
+        )
+        guard let contentView = controller.window?.contentView,
+              let message = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.enhancementMessage,
+                  in: contentView
+              ) as? NSTextField,
+              let consentText = SettingsWindowController
+                  .externalDestinationConsentText(for: preset) else {
+            return XCTFail("Expected unknown destination warning")
+        }
+
+        for text in [message.stringValue, consentText] {
+            XCTAssertTrue(text.contains("transcript"))
+            XCTAssertTrue(text.contains("recognition language"))
+            XCTAssertTrue(text.contains("profile name"))
+            XCTAssertTrue(text.contains("profile context"))
+            XCTAssertTrue(text.contains("terms"))
+            XCTAssertTrue(text.contains("may leave this Mac"))
+        }
+    }
+
+    func testConsentConfirmationPersistsExactRevisionAndSelectionChangeClearsIt() throws {
+        let registry = try ModelRegistry.loadDefault()
+        let remote = EnhancementPostprocessorPreset(
+            id: "remote",
+            displayName: "Remote Tool",
+            executable: "remote-tool",
+            destination: .remote
+        )
+        let local = EnhancementPostprocessorPreset(
+            id: "local",
+            displayName: "Local Tool",
+            executable: "local-tool",
+            destination: .local
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: makeSettings(),
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: EnhancementCatalogSnapshot(
+                profiles: [
+                    "work": EnhancementProfile(id: "work", name: "Work")
+                ],
+                postprocessors: [
+                    remote.id: remote,
+                    local.id: local
+                ]
+            )
+        )
+        var savedRequests: [SettingsSaveRequest] = []
+        controller.onSave = { request in
+            savedRequests.append(request)
+            return .success(
+                AuthoritativeSettings(
+                    settings: request.settings,
+                    launchAtLoginStatus: .disabled
+                )
+            )
+        }
+        var confirmationCount = 0
+        controller.onConfirmExternalDestination = { _, _ in
+            confirmationCount += 1
+            return false
+        }
+        guard let contentView = controller.window?.contentView,
+              let postprocessing = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.postprocessing,
+                  in: contentView
+              ) as? NSPopUpButton,
+              let profile = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.profile,
+                  in: contentView
+              ) as? NSPopUpButton,
+              let save = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected enhancement settings controls")
+        }
+
+        postprocessing.selectItem(withTitle: remote.displayName)
+        _ = postprocessing.sendAction(
+            postprocessing.action,
+            to: postprocessing.target
+        )
+        save.performClick(nil)
+        XCTAssertEqual(confirmationCount, 1)
+        XCTAssertTrue(savedRequests.isEmpty)
+
+        controller.onConfirmExternalDestination = { preset, text in
+            confirmationCount += 1
+            XCTAssertEqual(preset.id, remote.id)
+            XCTAssertTrue(text.contains("profile context"))
+            return true
+        }
+        save.performClick(nil)
+        XCTAssertEqual(confirmationCount, 2)
+        XCTAssertEqual(
+            savedRequests.last?.settings.enhancement
+                .approvedPostprocessorRevision,
+            remote.reviewRevision
+        )
+
+        controller.onConfirmExternalDestination = { _, _ in
+            confirmationCount += 1
+            return false
+        }
+        profile.selectItem(withTitle: "Work")
+        _ = profile.sendAction(profile.action, to: profile.target)
+        save.performClick(nil)
+        XCTAssertEqual(
+            confirmationCount,
+            2,
+            "An exact persisted revision must not prompt again"
+        )
+        XCTAssertEqual(savedRequests.count, 2)
+
+        postprocessing.selectItem(withTitle: local.displayName)
+        _ = postprocessing.sendAction(
+            postprocessing.action,
+            to: postprocessing.target
+        )
+        save.performClick(nil)
+        XCTAssertNil(
+            savedRequests.last?.settings.enhancement
+                .approvedPostprocessorRevision
+        )
+        XCTAssertEqual(savedRequests.count, 3)
+    }
+
+    func testStalePersistedApprovalEnablesOneClickReconfirmation() throws {
+        let registry = try ModelRegistry.loadDefault()
+        let remote = EnhancementPostprocessorPreset(
+            id: "remote",
+            displayName: "Remote Tool",
+            executable: "remote-tool",
+            arguments: ["--new-revision"],
+            destination: .remote
+        )
+        var settings = makeSettings()
+        settings.enhancement = EnhancementSelection(
+            postprocessing: .preset(remote.id),
+            approvedPostprocessorRevision: "sha256:stale"
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: settings,
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: EnhancementCatalogSnapshot(
+                postprocessors: [remote.id: remote]
+            )
+        )
+        var savedSettings: SettingsSnapshot?
+        var savedRuntimeSettingsChanged = false
+        controller.onSave = { request in
+            savedSettings = request.settings
+            savedRuntimeSettingsChanged = request.runtimeSettingsChanged
+            return .success(
+                AuthoritativeSettings(
+                    settings: request.settings,
+                    launchAtLoginStatus: .disabled
+                )
+            )
+        }
+        controller.onConfirmExternalDestination = { _, _ in true }
+        guard let contentView = controller.window?.contentView,
+              let save = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected Save button")
+        }
+
+        XCTAssertTrue(save.isEnabled)
+        save.performClick(nil)
+
+        XCTAssertEqual(
+            savedSettings?.enhancement.approvedPostprocessorRevision,
+            remote.reviewRevision
+        )
+        XCTAssertTrue(savedRuntimeSettingsChanged)
+    }
+
+    func testMissingApprovalEnablesOneClickConfirmationWithoutTogglingSelection() throws {
+        let registry = try ModelRegistry.loadDefault()
+        let remote = EnhancementPostprocessorPreset(
+            id: "remote",
+            displayName: "Remote Tool",
+            executable: "remote-tool",
+            destination: .remote
+        )
+        var settings = makeSettings()
+        settings.enhancement = EnhancementSelection(
+            postprocessing: .preset(remote.id)
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: settings,
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: EnhancementCatalogSnapshot(
+                postprocessors: [remote.id: remote]
+            )
+        )
+        var savedSettings: SettingsSnapshot?
+        var savedRuntimeSettingsChanged = false
+        controller.onSave = { request in
+            savedSettings = request.settings
+            savedRuntimeSettingsChanged = request.runtimeSettingsChanged
+            return .success(
+                AuthoritativeSettings(
+                    settings: request.settings,
+                    launchAtLoginStatus: .disabled
+                )
+            )
+        }
+        controller.onConfirmExternalDestination = { _, _ in true }
+        guard let contentView = controller.window?.contentView,
+              let save = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected Save button")
+        }
+
+        XCTAssertTrue(save.isEnabled)
+        save.performClick(nil)
+
+        XCTAssertEqual(
+            savedSettings?.enhancement.approvedPostprocessorRevision,
+            remote.reviewRevision
+        )
+        XCTAssertTrue(savedRuntimeSettingsChanged)
+    }
+
+    func testCombinedEnhancementBudgetShowsActionableValidationAndBlocksSave() throws {
+        let registry = try ModelRegistry.loadDefault()
+        let profile = makeCombinedBudgetProfile()
+        let preset = makeCombinedBudgetPreset()
+        var settings = makeSettings()
+        settings.enhancement = EnhancementSelection(
+            profileID: profile.id,
+            postprocessing: .preset(preset.id)
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: settings,
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: EnhancementCatalogSnapshot(
+                profiles: [profile.id: profile],
+                postprocessors: [preset.id: preset]
+            )
+        )
+        controller.onSave = { request in
+            XCTFail("Oversized enhancement configuration must not be saved")
+            return .success(
+                AuthoritativeSettings(
+                    settings: request.settings,
+                    launchAtLoginStatus: .disabled
+                )
+            )
+        }
+        guard let contentView = controller.window?.contentView,
+              let output = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.outputMode,
+                  in: contentView
+              ) as? NSPopUpButton,
+              let validation = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.validationMessage,
+                  in: contentView
+              ) as? NSTextField,
+              let save = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected Settings validation controls")
+        }
+
+        output.selectItem(withTitle: OutputMode.copyOnly.label)
+        _ = output.sendAction(output.action, to: output.target)
+
+        XCTAssertFalse(validation.isHidden)
+        XCTAssertTrue(validation.stringValue.contains("too large"))
+        XCTAssertTrue(validation.stringValue.contains("Reduce"))
+        XCTAssertFalse(save.isEnabled)
+    }
+
+    private func findView(identifier: String, in root: NSView) -> NSView? {
+        if root.identifier?.rawValue == identifier {
+            return root
+        }
+        for subview in root.subviews {
+            if let found = findView(identifier: identifier, in: subview) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func makeSettings() -> SettingsSnapshot {
+        SettingsSnapshot(
+            hotkey: .shiftSpace,
+            submitHotkey: .shiftCommandSpace,
+            language: "ja",
+            engine: "mlx-whisper",
+            lastModelByEngine: [
+                "mlx-whisper": "mlx-community/whisper-large-v3-turbo",
+                "mlx-qwen3-asr": "mlx-community/Qwen3-ASR-0.6B-8bit"
+            ],
+            silenceAutoStopEnabled: true,
+            microphoneDeviceUID: nil,
+            outputMode: .pasteRestoreClipboard,
+            allowUnverifiedPasteFallback: false
+        )
+    }
+}
+
+private func makeCombinedBudgetProfile() -> EnhancementProfile {
+    EnhancementProfile(
+        id: "value-heavy",
+        name: "Value Heavy",
+        terms: (0..<6).map { termIndex in
+            EnhancementTerm(
+                canonical: "term-\(termIndex)",
+                spoken: (0..<EnhancementCatalogLimits.maximumAliasesPerTerm)
+                    .map { "spoken-\(termIndex)-\($0)" },
+                replaceFrom: (0..<EnhancementCatalogLimits.maximumAliasesPerTerm)
+                    .map { "replace-\(termIndex)-\($0)" }
+            )
+        }
+    )
+}
+
+private func makeCombinedBudgetPreset() -> EnhancementPostprocessorPreset {
+    EnhancementPostprocessorPreset(
+        id: "value-heavy",
+        displayName: "Value Heavy",
+        executable: "value-heavy-cli",
+        arguments: (0..<EnhancementCatalogLimits.maximumPresetArgumentCount)
+            .map { "--argument-\($0)" },
+        preflightExecutable: "value-heavy-cli",
+        preflightArguments:
+            (0..<EnhancementCatalogLimits.maximumPresetArgumentCount)
+            .map { "--preflight-\($0)" },
+        destination: .local,
+        environment: Dictionary(
+            uniqueKeysWithValues:
+                (0..<EnhancementCatalogLimits.maximumPresetEnvironmentEntryCount)
+                .map { ("VALUE_\($0)", "\($0)") }
+        )
+    )
+}

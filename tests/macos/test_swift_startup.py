@@ -76,11 +76,15 @@ def test_hotkey_error_recovery_verifies_both_hotkeys_before_backend_start() -> N
     recover_end = app_delegate.index("private func verifySignatureAndStartBackend()")
     recover_body = app_delegate[recover_start:recover_end]
 
-    assert "if !hotkeyManager.hasActiveRegistration" in recover_body
-    assert "if settings.submitHotkey != nil, !submitHotkeyManager.hasActiveRegistration" in recover_body
-    assert "try registerSubmitHotkeyIfNeeded()" in recover_body
+    assert "HotkeyPairRegistrationTransaction(" in recover_body
+    assert "try transaction.reconcile(" in recover_body
+    pair_registration = (
+        SWIFT_SRC / "HotkeyPairRegistration.swift"
+    ).read_text(encoding="utf-8")
+    assert "primaryManager.activeShortcut != settings.hotkey" in pair_registration
+    assert "submitManager.activeShortcut != settings.submitHotkey" in pair_registration
     assert "verifySignatureAndStartBackend()" in recover_body
-    assert "setState(.hotkeyError(" in recover_body
+    assert "setHotkeyError(" in recover_body
 
 
 def test_backend_install_validation_runs_off_main_actor_with_probe_timeout() -> None:
