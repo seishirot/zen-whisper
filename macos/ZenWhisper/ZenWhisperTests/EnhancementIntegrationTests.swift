@@ -421,6 +421,79 @@ final class SettingsEnhancementUITests: XCTestCase {
         XCTAssertEqual(wasExplicitlyReclassified, true)
     }
 
+    func testPostprocessorEditorExplainsCodexModelOptionsAndTracksArgumentEdits()
+        throws
+    {
+        let controller = PostprocessorEditorWindowController(
+            preset: EnhancementPostprocessorPreset(
+                id: "codex",
+                displayName: "Codex",
+                executable: "codex",
+                arguments: ["exec", "-"],
+                destination: .remote
+            ),
+            expectedFingerprint: .missing
+        )
+        guard let contentView = controller.window?.contentView,
+              let arguments = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.arguments,
+                  in: contentView
+              ) as? NSTextView,
+              let argumentsHelp = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.argumentsHelp,
+                  in: contentView
+              ) as? NSTextField else {
+            return XCTFail("Expected Codex model argument guidance")
+        }
+
+        XCTAssertTrue(argumentsHelp.stringValue.contains("not pinned"))
+        XCTAssertTrue(argumentsHelp.stringValue.contains("CLI default"))
+        XCTAssertTrue(argumentsHelp.stringValue.contains("final “-”"))
+
+        let overrides = [
+            (
+                #"["exec", "--model", "explicit-model", "-"]"#,
+                "explicit-model",
+                "“--model”",
+                "both items"
+            ),
+            (
+                #"["exec", "-m", "short-model", "-"]"#,
+                "short-model",
+                "“-m”",
+                "both items"
+            ),
+            (
+                #"["exec", "--model=inline-model", "-"]"#,
+                "inline-model",
+                "“--model=…”",
+                "that item"
+            )
+        ]
+        for (json, model, option, removal) in overrides {
+            arguments.string = json
+            controller.textDidChange(
+                Notification(
+                    name: NSText.didChangeNotification,
+                    object: arguments
+                )
+            )
+
+            XCTAssertTrue(argumentsHelp.stringValue.contains(model))
+            XCTAssertTrue(argumentsHelp.stringValue.contains(option))
+            XCTAssertTrue(argumentsHelp.stringValue.contains(removal))
+        }
+
+        arguments.string = #"["exec"]"#
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: arguments)
+        )
+        XCTAssertTrue(argumentsHelp.stringValue.contains("argument array"))
+        XCTAssertFalse(argumentsHelp.stringValue.contains("final “-”"))
+    }
+
     func testPostprocessorEditorChangedLocalCommandCanSaveAsUnknown() throws {
         let original = EnhancementPostprocessorPreset(
             id: "local",

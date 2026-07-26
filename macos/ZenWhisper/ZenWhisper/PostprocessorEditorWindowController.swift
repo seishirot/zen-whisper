@@ -45,6 +45,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         static let displayName = "postprocessorEditor.displayName"
         static let executable = "postprocessorEditor.executable"
         static let arguments = "postprocessorEditor.arguments"
+        static let argumentsHelp = "postprocessorEditor.argumentsHelp"
         static let inputMode = "postprocessorEditor.inputMode"
         static let destination = "postprocessorEditor.destination"
         static let timeout = "postprocessorEditor.timeout"
@@ -54,6 +55,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             "postprocessorEditor.preflightFailureMessage"
         static let environment = "postprocessorEditor.environment"
         static let promptTemplate = "postprocessorEditor.promptTemplate"
+        static let securityHelp = "postprocessorEditor.securityHelp"
         static let message = "postprocessorEditor.message"
         static let cancel = "postprocessorEditor.cancel"
         static let save = "postprocessorEditor.save"
@@ -89,6 +91,17 @@ final class PostprocessorEditorWindowController: NSWindowController,
         }
     }
 
+    private struct CommandOptionMatch {
+        enum Form {
+            case separate
+            case inline
+        }
+
+        let name: String
+        let value: String
+        let form: Form
+    }
+
     private let expectedFingerprint: EnhancementFileFingerprint?
     private let existingPresetIDs: Set<String>
     private let isExistingPreset: Bool
@@ -102,6 +115,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
     private let displayNameField = NSTextField()
     private let executableField = NSTextField()
     private let argumentsTextView = NSTextView()
+    private let argumentsHelpLabel = NSTextField(wrappingLabelWithString: "")
     private let inputModePopup = NSPopUpButton()
     private let destinationPopup = NSPopUpButton()
     private let timeoutField = NSTextField()
@@ -179,6 +193,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         guard !isRendering else {
             return
         }
+        refreshArgumentsHelp()
         clearMessage()
         updateDocumentEditedState()
     }
@@ -187,6 +202,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         guard !isRendering else {
             return
         }
+        refreshArgumentsHelp()
         clearMessage()
         updateDocumentEditedState()
     }
@@ -249,6 +265,16 @@ final class PostprocessorEditorWindowController: NSWindowController,
             identifier: AccessibilityIdentifier.promptTemplate,
             label: "Post-processor prompt template",
             monospaced: false
+        )
+        argumentsHelpLabel.font = .systemFont(
+            ofSize: NSFont.smallSystemFontSize
+        )
+        argumentsHelpLabel.textColor = .secondaryLabelColor
+        argumentsHelpLabel.identifier = NSUserInterfaceItemIdentifier(
+            AccessibilityIdentifier.argumentsHelp
+        )
+        argumentsHelpLabel.setAccessibilityLabel(
+            "CLI model argument guidance"
         )
 
         configurePopup(
@@ -393,11 +419,6 @@ final class PostprocessorEditorWindowController: NSWindowController,
             minimumHeight: 180
         )
 
-        let argumentsHelp = makeHelpLabel(
-            "Enter a JSON array with one string per process argument. "
-                + "This preserves spaces and empty arguments without invoking a shell. "
-                + "Change model values such as \"haiku\" or \"qwen3.5:4b\" here."
-        )
         let environmentHelp = makeHelpLabel(
             "Enter a JSON object whose keys and values are strings, for example "
                 + "{\"OLLAMA_HOST\":\"127.0.0.1:11434\"}."
@@ -414,6 +435,12 @@ final class PostprocessorEditorWindowController: NSWindowController,
                 + "presets require exact-revision consent when selected."
         )
         securityHelp.textColor = .systemOrange
+        securityHelp.identifier = NSUserInterfaceItemIdentifier(
+            AccessibilityIdentifier.securityHelp
+        )
+        securityHelp.setAccessibilityLabel(
+            "CLI post-processor security guidance"
+        )
 
         let form = NSStackView(views: [
             makeLabeledRow(title: "ID:", control: idField),
@@ -422,7 +449,10 @@ final class PostprocessorEditorWindowController: NSWindowController,
             makeLabeledRow(title: "Execution:", control: modeControls),
             makeLabeledRow(
                 title: "Arguments (JSON):",
-                control: makeVerticalGroup(argumentsScroll, argumentsHelp),
+                control: makeVerticalGroup(
+                    argumentsScroll,
+                    argumentsHelpLabel
+                ),
                 alignment: .top
             ),
             makeLabeledRow(
@@ -516,6 +546,15 @@ final class PostprocessorEditorWindowController: NSWindowController,
             ),
             documentView.widthAnchor.constraint(
                 equalTo: scrollView.contentView.widthAnchor
+            ),
+            documentView.leadingAnchor.constraint(
+                equalTo: scrollView.contentView.leadingAnchor
+            ),
+            documentView.topAnchor.constraint(
+                equalTo: scrollView.contentView.topAnchor
+            ),
+            documentView.heightAnchor.constraint(
+                greaterThanOrEqualTo: scrollView.contentView.heightAnchor
             ),
             footer.leadingAnchor.constraint(
                 equalTo: contentView.leadingAnchor,
@@ -612,9 +651,122 @@ final class PostprocessorEditorWindowController: NSWindowController,
         environmentTextView.string = Self.formattedJSON(preset.environment)
         promptTemplateTextView.string = preset.promptTemplate
         idField.isEnabled = !isExistingPreset
+        refreshArgumentsHelp()
         isRendering = false
         baselineState = draftState
         updateDocumentEditedState()
+    }
+
+    private func refreshArgumentsHelp() {
+        let executable = (executableField.stringValue as NSString)
+            .lastPathComponent
+            .lowercased()
+        let arguments = argumentsTextView.string.data(using: .utf8)
+            .flatMap { try? JSONDecoder().decode([String].self, from: $0) }
+            ?? []
+        let general =
+            "Arguments are a JSON string array and run without a shell. "
+
+        switch executable {
+        case "codex":
+            if let modelOption = Self.commandOption(
+                in: arguments,
+                names: ["--model", "-m"]
+            ) {
+                switch modelOption.form {
+                case .separate:
+                    argumentsHelpLabel.stringValue =
+                        general
+                        + "Codex model override: “\(modelOption.value)” via "
+                        + "“\(modelOption.name)”. Change the following item, or "
+                        + "remove both items to use the Codex CLI default."
+                case .inline:
+                    argumentsHelpLabel.stringValue =
+                        general
+                        + "Codex model override: “\(modelOption.value)” via "
+                        + "“\(modelOption.name)=…”. Change the value after "
+                        + "“\(modelOption.name)=”, or remove that item to use "
+                        + "the Codex CLI default."
+                }
+            } else if arguments.last == "-" {
+                argumentsHelpLabel.stringValue =
+                    general
+                    + "Codex model is not pinned. To override it, insert "
+                    + "“--model”, “MODEL_ID” immediately before the final “-” item. "
+                    + "Without a model option, Codex uses its CLI default."
+            } else {
+                argumentsHelpLabel.stringValue =
+                    general
+                    + "Codex model is not pinned. Add “--model”, “MODEL_ID” to "
+                    + "the argument array to override it. Without a model option, "
+                    + "Codex uses its CLI default."
+            }
+        case "claude":
+            if let modelOption = Self.commandOption(
+                in: arguments,
+                names: ["--model"]
+            ) {
+                switch modelOption.form {
+                case .separate:
+                    argumentsHelpLabel.stringValue =
+                        general
+                        + "Claude model: “\(modelOption.value)”. Change the "
+                        + "following item after “--model”."
+                case .inline:
+                    argumentsHelpLabel.stringValue =
+                        general
+                        + "Claude model: “\(modelOption.value)”. Change the "
+                        + "value after “--model=”."
+                }
+            } else {
+                argumentsHelpLabel.stringValue =
+                    general
+                    + "To choose a Claude model, add “--model”, “MODEL_ID”."
+            }
+        case "ollama":
+            if let runIndex = arguments.firstIndex(of: "run"),
+               arguments.indices.contains(runIndex + 1) {
+                argumentsHelpLabel.stringValue =
+                    general
+                    + "Ollama model: “\(arguments[runIndex + 1])”. Change the "
+                    + "model name immediately after “run”."
+            } else {
+                argumentsHelpLabel.stringValue =
+                    general
+                    + "Ollama model selection normally follows the “run” item."
+            }
+        default:
+            argumentsHelpLabel.stringValue =
+                general
+                + "Provider model selection remains an ordinary CLI argument."
+        }
+    }
+
+    private static func commandOption(
+        in arguments: [String],
+        names: Set<String>
+    ) -> CommandOptionMatch? {
+        for (index, argument) in arguments.enumerated() {
+            if names.contains(argument),
+               arguments.indices.contains(index + 1) {
+                return CommandOptionMatch(
+                    name: argument,
+                    value: arguments[index + 1],
+                    form: .separate
+                )
+            }
+            for name in names {
+                let prefix = "\(name)="
+                if argument.hasPrefix(prefix) {
+                    return CommandOptionMatch(
+                        name: name,
+                        value: String(argument.dropFirst(prefix.count)),
+                        form: .inline
+                    )
+                }
+            }
+        }
+        return nil
     }
 
     private var draftState: DraftState {

@@ -200,6 +200,14 @@ final class SettingsWindowLayoutTests: XCTestCase {
                       .AccessibilityIdentifier.promptTemplate,
                   in: contentView
               ),
+              let securityHelp = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.securityHelp,
+                  in: contentView
+              ),
+              let promptScrollView = ancestors(of: promptView)
+                  .compactMap({ $0 as? NSScrollView })
+                  .first,
               let outerScrollView = ancestors(of: promptView)
                   .compactMap({ $0 as? NSScrollView })
                   .last,
@@ -222,6 +230,41 @@ final class SettingsWindowLayoutTests: XCTestCase {
             "The long editor form should scroll instead of compressing controls"
         )
         XCTAssertFalse(contentView.hasAmbiguousLayout)
+        XCTAssertFalse(documentView.hasAmbiguousLayout)
+
+        let bottomOriginY = max(
+            0,
+            documentView.bounds.height
+                - outerScrollView.contentView.bounds.height
+        )
+        outerScrollView.contentView.scroll(
+            to: NSPoint(x: 0, y: bottomOriginY)
+        )
+        outerScrollView.reflectScrolledClipView(outerScrollView.contentView)
+        contentView.layoutSubtreeIfNeeded()
+
+        XCTAssertEqual(
+            outerScrollView.contentView.documentVisibleRect.maxY,
+            documentView.bounds.maxY,
+            accuracy: 1,
+            "The outer editor scroll view must reach the document bottom"
+        )
+        let promptFrame = promptScrollView.convert(
+            promptScrollView.bounds,
+            to: outerScrollView.contentView
+        )
+        let securityFrame = securityHelp.convert(
+            securityHelp.bounds,
+            to: outerScrollView.contentView
+        )
+        XCTAssertTrue(
+            outerScrollView.contentView.bounds.contains(promptFrame),
+            "The Prompt template editor must be fully visible above the footer"
+        )
+        XCTAssertTrue(
+            outerScrollView.contentView.bounds.contains(securityFrame),
+            "The final security guidance must remain reachable above the footer"
+        )
     }
 
     func testReopeningWindowPreservesUserPosition() throws {
