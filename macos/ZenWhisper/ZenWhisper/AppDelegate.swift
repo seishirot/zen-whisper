@@ -16,10 +16,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotkeyManager = HotkeyManager()
     private let submitHotkeyManager = HotkeyManager(signature: HotkeyManager.submitSignature)
     private let loginItemManager = LoginItemManager()
+    private var launchAtLoginState = LoginItemStatusState()
+    private var launchAtLoginStatus: LoginItemStatus {
+        launchAtLoginState.status
+    }
+    private var settingsWindowController: SettingsWindowController?
     private var hotkeyRecorder: HotkeyRecorderWindowController?
     private var submitHotkeyRecorder: HotkeyRecorderWindowController?
     private var submitAfterPasteForCurrentRecording = false
     private var state: AppState = .idle
+    private var stateBeforeHotkeyError: AppState?
     private var timer: Timer?
     private var statusResetTimer: Timer?
     private var pasteTargetCacheTimer: Timer?
@@ -62,7 +68,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             if let startupError = error as? AppStartupError,
                case .hotkeyRegistration(let label, let reason) = startupError {
-                setState(.hotkeyError("Hotkey registration failed for \(label): \(reason)"))
+                setHotkeyError(
+                    "Hotkey registration failed for \(label): \(reason)"
+                )
             } else {
                 setState(.error(String(describing: error)))
             }
@@ -93,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusController.onRepairBackend = { [weak self] in self?.repairBackend() }
         statusController.onAcceptSignatureChange = { [weak self] in self?.acceptSignatureChange() }
         statusController.onRetryMicrophone = { [weak self] in self?.toggleRecording() }
+        statusController.onOpenSettings = { [weak self] in self?.showSettings() }
         statusController.onSelectLanguage = { [weak self] language in self?.selectLanguage(language) }
         statusController.onSelectModel = { [weak self] engine, model in self?.selectModel(engine: engine, model: model) }
         statusController.onSelectHotkey = { [weak self] shortcut in self?.selectHotkey(shortcut) }
@@ -154,17 +163,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         do {
-            if !hotkeyManager.hasActiveRegistration {
-                try hotkeyManager.register(shortcut: settings.hotkey) { [weak self] in
+            let transaction = HotkeyPairRegistrationTransaction(
+                primaryManager: hotkeyManager,
+                submitManager: submitHotkeyManager
+            )
+            try transaction.reconcile(
+                with: settings,
+                primaryAction: { [weak self] in
                     self?.toggleRecording(submitAfterPaste: false)
+                },
+                submitAction: { [weak self] in
+                    self?.toggleRecording(submitAfterPaste: true)
                 }
+            )
+            let previousState = stateBeforeHotkeyError
+            stateBeforeHotkeyError = nil
+            if backend.isRunning {
+                if let previousState,
+                   previousState.shouldRestoreAfterHotkeyRecovery {
+                    setState(previousState)
+                } else {
+                    setState(readyState())
+                }
+            } else if let previousState,
+                      previousState.shouldRestoreAfterHotkeyRecoveryWithoutBackend {
+                setState(previousState)
+            } else {
+                verifySignatureAndStartBackend()
             }
-            if settings.submitHotkey != nil, !submitHotkeyManager.hasActiveRegistration {
-                try registerSubmitHotkeyIfNeeded()
-            }
-            verifySignatureAndStartBackend()
         } catch {
-            setState(.hotkeyError("Hotkey registration failed: \(error)"))
+            setHotkeyError("Hotkey registration failed: \(error)")
         }
     }
 
@@ -866,12 +894,175 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return current
     }
 
+    private func showSettings() {
+        guard registry != nil, settings != nil else {
+            showOpenFailureAlert(
+                title: "Settings Are Unavailable",
+                message: "zen-whisper has not finished loading its settings."
+            )
+            return
+        }
+        rememberPasteTarget(stage: "settings open")
+        refreshLaunchAtLoginState()
+
+        let controller: SettingsWindowController
+        if let settingsWindowController {
+            controller = settingsWindowController
+        } else {
+            let newController = SettingsWindowController(
+                registry: registry,
+                settings: settings,
+                launchAtLoginStatus: launchAtLoginStatus
+            )
+            newController.onSave = { [weak self] request in
+                guard let self else {
+                    return .failure(SettingsApplicationError.appUnavailable)
+                }
+                return self.applySettingsWindowRequest(request)
+            }
+            newController.onRecordPrimaryHotkey = { [weak self] current, completion in
+                self?.recordSettingsPrimaryHotkey(
+                    current: current,
+                    completion: completion
+                )
+            }
+            newController.onRecordSubmitHotkey = { [weak self] current, completion in
+                self?.recordSettingsSubmitHotkey(
+                    current: current,
+                    completion: completion
+                )
+            }
+            newController.onCancelHotkeyRecording = { [weak self] in
+                self?.closeHotkeyRecorders()
+            }
+            newController.onRequestAudioInputDevices = {
+                AudioDeviceManager.inputDevices()
+            }
+            settingsWindowController = newController
+            controller = newController
+        }
+
+        synchronizeSettingsWindow()
+        controller.showSettings()
+    }
+
+    private func synchronizeSettingsWindow() {
+        guard let settingsWindowController,
+              registry != nil,
+              settings != nil else {
+            return
+        }
+        settingsWindowController.synchronize(
+            authoritativeSettings: settings,
+            launchAtLoginStatus: launchAtLoginStatus,
+            audioInputDevices: AudioDeviceManager.inputDevices(),
+            isBusy: state.blocksSettingsChanges
+        )
+    }
+
+    private func applySettingsWindowRequest(
+        _ request: SettingsSaveRequest
+    ) -> SettingsSaveOutcome {
+        var runtimeSettingsApplied = false
+        do {
+            if request.runtimeSettingsChanged {
+                runtimeSettingsApplied = try applyRuntimeSettings(request.settings)
+            }
+            if request.launchAtLoginChanged {
+                try applyLaunchAtLogin(request.launchAtLoginEnabled)
+            }
+            let authoritative = AuthoritativeSettings(
+                settings: settings,
+                launchAtLoginStatus: launchAtLoginStatus
+            )
+            synchronizeSettingsWindow()
+            return .success(authoritative)
+        } catch {
+            if request.launchAtLoginChanged {
+                reconcileLaunchAtLoginFailure(
+                    error,
+                    requestedEnabled: request.launchAtLoginEnabled
+                )
+            }
+            synchronizeSettingsWindow()
+            logInfo("settings window save failed: \(error.localizedDescription)")
+            if runtimeSettingsApplied {
+                return .partial(
+                    AuthoritativeSettings(
+                        settings: settings,
+                        launchAtLoginStatus: launchAtLoginStatus
+                    ),
+                    error
+                )
+            }
+            return .failure(error)
+        }
+    }
+
+    private func recordSettingsPrimaryHotkey(
+        current: HotkeyShortcut,
+        completion: @escaping (HotkeyShortcut?) -> Void
+    ) {
+        guard allowRuntimeSettingsChange("settings hotkey recorder") else {
+            completion(nil)
+            return
+        }
+        closeHotkeyRecorders()
+        suspendHotkeysForRecorder()
+        let recorder = HotkeyRecorderWindowController(
+            title: "Record Hotkey",
+            instruction: "Press the shortcut to start or stop recording. Use Ctrl, Option, or Cmd. Shift+Space is also allowed.",
+            currentShortcut: current
+        ) { [weak self] shortcut in
+            guard let self else {
+                return
+            }
+            self.hotkeyRecorder = nil
+            self.resumeHotkeysAfterRecorder()
+            completion(shortcut)
+        }
+        hotkeyRecorder = recorder
+        recorder.showRecorder()
+    }
+
+    private func recordSettingsSubmitHotkey(
+        current: HotkeyShortcut?,
+        completion: @escaping (HotkeyShortcut?) -> Void
+    ) {
+        guard allowRuntimeSettingsChange("settings submit hotkey recorder") else {
+            completion(nil)
+            return
+        }
+        closeHotkeyRecorders()
+        suspendHotkeysForRecorder()
+        let recorder = HotkeyRecorderWindowController(
+            title: "Record Submit Hotkey",
+            instruction: "Press the shortcut to record, paste, and send Return after paste. Use Ctrl, Option, or Cmd.",
+            currentShortcut: current ?? .shiftCommandSpace
+        ) { [weak self] shortcut in
+            guard let self else {
+                return
+            }
+            self.submitHotkeyRecorder = nil
+            self.resumeHotkeysAfterRecorder()
+            completion(shortcut)
+        }
+        submitHotkeyRecorder = recorder
+        recorder.showRecorder()
+    }
+
     private func selectLanguage(_ language: String) {
+        guard allowRuntimeSettingsChange("language") else {
+            return
+        }
         settings.language = registry.validLanguage(language, for: settings.engine)
         saveSettingsAndPreloadSelectedModel()
     }
 
     private func selectModel(engine: String, model: String) {
+        guard allowRuntimeSettingsChange("recognition model") else {
+            return
+        }
         let previousEngine = settings.engine
         let previousModel = registry.validModel(settings.lastModelByEngine[previousEngine], for: previousEngine)
         let engine = registry.validEngine(engine)
@@ -888,6 +1079,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func selectHotkey(_ shortcut: HotkeyShortcut) {
+        guard allowRuntimeSettingsChange("hotkey") else {
+            return
+        }
         guard shortcut != settings.hotkey else {
             return
         }
@@ -915,7 +1109,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.toggleRecording(submitAfterPaste: false)
                     }
                 } catch {
-                    setState(.hotkeyError("Could not restore \(previous.label): \(error)"))
+                    setHotkeyError("Could not restore \(previous.label): \(error)")
                     return
                 }
             }
@@ -927,6 +1121,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func recordCustomHotkey() {
+        guard allowRuntimeSettingsChange("hotkey recorder") else {
+            return
+        }
         closeHotkeyRecorders()
         suspendHotkeysForRecorder()
         let recorder = HotkeyRecorderWindowController(
@@ -954,6 +1151,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func selectSubmitHotkey(_ shortcut: HotkeyShortcut?) {
+        guard allowRuntimeSettingsChange("submit hotkey") else {
+            return
+        }
         guard shortcut != settings.submitHotkey else {
             return
         }
@@ -988,7 +1188,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self?.toggleRecording(submitAfterPaste: true)
                     }
                 } catch {
-                    setState(.hotkeyError("Could not restore submit \(previous.label): \(error)"))
+                    setHotkeyError(
+                        "Could not restore submit \(previous.label): \(error)"
+                    )
                     return
                 }
             }
@@ -1000,6 +1202,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func recordCustomSubmitHotkey() {
+        guard allowRuntimeSettingsChange("submit hotkey recorder") else {
+            return
+        }
         closeHotkeyRecorders()
         suspendHotkeysForRecorder()
         let current = settings.submitHotkey ?? HotkeyShortcut.shiftCommandSpace
@@ -1048,7 +1253,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try hotkeyManager.resume()
         } catch {
-            setState(.hotkeyError("Could not restore \(settings.hotkey.label): \(error)"))
+            setHotkeyError(
+                "Could not restore \(settings.hotkey.label): \(error)"
+            )
         }
     }
 
@@ -1059,7 +1266,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             try submitHotkeyManager.resume()
         } catch {
-            setState(.hotkeyError("Could not restore submit \(settings.submitHotkey?.label ?? "hotkey"): \(error)"))
+            setHotkeyError(
+                "Could not restore submit "
+                    + "\(settings.submitHotkey?.label ?? "hotkey"): \(error)"
+            )
         }
     }
 
@@ -1082,12 +1292,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setSilenceAutoStop(_ enabled: Bool) {
+        guard allowRuntimeSettingsChange("silence auto-stop") else {
+            return
+        }
         settings.silenceAutoStopEnabled = enabled
         saveSettingsOnly()
     }
 
     private func selectOutputMode(_ mode: OutputMode) {
-        guard settings != nil else {
+        guard settings != nil, allowRuntimeSettingsChange("output mode") else {
             return
         }
         settings.outputMode = mode
@@ -1095,7 +1308,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func setUnverifiedPasteFallback(_ enabled: Bool) {
-        guard settings != nil else {
+        guard settings != nil, allowRuntimeSettingsChange("unverified paste fallback") else {
             return
         }
         settings.allowUnverifiedPasteFallback = enabled
@@ -1103,32 +1316,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func selectMicrophone(_ uid: String?) {
-        guard settings != nil else {
+        guard settings != nil, allowRuntimeSettingsChange("microphone") else {
             return
         }
         settings.microphoneDeviceUID = uid?.isEmpty == true ? nil : uid
         saveSettingsOnly()
     }
 
+    private func allowRuntimeSettingsChange(_ label: String) -> Bool {
+        guard !state.blocksSettingsChanges else {
+            logInfo("ignored \(label) settings change while app is busy")
+            return false
+        }
+        return true
+    }
+
     private func refreshLaunchAtLoginState() {
-        switch loginItemManager.status() {
-        case .enabled:
-            statusController?.updateLaunchAtLogin(enabled: true)
-        case .disabled:
-            statusController?.updateLaunchAtLogin(enabled: false)
+        let status = launchAtLoginState.refresh(
+            observed: loginItemManager.status()
+        )
+        updateLaunchAtLoginState(status)
+    }
+
+    private func reconcileLaunchAtLoginFailure(
+        _ error: Error,
+        requestedEnabled: Bool
+    ) {
+        let status = launchAtLoginState.didFail(
+            error,
+            requestedEnabled: requestedEnabled,
+            observed: loginItemManager.status()
+        )
+        updateLaunchAtLoginState(status)
+    }
+
+    private func updateLaunchAtLoginState(_ status: LoginItemStatus) {
+        switch launchAtLoginStatus {
+        case .enabled, .disabled:
+            break
         case .invalid(let reason):
-            statusController?.updateLaunchAtLogin(enabled: false)
             logInfo("launch at login status unavailable: \(reason)")
         }
+        statusController?.updateLaunchAtLogin(status: launchAtLoginStatus)
+        synchronizeSettingsWindow()
     }
 
     private func setLaunchAtLogin(_ enabled: Bool) {
         do {
-            try loginItemManager.setEnabled(enabled)
-            statusController.updateLaunchAtLogin(enabled: enabled)
+            try applyLaunchAtLogin(enabled)
             logInfo("launch at login \(enabled ? "enabled" : "disabled")")
         } catch {
-            refreshLaunchAtLoginState()
+            reconcileLaunchAtLoginFailure(
+                error,
+                requestedEnabled: enabled
+            )
             logInfo("launch at login change failed: \(error.localizedDescription)")
             let alert = NSAlert()
             alert.alertStyle = .warning
@@ -1139,12 +1380,117 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func applyLaunchAtLogin(_ enabled: Bool) throws {
+        let requestedStatus: LoginItemStatus = enabled ? .enabled : .disabled
+        guard requestedStatus != launchAtLoginStatus else {
+            return
+        }
+        try loginItemManager.setEnabled(enabled)
+        _ = launchAtLoginState.didApply(enabled: enabled)
+        statusController.updateLaunchAtLogin(status: requestedStatus)
+        synchronizeSettingsWindow()
+    }
+
+    @discardableResult
+    private func applyRuntimeSettings(_ proposedSettings: SettingsSnapshot) throws -> Bool {
+        var editor = SettingsEditorState(
+            settings: settings,
+            launchAtLoginStatus: launchAtLoginStatus,
+            registry: registry
+        )
+        editor.draftSettings = proposedSettings
+        editor.normalizeDraft()
+        if let issue = editor.validationIssue {
+            throw SettingsApplicationError.validation(issue.message)
+        }
+        guard !state.blocksSettingsChanges || !editor.runtimeSettingsChanged else {
+            throw SettingsApplicationError.busy
+        }
+        guard editor.runtimeSettingsChanged else {
+            return false
+        }
+
+        let canonicalSettings = editor.normalizedDraftSettings
+        let previousSettings = settings!
+        if canonicalSettings.hotkey != previousSettings.hotkey
+            || canonicalSettings.submitHotkey != previousSettings.submitHotkey {
+            try replaceHotkeyRegistrations(
+                with: canonicalSettings,
+                restoring: previousSettings
+            )
+        }
+
+        settings = canonicalSettings
+        saveSettingsOnly()
+        recoverFromHotkeyErrorIfReady()
+
+        switch editor.applyPlan {
+        case .restart:
+            switch state {
+            case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied,
+                 .copySkipped, .copyFailed, .microphoneError:
+                restartBackendForModelChange()
+            case .idle, .recording, .preloading, .transcribing,
+                 .backendRepairRequired, .repairingBackend, .hotkeyError,
+                 .appSignatureChanged, .error:
+                break
+            }
+        case .preload:
+            switch state {
+            case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied,
+                 .copySkipped, .copyFailed:
+                preloadSelectedModel()
+            case .idle, .recording, .preloading, .transcribing,
+                 .backendRepairRequired, .repairingBackend, .microphoneError,
+                 .hotkeyError, .appSignatureChanged, .error:
+                break
+            }
+        case .none, .saveOnly:
+            break
+        }
+        return true
+    }
+
+    private func replaceHotkeyRegistrations(
+        with proposedSettings: SettingsSnapshot,
+        restoring previousSettings: SettingsSnapshot
+    ) throws {
+        closeHotkeyRecorders()
+        let transaction = HotkeyPairRegistrationTransaction(
+            primaryManager: hotkeyManager,
+            submitManager: submitHotkeyManager
+        )
+        do {
+            try transaction.replace(
+                with: proposedSettings,
+                restoring: previousSettings,
+                primaryAction: { [weak self] in
+                    self?.toggleRecording(submitAfterPaste: false)
+                },
+                submitAction: { [weak self] in
+                    self?.toggleRecording(submitAfterPaste: true)
+                }
+            )
+        } catch HotkeyPairReplacementError.registrationFailed(let reason) {
+            throw SettingsApplicationError.hotkeyRegistration(reason)
+        } catch HotkeyPairReplacementError.rollbackFailed(let registration, let rollback) {
+            setHotkeyError(
+                "Could not restore the previous hotkeys: \(rollback)"
+            )
+            throw SettingsApplicationError.hotkeyRollbackFailed(
+                registration: registration,
+                rollback: rollback
+            )
+        }
+    }
+
     private func saveSettingsOnly() {
         settings.engine = registry.validEngine(settings.engine)
         settings.language = registry.validLanguage(settings.language, for: settings.engine)
         settings.lastModelByEngine = registry.coerceModels(settings.lastModelByEngine)
         settingsStore.save(settings)
         statusController.updateSettings(registry: registry, settings: settings)
+        synchronizeSettingsWindow()
     }
 
     private func saveSettingsAndPreloadSelectedModel() {
@@ -1300,6 +1646,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func setHotkeyError(_ message: String) {
+        if case .hotkeyError = state {
+            // Preserve the state captured by the first hotkey failure.
+        } else {
+            stateBeforeHotkeyError = state
+        }
+        setState(.hotkeyError(message))
+    }
+
     private func setState(_ newState: AppState) {
         if case .copied = newState {
         } else if case .copySkipped = newState {
@@ -1310,6 +1665,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         state = newState
         statusController.update(state: newState)
+        settingsWindowController?.updateBusyState(newState.blocksSettingsChanges)
         updatePasteTargetCacheTimer(for: newState)
     }
 
@@ -1439,6 +1795,29 @@ extension BackendRepairError: CustomStringConvertible {
                 return "failed with exit status \(status)"
             }
             return "failed with exit status \(status): \(output)"
+        }
+    }
+}
+
+enum SettingsApplicationError: LocalizedError {
+    case appUnavailable
+    case busy
+    case validation(String)
+    case hotkeyRegistration(String)
+    case hotkeyRollbackFailed(registration: String, rollback: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .appUnavailable:
+            return "zen-whisper is no longer available to save these settings."
+        case .busy:
+            return "Settings cannot be changed while recording, loading a model, transcribing, or repairing the backend."
+        case .validation(let message):
+            return message
+        case .hotkeyRegistration(let reason):
+            return "The requested hotkeys could not be registered. The previous hotkeys are still active. \(reason)"
+        case .hotkeyRollbackFailed(let registration, let rollback):
+            return "The requested hotkeys could not be registered, and the previous hotkeys could not be restored. Registration: \(registration). Restore: \(rollback)."
         }
     }
 }

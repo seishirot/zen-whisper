@@ -913,6 +913,98 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: manager.plistURL.path))
     }
 
+    func testLoginItemStatusStateKeepsBootstrapCleanupFailureRetryable() {
+        var state = LoginItemStatusState(status: .disabled)
+        let error = LoginItemError.bootstrapCleanupFailed(
+            bootstrap: "launchctl failed",
+            cleanup: "permission denied",
+            plistPath: "/tmp/com.seishirot.zenwhisper.plist"
+        )
+
+        let failedStatus = state.didFail(
+            error,
+            requestedEnabled: true,
+            observed: .enabled
+        )
+        guard case .invalid(let reason) = failedStatus else {
+            return XCTFail("Expected cleanup failure to remain unresolved")
+        }
+        XCTAssertTrue(reason.contains("cleanup also failed"))
+
+        XCTAssertEqual(
+            state.refresh(observed: .enabled),
+            failedStatus,
+            "A leftover matching plist must not clear the failed change"
+        )
+        XCTAssertEqual(state.didApply(enabled: true), .enabled)
+        XCTAssertEqual(state.refresh(observed: .disabled), .disabled)
+    }
+
+    func testLoginItemStatusStateUsesObservedStatusForRecoverableFailure() {
+        var state = LoginItemStatusState(status: .enabled)
+
+        XCTAssertEqual(
+            state.didFail(
+                LoginItemError.launchctlFailed("permission denied"),
+                requestedEnabled: true,
+                observed: .disabled
+            ),
+            .disabled
+        )
+        XCTAssertEqual(state.refresh(observed: .enabled), .enabled)
+    }
+
+    func testLoginItemStatusStateLatchesAnyAmbiguousRequestedStatus() {
+        var state = LoginItemStatusState(status: .disabled)
+
+        let failedStatus = state.didFail(
+            LoginItemError.permissionFailed(EACCES),
+            requestedEnabled: true,
+            observed: .enabled
+        )
+        guard case .invalid(let reason) = failedStatus else {
+            return XCTFail("Expected requested-looking failed state to be invalid")
+        }
+        XCTAssertTrue(reason.contains("ambiguous"))
+        XCTAssertEqual(state.refresh(observed: .enabled), failedStatus)
+    }
+
+    func testOnlyPersistentErrorsSurviveHotkeyRecoveryWithoutBackend() {
+        XCTAssertTrue(
+            AppState.modelUnavailable("missing")
+                .shouldRestoreAfterHotkeyRecovery
+        )
+        XCTAssertTrue(
+            AppState.microphoneError("denied")
+                .shouldRestoreAfterHotkeyRecovery
+        )
+        XCTAssertFalse(AppState.inputWaiting.shouldRestoreAfterHotkeyRecovery)
+
+        XCTAssertTrue(
+            AppState.modelUnavailable("missing")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertTrue(
+            AppState.backendRepairRequired("broken")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertTrue(
+            AppState.appSignatureChanged
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertTrue(
+            AppState.error("failed")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertFalse(
+            AppState.inputWaiting.shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertFalse(
+            AppState.microphoneError("denied")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+    }
+
     func testPasteDecisionRequiresCompleteStableTargetHistory() {
         let controller = PasteController()
         let target = pasteTarget()

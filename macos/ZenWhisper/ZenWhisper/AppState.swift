@@ -80,6 +80,41 @@ enum AppState: Equatable {
         }
         return canStartRecording
     }
+
+    var blocksSettingsChanges: Bool {
+        switch self {
+        case .recording, .preloading, .transcribing, .repairingBackend:
+            return true
+        case .idle, .inputWaiting, .pasteUnavailable, .copied, .copySkipped,
+             .copyFailed, .modelUnavailable, .backendRepairRequired,
+             .microphoneError, .hotkeyError, .appSignatureChanged, .error:
+            return false
+        }
+    }
+
+    var shouldRestoreAfterHotkeyRecovery: Bool {
+        switch self {
+        case .modelUnavailable, .backendRepairRequired, .microphoneError,
+             .appSignatureChanged, .error:
+            return true
+        case .idle, .inputWaiting, .pasteUnavailable, .recording, .preloading,
+             .transcribing, .copied, .copySkipped, .copyFailed,
+             .repairingBackend, .hotkeyError:
+            return false
+        }
+    }
+
+    var shouldRestoreAfterHotkeyRecoveryWithoutBackend: Bool {
+        switch self {
+        case .modelUnavailable, .backendRepairRequired, .appSignatureChanged,
+             .error:
+            return true
+        case .idle, .inputWaiting, .pasteUnavailable, .recording, .preloading,
+             .transcribing, .copied, .copySkipped, .copyFailed,
+             .repairingBackend, .microphoneError, .hotkeyError:
+            return false
+        }
+    }
 }
 
 enum StatusText {

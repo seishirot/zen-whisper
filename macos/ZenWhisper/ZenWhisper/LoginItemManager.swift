@@ -14,6 +14,50 @@ enum LoginItemStatus: Equatable {
     }
 }
 
+struct LoginItemStatusState {
+    private(set) var status: LoginItemStatus
+    private var unresolvedFailure: LoginItemStatus?
+
+    init(status: LoginItemStatus = .disabled) {
+        self.status = status
+    }
+
+    @discardableResult
+    mutating func refresh(observed status: LoginItemStatus) -> LoginItemStatus {
+        self.status = unresolvedFailure ?? status
+        return self.status
+    }
+
+    @discardableResult
+    mutating func didApply(enabled: Bool) -> LoginItemStatus {
+        unresolvedFailure = nil
+        status = enabled ? .enabled : .disabled
+        return status
+    }
+
+    @discardableResult
+    mutating func didFail(
+        _ error: Error,
+        requestedEnabled: Bool,
+        observed status: LoginItemStatus
+    ) -> LoginItemStatus {
+        let requestedStatus: LoginItemStatus =
+            requestedEnabled ? .enabled : .disabled
+        if status == requestedStatus {
+            let failure = LoginItemStatus.invalid(
+                "Launch at Login update failed and the observed state is ambiguous: "
+                    + error.localizedDescription
+            )
+            unresolvedFailure = failure
+            self.status = failure
+        } else {
+            unresolvedFailure = nil
+            self.status = status
+        }
+        return self.status
+    }
+}
+
 struct LoginItemManager {
     static let label = "com.seishirot.zenwhisper"
     static let appPath = "/Applications/zen-whisper.app"

@@ -4,6 +4,8 @@ import Foundation
 enum HotkeyError: Error {
     case registrationFailed(OSStatus)
     case handlerInstallFailed(OSStatus)
+    case unregistrationFailed(OSStatus)
+    case handlerRemovalFailed(OSStatus)
 }
 
 final class HotkeyManager {
@@ -20,6 +22,10 @@ final class HotkeyManager {
 
     var hasActiveRegistration: Bool {
         hotKeyRef != nil
+    }
+
+    var activeShortcut: HotkeyShortcut? {
+        hotKeyRef == nil ? nil : registeredShortcut
     }
 
     init(signature: OSType = HotkeyManager.primarySignature) {
@@ -64,6 +70,18 @@ final class HotkeyManager {
         }
     }
 
+    func suspendReportingFailure() throws {
+        guard let hotKeyRef else {
+            return
+        }
+        let status = UnregisterEventHotKey(hotKeyRef)
+        guard status == noErr else {
+            throw HotkeyError.unregistrationFailed(status)
+        }
+        self.hotKeyRef = nil
+        registeredHotKeyID = nil
+    }
+
     func resume() throws {
         guard hotKeyRef == nil,
               let registeredShortcut,
@@ -82,6 +100,27 @@ final class HotkeyManager {
         }
         hotKeyRef = nil
         handlerRef = nil
+        action = nil
+        registeredShortcut = nil
+        registeredHotKeyID = nil
+    }
+
+    func unregisterReportingFailure() throws {
+        if let hotKeyRef {
+            let status = UnregisterEventHotKey(hotKeyRef)
+            guard status == noErr else {
+                throw HotkeyError.unregistrationFailed(status)
+            }
+            self.hotKeyRef = nil
+            registeredHotKeyID = nil
+        }
+        if let handlerRef {
+            let status = RemoveEventHandler(handlerRef)
+            guard status == noErr else {
+                throw HotkeyError.handlerRemovalFailed(status)
+            }
+            self.handlerRef = nil
+        }
         action = nil
         registeredShortcut = nil
         registeredHotKeyID = nil

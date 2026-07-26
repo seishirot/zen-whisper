@@ -167,6 +167,9 @@ Use the Windows tray icon or macOS menu bar item to:
   engine, and device directly. Windows Python supports
   Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and
   MLX Qwen3-ASR entries.
+- Open `Settings…` to edit the native macOS app settings in one window. The
+  existing menu items remain available for quick changes and stay synchronized
+  with the window.
 - Select a domain profile independently from postprocessing (Windows/Python tray)
 - Select postprocessing: off, dictionary only, or a configured CLI preset (Windows/Python tray). The menu and tooltip keep `ローカル` / `外部送信` / `送信先不明` visible.
 - Open the structured settings window to edit app settings, profiles, and
@@ -192,12 +195,14 @@ while recording, transcribing, or postprocessing. If a tray action changes
 settings after the window was opened, a stale save is rejected and the window
 asks for a reload. Only fields changed in the form are applied to the loaded
 snapshot; malformed existing TOML is not overwritten, and unknown future
-fields in valid `config.toml` files are retained. The macOS native app settings
-are changed from the menu bar item and stored in macOS app settings. Engine and
-device dropdown choices only include runtimes available in the current
-installation. An unavailable value already present in `config.toml` remains
-visible with a warning until you select an installed replacement; install the
-relevant extra and restart ZenWhisper before selecting an optional backend.
+fields in valid `config.toml` files are retained. The macOS native app has a
+separate AppKit settings window, described below, and stores its values in
+macOS app settings rather than `config.toml`. Engine and device dropdown
+choices in the Windows/Python editor only include runtimes available in the
+current installation. An unavailable value already present in `config.toml`
+remains visible with a warning until you select an installed replacement;
+install the relevant extra and restart ZenWhisper before selecting an optional
+backend.
 
 | Section | Key settings |
 |---|---|
@@ -235,6 +240,37 @@ The macOS native app uses MLX models and stores its selection in macOS app
 settings instead of `config.toml`. Choose `Recognition Model` from the menu bar
 item to select MLX Whisper or MLX Qwen3-ASR. It intentionally does not include
 the Windows/Python CPU, CUDA, or Reazon K2 menu entries.
+
+### macOS Native Settings Window
+
+Choose `Settings…` from the macOS status menu to edit the recording and submit
+hotkeys, language, MLX recognition engine and model, silence auto-stop,
+microphone, output mode, unverified paste fallback, and Launch at Login. The
+menu shortcuts remain available; changes saved from either surface update the
+other surface across restarts. Runtime settings use the shared macOS app
+preferences; Launch at Login is managed separately through its LaunchAgent.
+
+The window edits a snapshot. `Save` becomes available only after a real change,
+`Cancel` restores the last committed values, and closing a dirty window asks
+whether to discard the unsaved changes. Recording, model preloading,
+transcription, and backend repair temporarily disable runtime settings that
+cannot be changed safely, including microphone selection. A runtime-settings
+save attempted while the app is busy is rejected without overwriting the
+committed settings; Launch at Login remains independently editable. If runtime
+settings are saved but Launch at Login cannot be updated, the window reports
+the partial result and keeps only the failed Launch at Login change dirty for
+retry. An unreadable LaunchAgent is shown as `Needs Attention`/indeterminate
+instead of being treated as disabled; choosing On or Off replaces that state.
+
+A previously saved microphone that is currently disconnected remains selected
+and is shown as unavailable instead of being silently replaced. Choose `System
+Default` explicitly to clear that saved device. The device list is refreshed
+when the settings window becomes active. The native window supports keyboard
+navigation, VoiceOver labels, and resizing.
+
+Profiles, dictionary replacement, arbitrary CLI postprocessors, and Reazon K2
+remain outside the native macOS settings window. Configure those through the
+Windows/Python application where supported.
 
 ### Profiles and optional postprocessing
 
@@ -335,7 +371,10 @@ model service.
 
 - `recording.microphone = ""` uses the current OS default input.
 - Select `マイク` from the Windows/Python tray menu to save a specific microphone name to `config.toml`. In the macOS native app, select `Microphone` from the menu bar item; the choice is stored in macOS app settings.
-- If the selected microphone is unavailable at startup or recording time, ZenWhisper keeps the saved setting and falls back to the OS default input.
+- On Windows/Python, an unavailable configured microphone is retained and
+  recording falls back to the OS default input. On macOS native, the saved
+  device UID is retained and shown as unavailable; select `System Default` to
+  clear it before recording.
 - The Windows/Python tray menu hides Windows low-level/pseudo inputs such as WDM-KS devices, Sound Mapper, and Primary Sound Capture Driver. On Windows, inactive capture endpoints are also filtered out when endpoint metadata is available.
 - `recording.sample_rate` is the app-internal ASR/VAD processing rate and is currently fixed to 16kHz. Devices such as NVIDIA Broadcast may be opened at 48kHz and resampled before ASR.
 - Recording start logs include `configured`, `actual_device`, `name`, `hostapi`, `stream_sr`, `target_sr`, `channels`, and `fallback_used`, so virtual inputs such as NVIDIA Broadcast can be verified in `zen-whisper.log`.
