@@ -27,3 +27,9 @@ canonical = "Ollama"
 spoken = ["オラマ"]
 replace_from = ["オラーま", "オラマ", "オラアマ"]
 description = "ローカル LLM を実行するツール"
+
+[[terms]]
+canonical = "Claude Code"
+spoken = ["クロードコード"]
+replace_from = ["クラウドコード", "クロード コード"]
+description = "Anthropic のコーディング CLI"

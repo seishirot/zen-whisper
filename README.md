@@ -10,7 +10,7 @@ Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe
 - **Local ASR transcription** — no data leaves your machine after models are installed
 - **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
 - **Domain profiles** — reusable project context, preferred spellings, pronunciations, and exact error mappings
-- **Optional CLI cleanup** — generic shell-free presets, including Codex (remote) and Ollama (loopback local)
+- **Optional CLI cleanup** — generic shell-free presets, including Claude Code (remote) and Ollama (loopback local)
 - **Tray / menu bar** — runs in the background with a Windows tray icon or macOS menu bar item showing recording state
 - **Microphone selection** — pick the recording input from the Windows tray or macOS menu bar, including virtual mics like NVIDIA Broadcast
 - **Floating overlay** — Windows/Python draggable microphone widget with real-time VAD visual feedback
@@ -90,7 +90,7 @@ Face.
 For Qwen3-ASR experiments:
 
 ```bash
-uv sync --extra qwen3       # CPU PyTorch for manual config experiments
+uv sync --extra qwen3       # CPU PyTorch for settings/config experiments
 uv sync --extra qwen3-cuda  # CUDA 12.6 PyTorch on Windows/Linux
 ```
 
@@ -150,7 +150,9 @@ mise exec -- uv run python src/main.py
 
 For Python CLI, set `[hotkey] submit_toggle` in `config.toml` to add an alternate
 toggle that presses Enter after pasting when it is used to stop recording. In
-the macOS native app, choose `Submit Hotkey` from the menu bar item.
+the macOS native app, choose `Submit Hotkey` from the menu bar item. If a Python
+CLI postprocessor runs, ZenWhisper pastes its result but suppresses Enter so the
+generated or externally transformed text can be reviewed before submission.
 
 On macOS, it appears in the menu bar instead of the Python tray.
 
@@ -159,7 +161,10 @@ On macOS, it appears in the menu bar instead of the Python tray.
 Use the Windows tray icon or macOS menu bar item to:
 - Switch transcription language
 - Select microphone input, or refresh the microphone list after devices change
-- Select ASR engine/model. Windows Python supports Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and MLX Qwen3-ASR entries.
+- Select ASR engine/model. The Windows parent items show the current language,
+  engine, and device directly. Windows Python supports
+  Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and
+  MLX Qwen3-ASR entries.
 - Select a domain profile independently from postprocessing (Windows/Python tray)
 - Select postprocessing: off, dictionary only, or a configured CLI preset (Windows/Python tray). The menu and tooltip keep `ローカル` / `外部送信` / `送信先不明` visible.
 - Open the structured settings window to edit app settings, profiles, and
@@ -174,16 +179,23 @@ Windows/Python settings can be edited from the tray's `設定...` window and are
 stored in `config.toml`; see `config.example.toml` for defaults and
 descriptions. Profile files and local CLI presets are edited from their own
 tabs and stored in `profiles/*.toml` and `postprocessors.toml`. Writes use a
-temporary file plus atomic replacement. Hotkey and logging changes require an
-app restart; other supported settings are applied after saving. Saving is
-blocked while recording, transcribing, or postprocessing. If a tray action
-changes settings after the window was opened, a stale save is rejected and the
-window asks for a reload. Malformed existing TOML is not overwritten, and
-unknown future fields in valid `config.toml` files are retained. The macOS
-native app settings are changed from the menu bar item and stored in macOS app
-settings. Engine and device selectors only show runtimes available in the
-current installation; install the relevant extra and restart ZenWhisper before
-selecting an optional backend.
+temporary file plus atomic replacement. The window displays the current
+effective values from `config.toml` plus defaults; empty optional values are
+shown explicitly as `（OS既定）` or `（無効）`, while fixed internal values are
+read-only. The config save button is enabled only after a setting changes, and
+a field-level preview is shown before writing. Profile and CLI definition
+editors have separate save buttons. Hotkey and logging changes require an app
+restart; other supported settings are applied after saving. Saving is blocked
+while recording, transcribing, or postprocessing. If a tray action changes
+settings after the window was opened, a stale save is rejected and the window
+asks for a reload. Only fields changed in the form are applied to the loaded
+snapshot; malformed existing TOML is not overwritten, and unknown future
+fields in valid `config.toml` files are retained. The macOS native app settings
+are changed from the menu bar item and stored in macOS app settings. Engine and
+device dropdown choices only include runtimes available in the current
+installation. An unavailable value already present in `config.toml` remains
+visible with a warning until you select an installed replacement; install the
+relevant extra and restart ZenWhisper before selecting an optional backend.
 
 | Section | Key settings |
 |---|---|
@@ -193,7 +205,7 @@ selecting an optional backend.
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |
 | `[enhancement]` | `profile` (a filename from `profiles/`), `postprocessor` (`off`/`dictionary`/preset ID) |
 | `[feedback]` | `sound_enabled`, `sound_type` (`tone`/`custom`), `volume` |
-| `[overlay]` | `enabled`, `position`, `size` |
+| `[overlay]` | `enabled`; `position` / `size` are reserved compatibility values and are currently ignored |
 | `[logging]` | `level`, `file` |
 
 ### Python CLI ASR Engines
@@ -201,8 +213,15 @@ selecting an optional backend.
 - `engine = "whisper"` is the default. Select the engine and device explicitly from the Windows tray.
 - `engine = "whisper"` uses faster-whisper on Windows. When the resolved device is CPU, ZenWhisper forces `compute_type = "int8"` and passes `cpu_threads`.
 - `device = "cuda"` is the Windows default for the Python CLI. Select `Whisper > CPU (int8)` when you want the CPU Whisper path.
-- `engine = "reazon-k2"` uses the fast Japanese CPU backend without PyTorch. Long audio is split into `reazon_chunk_sec` chunks with `reazon_trailing_silence_sec` silence appended to each chunk.
-- `engine = "qwen3-asr"` keeps the existing Python Qwen3-ASR path for quality-focused experiments. The Windows/Python tray Qwen3-ASR entries target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3` installs the CPU PyTorch variant for manual `config.toml` experiments with `device = "cpu"`.
+- `engine = "reazon-k2"` uses the fast Japanese CPU backend without PyTorch.
+  Its default precision is `int8-fp32`; `int8` and `fp32` remain available for
+  explicit comparison. Long audio is split into `reazon_chunk_sec` chunks with
+  `reazon_trailing_silence_sec` silence appended to each chunk.
+- `engine = "qwen3-asr"` keeps the existing Python Qwen3-ASR path for
+  quality-focused experiments. The Windows/Python tray Qwen3-ASR entries
+  target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3`
+  installs the CPU PyTorch variant, which can be selected as `device = "cpu"`
+  in the structured settings window or `config.toml`.
 
 The Windows tray intentionally does not include an automatic ASR fallback mode.
 Unavailable backends such as Reazon K2 without the optional extra or CUDA
@@ -238,7 +257,8 @@ are ASR hints and are not silently rewritten.
 
 The bundled `postprocessors.default.toml` contains:
 
-- `codex`: remote Codex CLI cleanup
+- `claude`: remote Claude Code cleanup using the `haiku` model alias; safe
+  mode, no tools, and no session persistence
 - `ollama`: local `qwen3.5:4b` cleanup, pinned to
   `127.0.0.1:11434`
 
@@ -248,16 +268,20 @@ ZenWhisper stops and asks you to run `ollama pull qwen3.5:4b`; it does not let
 
 Add or override arbitrary CLIs from `設定... > 後処理CLI`. The editor keeps the
 command, input mode, model arguments, environment, destination declaration, and
-prompt free-form. The equivalent ignored file is `postprocessors.toml`:
+prompt free-form. Model selection is an ordinary CLI argument in the command
+field, so provider-specific flags such as `--model` do not require a dedicated
+ZenWhisper setting. The editor lists every supported placeholder and inserts it
+into the appropriate field when clicked. The equivalent ignored file is
+`postprocessors.toml`:
 
 ```toml
-[postprocessors.claude]
-display_name = "Claude 校正"
-command = 'claude -p "{{prompt}}"'
+[postprocessors.custom]
+display_name = "Custom 校正"
+command = 'custom-cleaner --prompt "{{prompt}}"'
 input_mode = "argument"
 output_mode = "stdout"
 timeout_sec = 30
-data_destination = "remote"
+data_destination = "unknown"
 prompt_template = """
 次の文字起こしを保守的に校正し、本文だけ返してください。
 文脈: {{context}}
@@ -289,15 +313,21 @@ preset displays a warning that the transcript, selected profile context, and
 dictionary data are passed to that CLI. In the settings UI, changing the
 command or environment of a preset currently classified as local also forces
 its destination to `unknown`; classify it as local again only after separately
-verifying the edited command and host.
+verifying the edited command and host. Custom CLI processes inherit the
+ZenWhisper process environment, so do not configure an executable you do not
+trust.
 
 If a CLI is missing, times out, exits nonzero, or returns empty output,
 ZenWhisper pastes the dictionary-corrected fallback. A submit-after-paste
-hotkey cancels Enter in that failure case so unreviewed fallback text is not
-sent automatically. Transcript and CLI output bodies are not written to the
-ZenWhisper log. A timeout stops ZenWhisper waiting for the invoked process, but
-cannot retract data already handed to a CLI or guarantee cancellation inside an
-external/local model service.
+hotkey always cancels Enter when a CLI preset was selected, whether the CLI
+succeeded or failed, so generated or externally transformed text is not sent
+automatically. Dictionary-only replacement remains eligible for automatic
+Enter. Before paste, CLI output line breaks and control characters are
+collapsed to spaces so they cannot act as embedded terminal Enter/control
+input. Transcript and CLI output bodies are not written to the ZenWhisper log.
+A timeout stops ZenWhisper waiting for the invoked process, but cannot retract
+data already handed to a CLI or guarantee cancellation inside an external/local
+model service.
 
 ### Microphone selection
 
@@ -314,7 +344,9 @@ external/local model service.
 - Modifier keys: `win` (= `cmd` on macOS), `shift`, `ctrl`, `alt`
 - Examples: `"shift+space"`, `"win+j"`, `"ctrl+alt+r"`
 - Multiple hotkeys: `toggle = ["shift+space", "win+j"]`
-- Submit-after-paste toggle: `submit_toggle = "ctrl+shift+space"`; it only sends Enter when the key press stops an active recording
+- Submit-after-paste toggle: `submit_toggle = "ctrl+shift+space"`; it only sends
+  Enter when the key press stops an active recording, and suppresses Enter when
+  a CLI postprocessor was selected
 
 ### Python CLI Custom Sound Files
 
@@ -344,7 +376,7 @@ To use custom start/stop sounds instead of generated tones:
 
 ### General
 
-- **Hallucination in silent recordings**: Near-silent recordings are discarded before ASR. Check `rms` and `peak` in `zen-whisper.log`; tune `min_audio_rms` and `min_audio_peak` in `[recording]`, plus `no_speech_threshold` and `hallucination_silence_threshold` in `[recognition]` if needed. Use `hallucination_silence_threshold = "off"` (or leave its settings field blank) to disable that optional threshold.
+- **Hallucination in silent recordings**: Near-silent recordings are discarded before ASR. Check `rms` and `peak` in `zen-whisper.log`; tune `min_audio_rms` and `min_audio_peak` in `[recording]`, plus `no_speech_threshold` and `hallucination_silence_threshold` in `[recognition]` if needed. Use `hallucination_silence_threshold = "off"` in TOML (or `（無効）`/an empty value in the settings field) to disable that optional threshold.
 - **Logs**: Check `zen-whisper.log` for detailed error information.
 
 ## License

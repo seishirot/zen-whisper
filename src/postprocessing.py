@@ -50,16 +50,20 @@ VALID_OUTPUT_MODES = ("stdout",)
 StateGuard = Callable[[], ContextManager[bool]]
 ProcessCallback = Callable[[subprocess.Popen[str]], None]
 
-_ALLOWED_PLACEHOLDERS = {
+SUPPORTED_TEMPLATE_PLACEHOLDERS = (
     "prompt",
     "transcript",
     "context",
     "terms",
     "profile_name",
     "language",
-}
+)
+_ALLOWED_PLACEHOLDERS = frozenset(SUPPORTED_TEMPLATE_PLACEHOLDERS)
 _PLACEHOLDER_RE = re.compile(r"\{\{([a-z_]+)\}\}")
 _ANY_PLACEHOLDER_RE = re.compile(r"\{\{([^{}]+)\}\}")
+_UNSAFE_OUTPUT_CONTROL_RE = re.compile(
+    r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+"
+)
 _PRESET_FIELDS = {
     "display_name",
     "command",
@@ -689,7 +693,10 @@ def run_postprocessor(
                             f"{process.returncode} で失敗しました"
                         )
                     else:
-                        output = stdout.strip()
+                        output = _UNSAFE_OUTPUT_CONTROL_RE.sub(
+                            " ",
+                            stdout,
+                        ).strip()
                         if output:
                             logger.info(
                                 "後処理が完了しました: "

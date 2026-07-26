@@ -58,7 +58,7 @@ class RecognitionConfig:
     model_load_timeout_sec: int = 300
     device: str = field(default_factory=_default_recognition_device)
     reazon_language: str = "ja"
-    reazon_precision: str = "fp32"
+    reazon_precision: str = "int8-fp32"
     reazon_chunk_sec: float = 25.0
     reazon_trailing_silence_sec: float = 0.5
     qwen3_model: str = QWEN3_MODEL_LARGE  # Qwen3-ASR 使用時のモデル名（既定: 1.7B 高精度）

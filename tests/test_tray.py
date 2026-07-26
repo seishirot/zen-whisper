@@ -28,17 +28,17 @@ def test_postprocessor_label_keeps_destination_visible():
     from src.postprocessing import PostprocessorPreset
 
     app = object.__new__(tray_module.TrayApp)
-    app._postprocessor = "codex"
+    app._postprocessor = "remote"
     app._postprocessors = {
-        "codex": PostprocessorPreset(
-            preset_id="codex",
-            display_name="Codex 校正",
-            command="codex",
+        "remote": PostprocessorPreset(
+            preset_id="remote",
+            display_name="Remote 校正",
+            command="remote-cli",
             data_destination="remote",
         )
     }
 
-    assert app._postprocessor_label() == "（外部送信）Codex 校正"
+    assert app._postprocessor_label() == "（外部送信）Remote 校正"
 
 
 def test_long_postprocessor_name_keeps_destination_in_tooltip():
@@ -116,6 +116,114 @@ def test_rejected_engine_change_keeps_tray_selection(monkeypatch):
     assert app._engine == "whisper"
     assert app._device == "cuda"
     assert refreshed == [True]
+
+
+def test_tray_labels_make_current_language_and_engine_visible():
+    import src.tray as tray_module
+    from src.config import QWEN3_MODEL_LARGE
+
+    app = object.__new__(tray_module.TrayApp)
+    app._language = "ja"
+    app._engine = "whisper"
+    app._device = "cuda"
+    app._qwen3_model = QWEN3_MODEL_LARGE
+
+    assert app._language_label() == "日本語"
+    assert app._engine_label() == "Whisper / GPU (CUDA)"
+
+
+def test_tray_parent_menu_text_contains_current_language_and_engine(
+    monkeypatch,
+):
+    import src.tray as tray_module
+
+    app = tray_module.TrayApp(
+        on_set_language=lambda language: True,
+        on_set_engine=lambda engine, model, device: True,
+        on_quit=lambda: None,
+        initial_language="ja",
+        initial_engine="whisper",
+        initial_device="cuda",
+    )
+    monkeypatch.setattr(
+        app,
+        "_build_microphone_menu",
+        lambda: tray_module.Menu(),
+    )
+
+    menu = app._build_menu()
+
+    assert menu.items[0].text == "言語: 日本語"
+    assert menu.items[2].text == "エンジン: Whisper / GPU (CUDA)"
+
+
+def test_accepted_engine_change_refreshes_parent_label(monkeypatch):
+    import src.tray as tray_module
+
+    app = object.__new__(tray_module.TrayApp)
+    app._engine = "whisper"
+    app._device = "cuda"
+    app._qwen3_model = "large"
+    app._on_set_engine = lambda engine, model, device: True
+    refreshed = []
+    monkeypatch.setattr(app, "refresh_menu", lambda: refreshed.append(True))
+    monkeypatch.setattr(app, "_update_icon", lambda: None)
+
+    handler = app._set_engine("reazon-k2", device="cpu")
+    handler(None, None)
+
+    assert app._engine_label() == "Reazon K2 / CPU"
+    assert refreshed == [True]
+
+
+def test_set_language_refreshes_parent_menu_for_hotkey_change(monkeypatch):
+    import src.tray as tray_module
+
+    app = object.__new__(tray_module.TrayApp)
+    app._language = "ja"
+    refreshed: list[str] = []
+    monkeypatch.setattr(
+        app,
+        "refresh_menu",
+        lambda: refreshed.append("menu"),
+    )
+    monkeypatch.setattr(
+        app,
+        "_update_icon",
+        lambda: refreshed.append("icon"),
+    )
+
+    app.set_language("en")
+
+    assert app._language == "en"
+    assert app._language_label() == "English"
+    assert refreshed == ["menu", "icon"]
+
+
+def test_accepted_language_change_refreshes_parent_label(monkeypatch):
+    import src.tray as tray_module
+
+    app = object.__new__(tray_module.TrayApp)
+    app._language = "ja"
+    app._on_set_language = lambda language: True
+    refreshed: list[str] = []
+    monkeypatch.setattr(
+        app,
+        "refresh_menu",
+        lambda: refreshed.append("menu"),
+    )
+    monkeypatch.setattr(
+        app,
+        "_update_icon",
+        lambda: refreshed.append("icon"),
+    )
+
+    handler = app._set_lang("en")
+    handler(None, None)
+
+    assert app._language == "en"
+    assert app._language_label() == "English"
+    assert refreshed == ["menu", "icon"]
 
 
 @pytest.mark.parametrize(

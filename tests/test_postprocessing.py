@@ -14,6 +14,7 @@ import src.postprocessing as postprocessing
 from src.platform import is_windows
 from src.postprocessing import (
     DATA_DESTINATION_LOCAL,
+    DATA_DESTINATION_REMOTE,
     DATA_DESTINATION_UNKNOWN,
     PostprocessorPreset,
     _build_invocation,
@@ -43,14 +44,37 @@ def _profile() -> Profile:
     )
 
 
-def test_bundled_ollama_preset_is_local_and_has_no_pull_preflight():
-    presets = load_postprocessors()
+def test_bundled_ollama_preset_is_local_and_has_no_pull_preflight(tmp_path):
+    presets = load_postprocessors(user_path=tmp_path / "missing.toml")
 
     ollama = presets["ollama"]
     assert ollama.data_destination == DATA_DESTINATION_LOCAL
     assert ollama.preflight_command == "ollama show qwen3.5:4b"
     assert "ollama pull" not in ollama.command
     assert ollama.environment["OLLAMA_HOST"] == "127.0.0.1:11434"
+
+
+def test_bundled_claude_preset_is_remote_stateless_and_toolless(tmp_path):
+    presets = load_postprocessors(user_path=tmp_path / "missing.toml")
+
+    claude = presets["claude"]
+    argv, prompt = _build_invocation(
+        claude,
+        "全ウィスパー",
+        _profile(),
+        "ja",
+    )
+
+    assert claude.data_destination == DATA_DESTINATION_REMOTE
+    assert claude.input_mode == "stdin"
+    assert claude.preflight_command == "claude --version"
+    assert argv[argv.index("--model") + 1] == "haiku"
+    assert "--effort" not in argv
+    assert "--safe-mode" in argv
+    assert "--no-session-persistence" in argv
+    assert argv[argv.index("--tools") + 1] == ""
+    assert "{{transcript}}" not in prompt
+    assert "全ウィスパー" in prompt
 
 
 def test_user_can_define_arbitrary_argument_cli(tmp_path):
@@ -226,6 +250,65 @@ def test_stdin_runner_uses_shell_false_and_empty_working_directory(monkeypatch):
     assert result.succeeded is True
     assert result.text == "corrected"
     assert calls[0][0] == ["fake-cli", "--quiet"]
+
+
+def test_cli_output_controls_are_collapsed_to_one_safe_line(monkeypatch):
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            pass
+
+        def communicate(self, input=None, timeout=None):
+            return (
+                "\x00cmd1\r\ncmd2\ttext\u0085x\u2028y\u2029z"
+                "\x1b[31m\x7f",
+                "",
+            )
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="fake",
+        display_name="Fake",
+        command="fake-cli",
+    )
+
+    result = run_postprocessor(preset, "raw", None, "ja")
+
+    assert result.succeeded is True
+    assert result.text == "cmd1 cmd2 text x y z [31m"
+    assert not any(
+        ord(character) < 0x20 or 0x7F <= ord(character) <= 0x9F
+        for character in result.text
+    )
+    assert "\u2028" not in result.text
+    assert "\u2029" not in result.text
+
+
+def test_control_only_cli_output_is_treated_as_empty(monkeypatch):
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            pass
+
+        def communicate(self, input=None, timeout=None):
+            return "\r\n\t\x00\u0085\u2028\u2029", ""
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="fake",
+        display_name="Fake",
+        command="fake-cli",
+    )
+
+    result = run_postprocessor(preset, "raw", None, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "raw"
+    assert "出力が空" in result.error
 
 
 def test_process_start_is_registered_before_dispatch_guard_releases(monkeypatch):
@@ -514,11 +597,11 @@ def test_save_postprocessor_rejects_changed_file_fingerprint(tmp_path):
 def test_local_ids_include_partial_bundled_overrides(tmp_path):
     user_path = tmp_path / "postprocessors.toml"
     user_path.write_text(
-        "[postprocessors.codex]\ntimeout_sec = 10\n",
+        "[postprocessors.claude]\ntimeout_sec = 10\n",
         encoding="utf-8",
     )
 
-    assert load_local_postprocessor_ids(user_path) == frozenset({"codex"})
+    assert load_local_postprocessor_ids(user_path) == frozenset({"claude"})
     assert load_local_postprocessors(user_path) == {}
 
 

@@ -3,6 +3,7 @@
 # "win" is automatically interpreted as "cmd" on macOS
 toggle = ["shift+space"]
 # Optional: alternate toggle. When this stops recording, ZenWhisper pastes and presses Enter.
+# For safety, any CLI postprocessor result is pasted without automatically pressing Enter.
 # Recommended for chat boxes: "ctrl+shift+space"
 # submit_toggle = "ctrl+shift+space"
 # Key combination for switching language
@@ -25,7 +26,7 @@ cpu_threads = 4
 model_load_timeout_sec = 300
 # ReazonSpeech K2 fast mode (requires: uv sync --extra reazon)
 reazon_language = "ja"
-reazon_precision = "fp32"
+reazon_precision = "int8-fp32"
 reazon_chunk_sec = 25.0
 reazon_trailing_silence_sec = 0.5
 # Qwen3-ASR model name (tray path requires: uv sync --extra qwen3-cuda)
@@ -98,7 +99,8 @@ custom_stop_sound = "assets/stop.flac"
 
 [overlay]
 enabled = true
-# Position: "bottom-center", "top-center", "bottom-left", etc.
+# Reserved compatibility values. The current overlay uses a fixed
+# bottom-center start position and internal size regardless of these values.
 position = "bottom-center"
 size = 48
 

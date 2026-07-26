@@ -2,12 +2,14 @@
 # Commands are parsed into argv and executed with shell = false.
 # Override these entries or add arbitrary CLIs in ignored postprocessors.toml.
 
-[postprocessors.codex]
-display_name = "Codex 校正"
-command = "codex exec --ephemeral --sandbox read-only --ignore-user-config --ignore-rules --skip-git-repo-check --color never -c project_doc_max_bytes=0 -"
+[postprocessors.claude]
+display_name = "Claude Code 校正"
+command = 'claude --print --model haiku --safe-mode --no-session-persistence --permission-mode dontAsk --tools "" --output-format text'
+preflight_command = "claude --version"
+preflight_failure_message = "Claude Code が見つかりません。Claude Code CLI をインストールして認証を完了してください。"
 input_mode = "stdin"
 output_mode = "stdout"
-timeout_sec = 30
+timeout_sec = 60
 data_destination = "remote"
 prompt_template = """
 あなたは音声認識結果の校正器です。

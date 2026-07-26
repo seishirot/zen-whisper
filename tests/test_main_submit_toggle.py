@@ -194,6 +194,64 @@ def test_postprocess_failure_suppresses_submit_after_paste(monkeypatch) -> None:
     assert "Enter送信はキャンセル" in notices[0]
 
 
+def test_successful_cli_postprocess_suppresses_submit_after_paste(
+    monkeypatch,
+) -> None:
+    notices = []
+    app = App.__new__(App)
+    app.postprocessors = {}
+    app.tray = _Tray()
+    app.tray.notify = notices.append
+    monkeypatch.setattr(
+        main_module,
+        "process_transcript",
+        lambda *args, **kwargs: PostprocessResult(
+            text="model output",
+            succeeded=True,
+            applied=True,
+        ),
+    )
+
+    text, submit = app._apply_postprocessing(
+        "raw",
+        None,
+        "remote",
+        "ja",
+        submit_after_paste=True,
+    )
+
+    assert text == "model output"
+    assert submit is False
+    assert "内容確認前の誤送信" in notices[0]
+    assert "Enter送信はキャンセル" in notices[0]
+
+
+def test_dictionary_postprocess_keeps_submit_after_paste(monkeypatch) -> None:
+    app = App.__new__(App)
+    app.postprocessors = {}
+    app.tray = _Tray()
+    monkeypatch.setattr(
+        main_module,
+        "process_transcript",
+        lambda *args, **kwargs: PostprocessResult(
+            text="dictionary output",
+            succeeded=True,
+            applied=True,
+        ),
+    )
+
+    text, submit = app._apply_postprocessing(
+        "raw",
+        None,
+        main_module.POSTPROCESSOR_DICTIONARY,
+        "ja",
+        submit_after_paste=True,
+    )
+
+    assert text == "dictionary output"
+    assert submit is True
+
+
 def test_remote_postprocessor_notice_lists_transmitted_data() -> None:
     app = App.__new__(App)
     app.postprocessors = {

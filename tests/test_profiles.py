@@ -135,11 +135,11 @@ def test_example_profile_corrects_observed_reazon_variants(tmp_path):
     profile = load_profiles(tmp_path)["zen-whisper"]
 
     result = apply_replacements(
-        "全ウイスパー、オラアマ、リーズンK",
+        "全ウイスパー、オラアマ、リーズンK、クラウドコード",
         profile,
     )
 
-    assert result == "ZenWhisper、Ollama、Reazon K2"
+    assert result == "ZenWhisper、Ollama、Reazon K2、Claude Code"
 
 
 def test_save_profile_round_trips_structured_terms(tmp_path):

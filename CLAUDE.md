@@ -10,7 +10,7 @@ Windows / macOS 対応の完全ローカル音声入力ツール。ホットキ�
 uv sync                    # 依存インストール（WindowsはTorchなし / Python 3.11-3.13）
 uv sync --extra cuda       # Windows CUDA DLL（faster-whisper CUDA用）
 uv sync --extra reazon     # Windows CPU高速モード（Reazon K2）を有効化
-uv sync --extra qwen3      # Qwen3-ASR CPU PyTorch（手動 config 実験用）
+uv sync --extra qwen3      # Qwen3-ASR CPU PyTorch（設定画面/config実験用）
 uv sync --extra qwen3-cuda # Qwen3-ASR CUDA PyTorch
 uv run zen-whisper         # 起動（コンソール非表示）
 uv run python src/main.py  # 起動（開発用・コンソール付き）
@@ -61,13 +61,18 @@ hotkey.py → sounds.py(開始音) → recorder.py(録音+VAD) → sounds.py(停
 Whisper (GPU, CPU, MLX) / Reazon K2 / Qwen3-ASR (1.7B, 0.6B) の階層。
 
 - 自動エンジン選択はUX上採用しない。ユーザーがトレイメニューでモデル/実行先を明示的に選ぶ。
-- `reazon-k2`: Windows CPU高速モード。`uv sync --extra reazon` が必要。長音声は `reazon_chunk_sec` ごとに分割し、末尾に `reazon_trailing_silence_sec` の無音を足す。
+- `reazon-k2`: Windows CPU高速モード。`uv sync --extra reazon` が必要。
+  既定precisionは `int8-fp32` で、比較用に `int8` / `fp32` も選択可能。
+  長音声は `reazon_chunk_sec` ごとに分割し、末尾に
+  `reazon_trailing_silence_sec` の無音を足す。
 - `whisper`: Windows は faster-whisper、macOS は MLX。CPU解決時は `compute_type="int8"` と `cpu_threads` を明示する。
 - `qwen3-asr`: 精度・文脈プロンプト実験用。Windows では Transformers バックエンドで頭打ち。
 - Windows の通常 `uv sync` は PyTorch を入れない。録音VADは同梱 Silero ONNX + `sherpa-onnx` を使う。macOS は MLX 経路の依存が PyTorch を持つ可能性がある。
 - Torch が壊れている環境では、PyTorch が存在するだけで CTranslate2/faster-whisper CPU も巻き添えで失敗し得る。通常環境では Torch を入れず、Qwen3 extra のみに閉じ込める。
 - CUDA 依存は `cuda` / `qwen3-cuda` extra で明示する。
-- トレイの Qwen3-ASR 項目は CUDA 向け。CPU で Qwen3 を試す場合は `uv sync --extra qwen3` と `device="cpu"` の手動 config 実験として扱う。
+- トレイの Qwen3-ASR 項目は CUDA 向け。CPU で Qwen3 を試す場合は
+  `uv sync --extra qwen3` を導入し、設定画面または `config.toml` で
+  `device="cpu"` を選ぶ実験経路として扱う。
 
 Reazon extra は ReazonSpeech の `pkg/k2-asr` を commit
 `2d4d4762e7ee294ac8e47a177ac2e9b0e8d0d43f` に固定する。Windows/Python 3.13 の
@@ -79,8 +84,15 @@ ORT API不整合を避けるため、通常依存で `sherpa-onnx==1.13.1` と `
 `postprocessors.default.toml` とローカルの `postprocessors.toml` から汎用
 `shell=False` コマンドとして読み込む。外部送信／送信先不明のプリセットを
 有効にすると、認識結果・文脈・辞書データが指定 CLI に渡る旨を表示する。
+組み込みは Claude Code（外部送信）と Ollama（ローカル）。Claude Code は
+safe mode・tools無効・session非保存の stdin 一回実行にし、`haiku` を
+校正用の軽量既定として明示する。任意のモデル指定はCLIコマンド引数で
+上書きする。
 後処理失敗時は辞書置換までの結果へフォールバックし、送信付きホットキーの
-Enter はキャンセルする。
+Enter はキャンセルする。CLI後処理が成功した場合も生成／外部変換結果を
+確認せず送信しないようEnterをキャンセルする（辞書置換のみは送信可）。
+CLI出力の改行・C0/C1制御文字・Unicode行区切りは貼り付け前に空白へ畳み、
+埋め込みEnter／端末制御として作用させない。
 
 Windows/Python のトレイ `設定...` は `config.toml`、プロフィール、ローカル
 CLIプリセットを構造化編集する。保存は同一ディレクトリの一時ファイルから
@@ -88,9 +100,16 @@ CLIプリセットを構造化編集する。保存は同一ディレクトリ�
 変更は再起動後、それ以外の対応項目は保存後に反映する。画面を開いた後に
 トレイ側で設定が変わった場合は世代不一致で保存を拒否する。構文不正な既存
 TOMLは上書きせず、正常な `config.toml` の未知フィールドは保持する。
+画面は `config.toml` と既定値を合わせた現在の有効値を表示し、空の任意値は
+「OS既定」「無効」と明示する。固定の内部値は読み取り専用にする。設定変更が
+あるときだけ config 保存を有効にし、保存前にフィールド単位の差分を表示して、
+フォームで変更した管理対象フィールドだけを読み込み済みスナップショットへ
+反映する。プロフィール／CLIの定義編集と config 上の使用中選択は明確に分ける。
+認識タブとトレイ親メニューには現在の言語・エンジン・実行先を明示する。
 local扱いのCLIでcommand/environmentを変えた場合は送信先をunknownへ戻す。
-認識エンジン／実行先は現在導入済みの組合せだけを表示し、長いタブは縦
-スクロール可能にする。モデル読込の閾値超過は警告であり、停止不能な
+認識エンジン／実行先の選択候補は現在導入済みの組合せだけにし、未導入の
+既存値は候補へ混ぜず警告付きで表示する。長いタブは縦スクロール可能にする。
+モデル読込の閾値超過は警告であり、停止不能な
 ネイティブロードを裏に残して次の重量モデルを並行ロードしてはならない。
 
 Windows CUDA GPU 環境・19.6秒の合成音声での参考実測:
@@ -121,5 +140,5 @@ Windows CUDA GPU 環境・19.6秒の合成音声での参考実測:
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |
 | `[enhancement]` | `profile`（`profiles/*.toml` のID）、`postprocessor`（`off`/`dictionary`/プリセットID） |
 | `[feedback]` | `sound_enabled`, `sound_type` (`tone`/`custom`), `volume` |
-| `[overlay]` | `enabled`, `position`, `size` |
+| `[overlay]` | `enabled`（`position` / `size` は互換予約値で現状無視） |
 | `[logging]` | `level`, `file` |

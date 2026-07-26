@@ -172,6 +172,34 @@ class TrayApp:
         self._state = TrayState.IDLE
         self._icon: Icon | None = None
 
+    def _language_label(self) -> str:
+        return {
+            "ja": "日本語",
+            "en": "English",
+        }.get(self._language, self._language or "未選択")
+
+    def _device_label(self) -> str:
+        return {
+            "cuda": "GPU (CUDA)",
+            "cpu": "CPU",
+            "mlx": "Apple MLX",
+        }.get(self._device, self._device or "未選択")
+
+    def _engine_label(self) -> str:
+        if self._engine == ENGINE_WHISPER:
+            engine = "Whisper"
+        elif self._engine == ENGINE_REAZON_K2:
+            engine = "Reazon K2"
+        elif self._engine == ENGINE_QWEN3_ASR:
+            model = {
+                QWEN3_MODEL_LARGE: "1.7B",
+                QWEN3_MODEL_SMALL: "0.6B",
+            }.get(self._qwen3_model, self._qwen3_model)
+            engine = f"Qwen3-ASR {model}"
+        else:
+            engine = self._engine or "未選択"
+        return f"{engine} / {self._device_label()}"
+
     def _is_lang(self, lang: str) -> Callable[[MenuItem], bool]:
         """メニューアイテムのチェック状態を返すコールバック。"""
         def checked(item: MenuItem) -> bool:
@@ -188,6 +216,7 @@ class TrayApp:
                 return
             self._language = lang
             logger.info("言語を %s に切替えました（トレイメニュー）", lang)
+            self.refresh_menu()
             self._update_icon()
         return handler
 
@@ -302,6 +331,7 @@ class TrayApp:
                 f" ({qwen3_model})" if qwen3_model else "",
                 f" [{device}]" if device else "",
             )
+            self.refresh_menu()
             self._update_icon()
         return handler
 
@@ -509,7 +539,7 @@ class TrayApp:
     def _build_menu(self) -> Menu:
         return Menu(
             MenuItem(
-                "言語",
+                f"言語: {self._language_label()}",
                 Menu(
                     MenuItem(
                         "日本語",
@@ -527,7 +557,7 @@ class TrayApp:
             ),
             MenuItem("マイク", self._build_microphone_menu()),
             MenuItem(
-                "エンジン",
+                f"エンジン: {self._engine_label()}",
                 Menu(
                     MenuItem(
                         "Whisper",
@@ -651,6 +681,7 @@ class TrayApp:
     def set_language(self, lang: str) -> None:
         """現在の言語表示を更新する（ホットキーからの切替時に呼ぶ）。"""
         self._language = lang
+        self.refresh_menu()
         self._update_icon()
 
     def apply_settings(

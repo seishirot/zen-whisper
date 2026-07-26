@@ -7,7 +7,7 @@ import logging
 import math
 import threading
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from tkinter import messagebox, ttk
 
@@ -27,6 +27,7 @@ from src.postprocessing import (
     DATA_DESTINATION_REMOTE,
     DATA_DESTINATION_UNKNOWN,
     PostprocessorPreset,
+    SUPPORTED_TEMPLATE_PLACEHOLDERS,
 )
 from src.profiles import Profile, ProfileTerm
 from src.toml_storage import (
@@ -39,6 +40,283 @@ from src.transcriber import (
 )
 
 logger = logging.getLogger(__name__)
+
+DISPLAY_DISABLED = "（無効）"
+DISPLAY_DEFAULT_MICROPHONE = "（OS既定）"
+POSTPROCESSOR_PLACEHOLDER_HELP = (
+    (
+        "transcript",
+        "prompt",
+        "辞書置換後の文字起こし本文（プロンプト内に必須）",
+    ),
+    (
+        "context",
+        "prompt",
+        "選択プロフィールの文脈。未選択時は「（なし）」",
+    ),
+    (
+        "terms",
+        "prompt",
+        "正規表記・説明・誤認識候補をまとめた用語一覧",
+    ),
+    (
+        "profile_name",
+        "prompt",
+        "選択プロフィールの表示名",
+    ),
+    (
+        "language",
+        "prompt",
+        "認識言語コード（ja / en など）",
+    ),
+    (
+        "prompt",
+        "command",
+        "完成したプロンプト全体（argument方式のコマンド欄用）",
+    ),
+)
+RECOGNITION_SELECTION_KEYS = frozenset(
+    {
+        "recognition.engine",
+        "recognition.language",
+        "recognition.device",
+    }
+)
+
+READ_ONLY_CONFIG_FIELDS = frozenset(
+    {
+        ("recording", "sample_rate"),
+        ("overlay", "position"),
+        ("overlay", "size"),
+    }
+)
+
+# UI variable -> AppConfig field, plus the label used in the change preview.
+# Fields listed in READ_ONLY_CONFIG_FIELDS are displayed separately.
+CONFIG_FORM_FIELDS: dict[str, tuple[str, str, str]] = {
+    "hotkey.toggle": ("hotkey", "toggle", "録音トグル"),
+    "hotkey.submit_toggle": (
+        "hotkey",
+        "submit_toggle",
+        "貼り付け＋Enter",
+    ),
+    "hotkey.switch_lang": ("hotkey", "switch_lang", "言語切替"),
+    "output.restore_clipboard": (
+        "output",
+        "restore_clipboard",
+        "クリップボード復元",
+    ),
+    "output.paste_delay_ms": (
+        "output",
+        "paste_delay_ms",
+        "貼り付け待機",
+    ),
+    "feedback.sound_enabled": (
+        "feedback",
+        "sound_enabled",
+        "開始・停止音",
+    ),
+    "feedback.sound_type": (
+        "feedback",
+        "sound_type",
+        "サウンド方式",
+    ),
+    "feedback.volume": ("feedback", "volume", "音量"),
+    "feedback.custom_start_sound": (
+        "feedback",
+        "custom_start_sound",
+        "録音開始音",
+    ),
+    "feedback.custom_stop_sound": (
+        "feedback",
+        "custom_stop_sound",
+        "録音停止音",
+    ),
+    "overlay.enabled": ("overlay", "enabled", "録音オーバーレイ"),
+    "logging.level": ("logging", "level", "ログレベル"),
+    "logging.file": ("logging", "file", "ログファイル"),
+    "recognition.engine": ("recognition", "engine", "認識エンジン"),
+    "recognition.language": ("recognition", "language", "認識言語"),
+    "recognition.device": ("recognition", "device", "実行先"),
+    "recognition.model_size": (
+        "recognition",
+        "model_size",
+        "Whisperモデル",
+    ),
+    "recognition.compute_type": (
+        "recognition",
+        "compute_type",
+        "計算精度",
+    ),
+    "recognition.beam_size": (
+        "recognition",
+        "beam_size",
+        "Beam size",
+    ),
+    "recognition.cpu_threads": (
+        "recognition",
+        "cpu_threads",
+        "CPU threads",
+    ),
+    "recognition.model_load_timeout_sec": (
+        "recognition",
+        "model_load_timeout_sec",
+        "モデル読込の警告",
+    ),
+    "recognition.reazon_language": (
+        "recognition",
+        "reazon_language",
+        "Reazon言語モデル",
+    ),
+    "recognition.reazon_precision": (
+        "recognition",
+        "reazon_precision",
+        "Reazon精度",
+    ),
+    "recognition.reazon_chunk_sec": (
+        "recognition",
+        "reazon_chunk_sec",
+        "Reazonチャンク長",
+    ),
+    "recognition.reazon_trailing_silence_sec": (
+        "recognition",
+        "reazon_trailing_silence_sec",
+        "Reazon末尾無音",
+    ),
+    "recognition.qwen3_model": (
+        "recognition",
+        "qwen3_model",
+        "Qwen3モデル",
+    ),
+    "recognition.qwen3_max_new_tokens": (
+        "recognition",
+        "qwen3_max_new_tokens",
+        "Qwen最大生成トークン",
+    ),
+    "recognition.qwen3_attn_implementation": (
+        "recognition",
+        "qwen3_attn_implementation",
+        "Qwen Attention",
+    ),
+    "recognition.qwen3_torch_compile": (
+        "recognition",
+        "qwen3_torch_compile",
+        "Qwen torch.compile",
+    ),
+    "recognition.no_speech_threshold": (
+        "recognition",
+        "no_speech_threshold",
+        "無音判定しきい値",
+    ),
+    "recognition.condition_on_previous_text": (
+        "recognition",
+        "condition_on_previous_text",
+        "直前テキストの引継ぎ",
+    ),
+    "recognition.hallucination_silence_threshold": (
+        "recognition",
+        "hallucination_silence_threshold",
+        "幻覚抑制の無音長",
+    ),
+    "recording.microphone": ("recording", "microphone", "マイク"),
+    "recording.vad_silence_threshold_sec": (
+        "recording",
+        "vad_silence_threshold_sec",
+        "無音停止",
+    ),
+    "recording.min_recording_sec": (
+        "recording",
+        "min_recording_sec",
+        "最短録音",
+    ),
+    "recording.min_audio_rms": (
+        "recording",
+        "min_audio_rms",
+        "最小RMS",
+    ),
+    "recording.min_audio_peak": (
+        "recording",
+        "min_audio_peak",
+        "最小Peak",
+    ),
+    "recording.max_recording_sec": (
+        "recording",
+        "max_recording_sec",
+        "最大録音",
+    ),
+    "recording.max_recording_warning_pct": (
+        "recording",
+        "max_recording_warning_pct",
+        "最大時間の警告",
+    ),
+    "enhancement.profile_label": (
+        "enhancement",
+        "profile",
+        "使用中プロフィール",
+    ),
+    "enhancement.postprocessor_label": (
+        "enhancement",
+        "postprocessor",
+        "使用中の後処理",
+    ),
+}
+
+
+def changed_config_fields(
+    baseline: Mapping[str, object],
+    current: Mapping[str, object],
+) -> tuple[str, ...]:
+    """Return changed managed form keys in stable UI order."""
+    return tuple(
+        key
+        for key in CONFIG_FORM_FIELDS
+        if baseline.get(key) != current.get(key)
+    )
+
+
+def apply_changed_config_fields(
+    baseline: AppConfig,
+    parsed: AppConfig,
+    changed_keys: tuple[str, ...] | list[str] | set[str],
+) -> AppConfig:
+    """Apply only explicitly changed UI fields to a config snapshot."""
+    merged = copy.deepcopy(baseline)
+    for key in changed_keys:
+        field_spec = CONFIG_FORM_FIELDS.get(key)
+        if field_spec is None:
+            continue
+        section_name, field_name, _label = field_spec
+        source_section = getattr(parsed, section_name)
+        target_section = getattr(merged, section_name)
+        setattr(
+            target_section,
+            field_name,
+            copy.deepcopy(getattr(source_section, field_name)),
+        )
+    return merged
+
+
+def recognition_selection_text(
+    engine: str,
+    language: str,
+    device: str,
+) -> str:
+    """Return an explicit human-readable recognition selection."""
+    engine_label = {
+        ENGINE_WHISPER: "Whisper",
+        ENGINE_REAZON_K2: "Reazon K2",
+        ENGINE_QWEN3_ASR: "Qwen3-ASR",
+    }.get(engine, engine or "未選択")
+    language_label = {
+        "ja": "日本語 (ja)",
+        "en": "English (en)",
+    }.get(language, language or "未選択")
+    device_label = {
+        "cuda": "GPU (CUDA)",
+        "cpu": "CPU",
+        "mlx": "Apple MLX",
+    }.get(device, device or "未選択")
+    return f"現在の選択: {engine_label} / {language_label} / {device_label}"
 
 
 @dataclass(frozen=True)
@@ -71,6 +349,23 @@ def refresh_snapshot_resources(
         config_fingerprint=previous.config_fingerprint,
         profile_fingerprints=refreshed.profile_fingerprints,
         postprocessors_fingerprint=refreshed.postprocessors_fingerprint,
+    )
+
+
+def refresh_snapshot_config(
+    previous: SettingsSnapshot,
+    refreshed: SettingsSnapshot,
+) -> SettingsSnapshot:
+    """Refresh config metadata without discarding resource editor state."""
+    return SettingsSnapshot(
+        config=refreshed.config,
+        profiles=previous.profiles,
+        postprocessors=previous.postprocessors,
+        local_postprocessor_ids=previous.local_postprocessor_ids,
+        revision=refreshed.revision,
+        config_fingerprint=refreshed.config_fingerprint,
+        profile_fingerprints=previous.profile_fingerprints,
+        postprocessors_fingerprint=previous.postprocessors_fingerprint,
     )
 
 
@@ -216,12 +511,22 @@ class SettingsWindow:
         self._vars: dict[str, tk.Variable] = {}
         self._widgets: dict[str, tk.Widget] = {}
         self._status_var: tk.StringVar | None = None
+        self._config_source_var: tk.StringVar | None = None
+        self._config_changes_var: tk.StringVar | None = None
+        self._recognition_summary_var: tk.StringVar | None = None
+        self._save_config_button: ttk.Button | None = None
+        self._config_form_loading = True
+        self._config_form_baseline: dict[str, object] | None = None
         self._profile_context: tk.Text | None = None
         self._profile_tree: ttk.Treeview | None = None
         self._profile_terms: list[ProfileTerm] = []
+        self._profile_editor_baseline: tuple[object, ...] | None = None
+        self._loaded_profile_id = ""
         self._prompt_text: tk.Text | None = None
         self._command_text: tk.Text | None = None
         self._environment_text: tk.Text | None = None
+        self._postprocessor_editor_baseline: tuple[object, ...] | None = None
+        self._loaded_postprocessor_id = ""
         self._profile_id_by_label: dict[str, str] = {}
         self._profile_label_by_id: dict[str, str] = {}
         self._postprocessor_id_by_label: dict[str, str] = {}
@@ -264,7 +569,7 @@ class SettingsWindow:
             root.title("ZenWhisper 設定")
             root.geometry("980x760")
             root.minsize(860, 640)
-            root.protocol("WM_DELETE_WINDOW", root.withdraw)
+            root.protocol("WM_DELETE_WINDOW", self._hide_window)
 
             style = ttk.Style(root)
             if "vista" in style.theme_names():
@@ -286,6 +591,15 @@ class SettingsWindow:
                     "保存できません。"
                 ),
             ).pack(anchor="w", pady=(2, 10))
+            self._config_source_var = tk.StringVar(
+                master=root,
+                value="config.toml の現在値を読み込んでいます..."
+            )
+            ttk.Label(
+                outer,
+                textvariable=self._config_source_var,
+                foreground="#555555",
+            ).pack(anchor="w", pady=(0, 8))
 
             notebook = ttk.Notebook(outer)
             notebook.pack(fill="both", expand=True)
@@ -295,25 +609,43 @@ class SettingsWindow:
             self._build_advanced_tab(notebook)
             self._build_profile_tab(notebook)
             self._build_postprocessor_tab(notebook)
+            root.bind_all(
+                "<MouseWheel>",
+                self._on_scrollable_mousewheel,
+                add="+",
+            )
 
             footer = ttk.Frame(outer)
             footer.pack(fill="x", pady=(10, 0))
-            self._status_var = tk.StringVar(value="")
+            self._status_var = tk.StringVar(master=root, value="")
+            status_frame = ttk.Frame(footer)
+            status_frame.pack(side="left", fill="x", expand=True)
             ttk.Label(
-                footer,
+                status_frame,
                 textvariable=self._status_var,
                 foreground="#555555",
-            ).pack(side="left", fill="x", expand=True)
+            ).pack(anchor="w")
+            self._config_changes_var = tk.StringVar(
+                master=root,
+                value="設定値の読み込み待ち"
+            )
+            ttk.Label(
+                status_frame,
+                textvariable=self._config_changes_var,
+                foreground="#1F5F99",
+            ).pack(anchor="w")
             ttk.Button(
                 footer,
-                text="再読込",
-                command=self._refresh_snapshot,
+                text="現在値に戻す",
+                command=self._discard_config_changes,
             ).pack(side="right", padx=(8, 0))
-            ttk.Button(
+            self._save_config_button = ttk.Button(
                 footer,
                 text="設定を保存",
                 command=self._save_config,
-            ).pack(side="right")
+                state="disabled",
+            )
+            self._save_config_button.pack(side="right")
 
             root.withdraw()
             self._ready.set()
@@ -331,12 +663,40 @@ class SettingsWindow:
             self._root = None
 
     def _show_window(self) -> None:
-        if self._root is None:
+        root = self._root
+        if root is None:
             return
-        self._refresh_snapshot()
-        self._root.deiconify()
-        self._root.lift()
-        self._root.focus_force()
+        if root.state() == "withdrawn":
+            self._refresh_snapshot()
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+
+    def _hide_window(self) -> None:
+        root = self._root
+        if root is None:
+            return
+        pending_changes: list[str] = []
+        changed_keys = self._config_changed_keys()
+        if changed_keys:
+            pending_changes.append(f"config.toml の設定: {len(changed_keys)}件")
+        if self._profile_editor_changed():
+            pending_changes.append("プロフィール定義")
+        if self._postprocessor_editor_changed():
+            pending_changes.append("CLIプリセット定義")
+        if pending_changes and not messagebox.askyesno(
+            "未保存の変更を破棄しますか？",
+            (
+                "次の未保存の変更があります。\n\n"
+                + "\n".join(f"・{item}" for item in pending_changes)
+                + "\n\n"
+                "変更を破棄して設定画面を閉じますか？"
+            ),
+            icon="warning",
+            parent=root,
+        ):
+            return
+        root.withdraw()
 
     def _show_requested_window(self) -> None:
         if not self._show_requested.is_set():
@@ -344,14 +704,32 @@ class SettingsWindow:
         self._show_requested.clear()
         self._show_window()
 
+    def _settings_root(self) -> tk.Tk:
+        root = self._root
+        if root is None:
+            raise RuntimeError("設定画面のTkルートが初期化されていません")
+        return root
+
     def _new_string_var(self, key: str) -> tk.StringVar:
-        variable = tk.StringVar()
+        variable = tk.StringVar(master=self._settings_root())
         self._vars[key] = variable
+        variable.trace_add(
+            "write",
+            lambda *_args, tracked_key=key: (
+                self._on_config_form_changed(tracked_key)
+            ),
+        )
         return variable
 
     def _new_bool_var(self, key: str) -> tk.BooleanVar:
-        variable = tk.BooleanVar()
+        variable = tk.BooleanVar(master=self._settings_root())
         self._vars[key] = variable
+        variable.trace_add(
+            "write",
+            lambda *_args, tracked_key=key: (
+                self._on_config_form_changed(tracked_key)
+            ),
+        )
         return variable
 
     def _entry_row(
@@ -363,6 +741,7 @@ class SettingsWindow:
         *,
         width: int = 34,
         help_text: str = "",
+        state: str = "normal",
     ) -> ttk.Entry:
         ttk.Label(parent, text=label).grid(
             row=row,
@@ -375,6 +754,7 @@ class SettingsWindow:
             parent,
             textvariable=self._new_string_var(key),
             width=width,
+            state=state,
         )
         entry.grid(row=row, column=1, sticky="ew", pady=4)
         if help_text:
@@ -470,19 +850,23 @@ class SettingsWindow:
                 width=event.width,
             ),
         )
-
-        def _scroll(event: tk.Event) -> str:
-            if event.delta:
-                canvas.yview_scroll(
-                    -1 if event.delta > 0 else 1,
-                    "units",
-                )
-            return "break"
-
-        canvas.bind("<MouseWheel>", _scroll)
-        content.bind("<MouseWheel>", _scroll)
         self._scroll_canvases[title] = canvas
         return content
+
+    def _on_scrollable_mousewheel(self, event: tk.Event) -> str | None:
+        """Scroll the containing tab when the pointer is over a child control."""
+        if not event.delta or isinstance(event.widget, (tk.Text, ttk.Treeview)):
+            return None
+        scroll_canvases = set(self._scroll_canvases.values())
+        widget: object | None = event.widget
+        while widget is not None:
+            if widget in scroll_canvases:
+                scroll = getattr(widget, "yview_scroll", None)
+                if callable(scroll):
+                    scroll(-1 if event.delta > 0 else 1, "units")
+                    return "break"
+            widget = getattr(widget, "master", None)
+        return None
 
     def _build_basic_tab(self, notebook: ttk.Notebook) -> None:
         tab = self._add_scrollable_tab(notebook, "基本")
@@ -500,7 +884,7 @@ class SettingsWindow:
             1,
             "貼り付け＋Enter",
             "hotkey.submit_toggle",
-            help_text="空欄で無効",
+            help_text=f"{DISPLAY_DISABLED}で貼り付けのみ",
         )
         self._entry_row(
             hotkeys,
@@ -541,6 +925,22 @@ class SettingsWindow:
             text="録音オーバーレイを表示",
             variable=self._new_bool_var("overlay.enabled"),
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=4)
+        self._entry_row(
+            feedback,
+            4,
+            "オーバーレイ位置",
+            "overlay.position",
+            help_text="config.toml の参照値（現行表示は下中央固定）",
+            state="disabled",
+        )
+        self._entry_row(
+            feedback,
+            5,
+            "オーバーレイサイズ",
+            "overlay.size",
+            help_text="config.toml の参照値（現行サイズは固定）",
+            state="disabled",
+        )
 
         logging_frame = self._section(tab, "ログ")
         self._combo_row(
@@ -559,6 +959,17 @@ class SettingsWindow:
 
     def _build_recognition_tab(self, notebook: ttk.Notebook) -> None:
         tab = self._add_scrollable_tab(notebook, "認識")
+
+        self._recognition_summary_var = tk.StringVar(
+            master=self._settings_root(),
+            value="現在の選択: 読み込み中..."
+        )
+        ttk.Label(
+            tab,
+            textvariable=self._recognition_summary_var,
+            foreground="#1F5F99",
+            font=("Segoe UI", 10, "bold"),
+        ).pack(anchor="w", padx=10, pady=(10, 0))
 
         common = self._section(tab, "共通")
         engine_combo = self._combo_row(
@@ -675,49 +1086,57 @@ class SettingsWindow:
             0,
             "マイク名",
             "recording.microphone",
-            help_text="空欄でOS既定",
+            help_text=f"{DISPLAY_DEFAULT_MICROPHONE}はWindowsの既定入力",
         )
         self._entry_row(
             recording,
             1,
+            "内部サンプルレート",
+            "recording.sample_rate",
+            help_text="ASR/VAD契約のため16kHz固定",
+            state="disabled",
+        )
+        self._entry_row(
+            recording,
+            2,
             "無音停止 (秒)",
             "recording.vad_silence_threshold_sec",
         )
         self._entry_row(
             recording,
-            2,
+            3,
             "最短録音 (秒)",
             "recording.min_recording_sec",
         )
         self._entry_row(
             recording,
-            3,
+            4,
             "最小RMS",
             "recording.min_audio_rms",
         )
         self._entry_row(
             recording,
-            4,
+            5,
             "最小Peak",
             "recording.min_audio_peak",
         )
         self._entry_row(
             recording,
-            5,
+            6,
             "最大録音 (秒)",
             "recording.max_recording_sec",
         )
         self._entry_row(
             recording,
-            6,
+            7,
             "最大時間の警告 (%)",
             "recording.max_recording_warning_pct",
         )
         ttk.Label(
             recording,
-            text="内部サンプルレートは16kHz固定です。",
+            text="空欄ではなく、現在有効なconfig.tomlの値を表示しています。",
             foreground="#666666",
-        ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+        ).grid(row=8, column=0, columnspan=3, sticky="w", pady=(8, 0))
 
     def _build_advanced_tab(self, notebook: ttk.Notebook) -> None:
         tab = self._add_scrollable_tab(notebook, "詳細")
@@ -750,7 +1169,7 @@ class SettingsWindow:
             3,
             "幻覚抑制の無音長 (秒)",
             "recognition.hallucination_silence_threshold",
-            help_text="空欄で無効",
+            help_text=f"{DISPLAY_DISABLED}で使用しない",
         )
 
         custom_sound = self._section(tab, "カスタムサウンド")
@@ -784,7 +1203,10 @@ class SettingsWindow:
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(6, weight=1)
 
-        ttk.Label(tab, text="使用中").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(
+            tab,
+            text="config.toml の使用中",
+        ).grid(row=0, column=0, sticky="w", pady=4)
         active_combo = ttk.Combobox(
             tab,
             textvariable=self._new_string_var("enhancement.profile_label"),
@@ -792,8 +1214,16 @@ class SettingsWindow:
         )
         active_combo.grid(row=0, column=1, sticky="ew", pady=4)
         self._widgets["enhancement.profile"] = active_combo
+        ttk.Label(
+            tab,
+            text="下部の「設定を保存」で反映",
+            foreground="#666666",
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
-        ttk.Label(tab, text="編集対象").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(
+            tab,
+            text="profiles/*.toml の編集対象",
+        ).grid(row=1, column=0, sticky="w", pady=4)
         editor_combo = ttk.Combobox(
             tab,
             textvariable=self._new_string_var("profile.editor"),
@@ -901,7 +1331,7 @@ class SettingsWindow:
 
         ttk.Button(
             tab,
-            text="プロフィールを保存",
+            text="プロフィール定義を保存",
             command=self._save_profile,
         ).grid(row=7, column=2, sticky="e", pady=(10, 0))
 
@@ -914,7 +1344,10 @@ class SettingsWindow:
         tab.columnconfigure(1, weight=1)
         tab.rowconfigure(9, weight=1)
 
-        ttk.Label(tab, text="使用中").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(
+            tab,
+            text="config.toml の使用中",
+        ).grid(row=0, column=0, sticky="w", pady=4)
         active_combo = ttk.Combobox(
             tab,
             textvariable=self._new_string_var(
@@ -924,8 +1357,16 @@ class SettingsWindow:
         )
         active_combo.grid(row=0, column=1, sticky="ew", pady=4)
         self._widgets["enhancement.postprocessor"] = active_combo
+        ttk.Label(
+            tab,
+            text="下部の「設定を保存」で反映",
+            foreground="#666666",
+        ).grid(row=0, column=2, sticky="w", padx=(8, 0))
 
-        ttk.Label(tab, text="編集対象").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(
+            tab,
+            text="CLI定義ファイルの編集対象",
+        ).grid(row=1, column=0, sticky="w", pady=4)
         editor_combo = ttk.Combobox(
             tab,
             textvariable=self._new_string_var("postprocessor.editor"),
@@ -997,15 +1438,28 @@ class SettingsWindow:
             width=8,
         ).grid(row=0, column=5, sticky="w", padx=(8, 0))
 
-        ttk.Label(tab, text="コマンド").grid(row=5, column=0, sticky="nw", pady=4)
-        self._command_text = tk.Text(tab, height=3, wrap="word")
-        self._command_text.grid(
+        ttk.Label(
+            tab,
+            text="コマンド（引数を含む）",
+        ).grid(row=5, column=0, sticky="nw", pady=4)
+        command_frame = ttk.Frame(tab)
+        command_frame.grid(
             row=5,
             column=1,
             columnspan=2,
             sticky="nsew",
             pady=4,
         )
+        self._command_text = tk.Text(command_frame, height=2, wrap="word")
+        self._command_text.pack(fill="both", expand=True)
+        ttk.Label(
+            command_frame,
+            text=(
+                "モデル指定など、そのCLIが受け取る任意の引数もここへ入力します。"
+                "例: custom-cleaner --model small ..."
+            ),
+            foreground="#555555",
+        ).pack(anchor="w", pady=(3, 0))
 
         ttk.Label(tab, text="事前確認").grid(row=6, column=0, sticky="w", pady=4)
         ttk.Entry(
@@ -1027,7 +1481,7 @@ class SettingsWindow:
         ).grid(row=7, column=1, columnspan=2, sticky="ew", pady=4)
 
         ttk.Label(tab, text="環境変数").grid(row=8, column=0, sticky="nw", pady=4)
-        self._environment_text = tk.Text(tab, height=3, wrap="none")
+        self._environment_text = tk.Text(tab, height=2, wrap="none")
         self._environment_text.grid(
             row=8,
             column=1,
@@ -1037,7 +1491,7 @@ class SettingsWindow:
         )
 
         ttk.Label(tab, text="プロンプト").grid(row=9, column=0, sticky="nw", pady=4)
-        self._prompt_text = tk.Text(tab, height=10, wrap="word")
+        self._prompt_text = tk.Text(tab, height=6, wrap="word")
         self._prompt_text.grid(
             row=9,
             column=1,
@@ -1046,9 +1500,84 @@ class SettingsWindow:
             pady=4,
         )
 
+        placeholder_frame = ttk.LabelFrame(
+            tab,
+            text=(
+                "使えるプレースホルダー"
+                "（テンプレート変数／クリックで挿入）"
+            ),
+            padding=8,
+        )
+        placeholder_frame.grid(
+            row=10,
+            column=0,
+            columnspan=3,
+            sticky="ew",
+            pady=(8, 0),
+        )
+        placeholder_frame.columnconfigure(1, weight=1)
+        placeholder_frame.columnconfigure(3, weight=1)
+        rows_per_column = math.ceil(
+            len(POSTPROCESSOR_PLACEHOLDER_HELP) / 2
+        )
+        for index, (name, target, description) in enumerate(
+            POSTPROCESSOR_PLACEHOLDER_HELP
+        ):
+            column_group, row = divmod(index, rows_per_column)
+            button_column = column_group * 2
+            placeholder = f"{{{{{name}}}}}"
+            target_label = (
+                "プロンプトへ挿入"
+                if target == "prompt"
+                else "コマンドへ挿入"
+            )
+            ttk.Button(
+                placeholder_frame,
+                text=placeholder,
+                command=lambda value=name, destination=target: (
+                    self._insert_postprocessor_placeholder(
+                        value,
+                        destination,
+                    )
+                ),
+                width=18,
+            ).grid(
+                row=row,
+                column=button_column,
+                sticky="w",
+                padx=(0 if button_column == 0 else 14, 0),
+                pady=2,
+            )
+            ttk.Label(
+                placeholder_frame,
+                text=f"{description} — {target_label}",
+                wraplength=250,
+            ).grid(
+                row=row,
+                column=button_column + 1,
+                sticky="w",
+                padx=(10, 0),
+                pady=2,
+            )
+        ttk.Label(
+            placeholder_frame,
+            text=(
+                "stdin方式: コマンドは固定し、上の値はプロンプトで使います。"
+                "argument方式: コマンドに {{prompt}} が必須で、"
+                "完成したプロンプトがプロセス引数に現れます。"
+            ),
+            foreground="#8A4B08",
+        ).grid(
+            row=rows_per_column,
+            column=0,
+            columnspan=4,
+            sticky="w",
+            pady=(7, 0),
+        )
+
         footer = ttk.Frame(tab)
         footer.grid(
-            row=10,
+            row=11,
             column=0,
             columnspan=3,
             sticky="ew",
@@ -1064,21 +1593,397 @@ class SettingsWindow:
         ).pack(side="left", fill="x", expand=True)
         ttk.Button(
             footer,
-            text="CLIプリセットを保存",
+            text="CLI定義を保存",
             command=self._save_postprocessor,
         ).pack(side="right")
+
+    def _insert_postprocessor_placeholder(
+        self,
+        name: str,
+        destination: str,
+    ) -> None:
+        if name not in SUPPORTED_TEMPLATE_PLACEHOLDERS:
+            raise ValueError(f"未対応のプレースホルダーです: {name}")
+        widget = {
+            "prompt": self._prompt_text,
+            "command": self._command_text,
+        }.get(destination)
+        if widget is None:
+            return
+        widget.insert("insert", f"{{{{{name}}}}}")
+        widget.see("insert")
+        widget.focus_set()
+
+    def _config_form_value(self, key: str) -> object:
+        variable = self._vars.get(key)
+        if variable is None:
+            return None
+        value = variable.get()
+        if isinstance(variable, tk.BooleanVar):
+            return bool(value)
+
+        text = str(value)
+        if key in ("hotkey.toggle", "hotkey.submit_toggle"):
+            if key == "hotkey.submit_toggle" and (
+                not text.strip() or text.strip() == DISPLAY_DISABLED
+            ):
+                return ""
+            return parse_hotkey_value(text)
+        if key == "recording.microphone":
+            return (
+                ""
+                if text.strip() in ("", DISPLAY_DEFAULT_MICROPHONE)
+                else text.strip()
+            )
+        if key == "recognition.hallucination_silence_threshold":
+            return (
+                None
+                if text.strip() in ("", DISPLAY_DISABLED)
+                else text.strip()
+            )
+        if key == "enhancement.profile_label":
+            return self._profile_id_by_label.get(
+                text,
+                f"__unknown_profile_label__:{text}",
+            )
+        if key == "enhancement.postprocessor_label":
+            return self._postprocessor_id_by_label.get(
+                text,
+                f"__unknown_postprocessor_label__:{text}",
+            )
+        return text
+
+    def _capture_config_form_state(self) -> dict[str, object]:
+        return {
+            key: self._config_form_value(key)
+            for key in CONFIG_FORM_FIELDS
+            if key in self._vars
+        }
+
+    def _config_changed_keys(self) -> tuple[str, ...]:
+        baseline = self._config_form_baseline
+        if baseline is None:
+            return ()
+        return changed_config_fields(
+            baseline,
+            self._capture_config_form_state(),
+        )
+
+    def _capture_profile_editor_state(self) -> tuple[object, ...] | None:
+        required_keys = ("profile.id", "profile.name")
+        if not all(key in self._vars for key in required_keys):
+            return None
+        context = (
+            self._profile_context.get("1.0", "end").strip()
+            if self._profile_context is not None
+            else ""
+        )
+        return (
+            str(self._vars["profile.id"].get()).strip(),
+            str(self._vars["profile.name"].get()).strip(),
+            context,
+            tuple(self._profile_terms),
+        )
+
+    def _profile_editor_changed(self) -> bool:
+        current = self._capture_profile_editor_state()
+        return (
+            self._profile_editor_baseline is not None
+            and current is not None
+            and current != self._profile_editor_baseline
+        )
+
+    def _capture_postprocessor_editor_state(
+        self,
+    ) -> tuple[object, ...] | None:
+        required_keys = (
+            "postprocessor.id",
+            "postprocessor.name",
+            "postprocessor.destination",
+            "postprocessor.input_mode",
+            "postprocessor.timeout",
+            "postprocessor.preflight",
+            "postprocessor.preflight_message",
+        )
+        if not all(key in self._vars for key in required_keys):
+            return None
+
+        def text_value(widget: tk.Text | None) -> str:
+            return widget.get("1.0", "end").strip() if widget is not None else ""
+
+        return (
+            str(self._vars["postprocessor.id"].get()).strip(),
+            str(self._vars["postprocessor.name"].get()).strip(),
+            str(self._vars["postprocessor.destination"].get()),
+            str(self._vars["postprocessor.input_mode"].get()),
+            str(self._vars["postprocessor.timeout"].get()).strip(),
+            str(self._vars["postprocessor.preflight"].get()).strip(),
+            str(
+                self._vars["postprocessor.preflight_message"].get()
+            ).strip(),
+            text_value(self._command_text),
+            text_value(self._environment_text),
+            text_value(self._prompt_text),
+        )
+
+    def _postprocessor_editor_changed(self) -> bool:
+        current = self._capture_postprocessor_editor_state()
+        return (
+            self._postprocessor_editor_baseline is not None
+            and current is not None
+            and current != self._postprocessor_editor_baseline
+        )
+
+    def _confirm_discard_profile_changes(self, action: str) -> bool:
+        if not self._profile_editor_changed():
+            return True
+        return messagebox.askyesno(
+            "未保存のプロフィール変更を破棄しますか？",
+            (
+                "プロフィール定義に未保存の変更があります。\n"
+                f"変更を破棄して{action}しますか？"
+            ),
+            icon="warning",
+            parent=self._root,
+        )
+
+    def _confirm_discard_postprocessor_changes(self, action: str) -> bool:
+        if not self._postprocessor_editor_changed():
+            return True
+        return messagebox.askyesno(
+            "未保存のCLI変更を破棄しますか？",
+            (
+                "CLIプリセット定義に未保存の変更があります。\n"
+                f"変更を破棄して{action}しますか？"
+            ),
+            icon="warning",
+            parent=self._root,
+        )
+
+    def _on_config_form_changed(self, key: str) -> None:
+        if key in RECOGNITION_SELECTION_KEYS:
+            self._update_recognition_summary()
+        if key not in CONFIG_FORM_FIELDS or self._config_form_loading:
+            return
+        self._update_config_change_state()
+
+    def _update_recognition_summary(self) -> None:
+        summary = self._recognition_summary_var
+        if summary is None:
+            return
+        required_keys = (
+            "recognition.engine",
+            "recognition.language",
+            "recognition.device",
+        )
+        if not all(key in self._vars for key in required_keys):
+            return
+        engine = str(self._vars["recognition.engine"].get())
+        language = str(self._vars["recognition.language"].get())
+        device = str(self._vars["recognition.device"].get())
+        availability_note = ""
+        if engine not in available_recognition_engines():
+            availability_note = "（現在値のエンジンは未導入）"
+        elif device not in available_recognition_devices(engine):
+            availability_note = "（現在値の実行先は未導入）"
+        selection = recognition_selection_text(engine, language, device)
+        summary.set(
+            f"{selection} {availability_note}".rstrip()
+        )
+
+    def _update_config_change_state(self) -> None:
+        baseline = self._config_form_baseline
+        if baseline is None:
+            if self._config_changes_var is not None:
+                self._config_changes_var.set("設定値の読み込み待ち")
+            if self._save_config_button is not None:
+                self._save_config_button.configure(state="disabled")
+            return
+
+        changed_keys = self._config_changed_keys()
+        if self._save_config_button is not None:
+            self._save_config_button.configure(
+                state="normal" if changed_keys else "disabled"
+            )
+        if self._config_changes_var is None:
+            return
+        if not changed_keys:
+            self._config_changes_var.set("未保存の設定変更はありません")
+            return
+
+        labels = [
+            CONFIG_FORM_FIELDS[key][2]
+            for key in changed_keys[:4]
+        ]
+        suffix = (
+            f"、ほか{len(changed_keys) - len(labels)}件"
+            if len(changed_keys) > len(labels)
+            else ""
+        )
+        self._config_changes_var.set(
+            f"未保存の設定変更: {len(changed_keys)}件"
+            f"（{'、'.join(labels)}{suffix}）"
+        )
+
+    def _discard_config_changes(self) -> None:
+        changed_keys = self._config_changed_keys()
+        if changed_keys and not messagebox.askyesno(
+            "変更を破棄しますか？",
+            (
+                f"未保存の設定変更が{len(changed_keys)}件あります。\n"
+                "破棄して、現在のconfig.tomlを読み直しますか？"
+            ),
+            icon="warning",
+            parent=self._root,
+        ):
+            self._set_status("現在値への再読込をキャンセルしました")
+            return
+        self._refresh_config_snapshot("現在の設定値へ戻しました")
+
+    @staticmethod
+    def _config_field_value(cfg: AppConfig, key: str) -> object:
+        section_name, field_name, _label = CONFIG_FORM_FIELDS[key]
+        return getattr(getattr(cfg, section_name), field_name)
+
+    def _display_config_value(self, key: str, value: object) -> str:
+        if isinstance(value, bool):
+            return "有効" if value else "無効"
+        if key == "hotkey.submit_toggle" and not value:
+            return DISPLAY_DISABLED
+        if key == "recording.microphone" and not value:
+            return DISPLAY_DEFAULT_MICROPHONE
+        if (
+            key == "recognition.hallucination_silence_threshold"
+            and value is None
+        ):
+            return DISPLAY_DISABLED
+        if key == "enhancement.profile_label":
+            return self._profile_label_by_id.get(
+                str(value),
+                str(value) or "オフ",
+            )
+        if key == "enhancement.postprocessor_label":
+            return self._postprocessor_label_by_id.get(
+                str(value),
+                str(value),
+            )
+        if isinstance(value, list):
+            return hotkey_value_to_text(value)
+        if value == "":
+            return "（空）"
+        return str(value)
+
+    def _confirm_config_changes(
+        self,
+        cfg: AppConfig,
+        changed_keys: tuple[str, ...],
+    ) -> bool:
+        snapshot = self._snapshot
+        if snapshot is None:
+            return False
+        lines: list[str] = []
+        for key in changed_keys[:16]:
+            _section, _field, label = CONFIG_FORM_FIELDS[key]
+            before = self._display_config_value(
+                key,
+                self._config_field_value(snapshot.config, key),
+            )
+            after = self._display_config_value(
+                key,
+                self._config_field_value(cfg, key),
+            )
+            lines.append(f"・{label}: {before} → {after}")
+        if len(changed_keys) > len(lines):
+            lines.append(f"・ほか{len(changed_keys) - len(lines)}件")
+        return messagebox.askyesno(
+            "config.tomlへ保存しますか？",
+            (
+                "次の設定変更をconfig.tomlへ保存します。\n\n"
+                + "\n".join(lines)
+                + "\n\nプロフィールとCLIの定義内容は、"
+                "それぞれの専用保存ボタンで保存します。"
+            ),
+            parent=self._root,
+        )
 
     def _refresh_snapshot(
         self,
         status_message: str = "現在の設定を読み込みました",
     ) -> None:
+        self._config_form_loading = True
+        self._config_form_baseline = None
+        if self._save_config_button is not None:
+            self._save_config_button.configure(state="disabled")
+        if self._config_source_var is not None:
+            self._config_source_var.set(
+                "config.toml の現在値を読み込んでいます..."
+            )
         snapshot = self._request_snapshot()
         if snapshot is None:
+            self._config_form_loading = False
+            if self._config_source_var is not None:
+                self._config_source_var.set(
+                    "config.toml を読み込めないため保存できません"
+                )
+            self._update_config_change_state()
             return
         self._snapshot = snapshot
         self._load_config_variables(snapshot.config)
         self._refresh_profile_choices(snapshot)
         self._refresh_postprocessor_choices(snapshot)
+        self._config_form_baseline = self._capture_config_form_state()
+        self._config_form_loading = False
+        if self._config_source_var is not None:
+            self._config_source_var.set(
+                "config.toml と既定値から読み込んだ現在の有効値を表示中"
+            )
+        self._update_config_change_state()
+        hotkey_errors = validate_hotkey_config(snapshot.config.hotkey)
+        if hotkey_errors:
+            status_message = (
+                "ホットキー設定を修正してください: "
+                + hotkey_errors[0]
+            )
+        self._set_status(status_message)
+
+    def _refresh_config_snapshot(
+        self,
+        status_message: str = "現在の設定値を読み込みました",
+    ) -> None:
+        """Reload config while preserving unsaved resource editor contents."""
+        self._config_form_loading = True
+        self._config_form_baseline = None
+        if self._save_config_button is not None:
+            self._save_config_button.configure(state="disabled")
+        if self._config_source_var is not None:
+            self._config_source_var.set(
+                "config.toml の現在値を読み込んでいます..."
+            )
+        refreshed = self._request_snapshot()
+        if refreshed is None:
+            self._config_form_loading = False
+            if self._config_source_var is not None:
+                self._config_source_var.set(
+                    "config.toml を読み込めないため保存できません"
+                )
+            self._update_config_change_state()
+            return
+        snapshot = (
+            refresh_snapshot_config(self._snapshot, refreshed)
+            if self._snapshot is not None
+            else refreshed
+        )
+        self._snapshot = snapshot
+        self._load_config_variables(snapshot.config)
+        self._refresh_profile_choices(snapshot, reload_editor=False)
+        self._refresh_postprocessor_choices(snapshot, reload_editor=False)
+        self._config_form_baseline = self._capture_config_form_state()
+        self._config_form_loading = False
+        if self._config_source_var is not None:
+            self._config_source_var.set(
+                "config.toml と既定値から読み込んだ現在の有効値を表示中"
+            )
+        self._update_config_change_state()
         hotkey_errors = validate_hotkey_config(snapshot.config.hotkey)
         if hotkey_errors:
             status_message = (
@@ -1102,8 +2007,10 @@ class SettingsWindow:
     def _load_config_variables(self, cfg: AppConfig) -> None:
         values: dict[str, object] = {
             "hotkey.toggle": hotkey_value_to_text(cfg.hotkey.toggle),
-            "hotkey.submit_toggle": hotkey_value_to_text(
-                cfg.hotkey.submit_toggle
+            "hotkey.submit_toggle": (
+                hotkey_value_to_text(cfg.hotkey.submit_toggle)
+                if cfg.hotkey.submit_toggle
+                else DISPLAY_DISABLED
             ),
             "hotkey.switch_lang": hotkey_value_to_text(
                 cfg.hotkey.switch_lang
@@ -1118,6 +2025,8 @@ class SettingsWindow:
             ),
             "feedback.custom_stop_sound": cfg.feedback.custom_stop_sound,
             "overlay.enabled": cfg.overlay.enabled,
+            "overlay.position": cfg.overlay.position,
+            "overlay.size": str(cfg.overlay.size),
             "logging.level": cfg.logging.level,
             "logging.file": cfg.logging.file,
             "recognition.engine": cfg.recognition.engine,
@@ -1155,13 +2064,18 @@ class SettingsWindow:
                 cfg.recognition.condition_on_previous_text
             ),
             "recognition.hallucination_silence_threshold": (
-                ""
+                DISPLAY_DISABLED
                 if cfg.recognition.hallucination_silence_threshold is None
                 else str(
                     cfg.recognition.hallucination_silence_threshold
                 )
             ),
-            "recording.microphone": cfg.recording.microphone,
+            "recording.microphone": (
+                cfg.recording.microphone
+                if cfg.recording.microphone
+                else DISPLAY_DEFAULT_MICROPHONE
+            ),
+            "recording.sample_rate": str(cfg.recording.sample_rate),
             "recording.vad_silence_threshold_sec": str(
                 cfg.recording.vad_silence_threshold_sec
             ),
@@ -1182,6 +2096,7 @@ class SettingsWindow:
             if variable is not None:
                 variable.set(value)
         self._configure_recognition_choices(preserve_current=True)
+        self._update_recognition_summary()
 
     def _on_recognition_engine_changed(
         self,
@@ -1196,16 +2111,16 @@ class SettingsWindow:
     ) -> None:
         engine = str(self._vars["recognition.engine"].get())
         engine_values = list(available_recognition_engines())
-        if preserve_current and engine and engine not in engine_values:
-            engine_values.append(engine)
         engine_widget = self._widgets.get("recognition.engine")
         if isinstance(engine_widget, ttk.Combobox):
             engine_widget.configure(values=engine_values)
 
         device = str(self._vars["recognition.device"].get())
-        device_values = list(available_recognition_devices(engine))
-        if preserve_current and device and device not in device_values:
-            device_values.append(device)
+        device_values = (
+            list(available_recognition_devices(engine))
+            if engine in engine_values
+            else []
+        )
         device_widget = self._widgets.get("recognition.device")
         if isinstance(device_widget, ttk.Combobox):
             device_widget.configure(values=device_values)
@@ -1223,7 +2138,12 @@ class SettingsWindow:
         }
         return labels[preset.data_destination]
 
-    def _refresh_profile_choices(self, snapshot: SettingsSnapshot) -> None:
+    def _refresh_profile_choices(
+        self,
+        snapshot: SettingsSnapshot,
+        *,
+        reload_editor: bool = True,
+    ) -> None:
         self._profile_id_by_label = {"オフ": ""}
         self._profile_label_by_id = {"": "オフ"}
         for profile_id, profile in snapshot.profiles.items():
@@ -1231,20 +2151,26 @@ class SettingsWindow:
             self._profile_id_by_label[label] = profile_id
             self._profile_label_by_id[profile_id] = label
 
+        active_profile_id = snapshot.config.enhancement.profile
+        if active_profile_id not in self._profile_label_by_id:
+            missing_label = (
+                f"{active_profile_id} — （定義ファイルが見つかりません）"
+            )
+            self._profile_id_by_label[missing_label] = active_profile_id
+            self._profile_label_by_id[active_profile_id] = missing_label
         labels = list(self._profile_id_by_label)
         active_widget = self._widgets.get("enhancement.profile")
         if isinstance(active_widget, ttk.Combobox):
             active_widget.configure(values=labels)
-        active_label = self._profile_label_by_id.get(
-            snapshot.config.enhancement.profile,
-            "オフ",
-        )
+        active_label = self._profile_label_by_id[active_profile_id]
         self._vars["enhancement.profile_label"].set(active_label)
 
         editor_widget = self._widgets.get("profile.editor")
         profile_ids = list(snapshot.profiles)
         if isinstance(editor_widget, ttk.Combobox):
             editor_widget.configure(values=profile_ids)
+        if not reload_editor:
+            return
         selected_id = snapshot.config.enhancement.profile
         if selected_id not in snapshot.profiles:
             selected_id = profile_ids[0] if profile_ids else ""
@@ -1254,6 +2180,8 @@ class SettingsWindow:
     def _refresh_postprocessor_choices(
         self,
         snapshot: SettingsSnapshot,
+        *,
+        reload_editor: bool = True,
     ) -> None:
         self._postprocessor_id_by_label = {
             "オフ": POSTPROCESSOR_OFF,
@@ -1276,35 +2204,65 @@ class SettingsWindow:
             self._postprocessor_id_by_label[label] = preset_id
             self._postprocessor_label_by_id[preset_id] = label
 
+        active_postprocessor_id = (
+            snapshot.config.enhancement.postprocessor
+        )
+        if (
+            active_postprocessor_id
+            not in self._postprocessor_label_by_id
+        ):
+            missing_label = (
+                f"{active_postprocessor_id} — "
+                "（CLI定義が見つかりません）"
+            )
+            self._postprocessor_id_by_label[
+                missing_label
+            ] = active_postprocessor_id
+            self._postprocessor_label_by_id[
+                active_postprocessor_id
+            ] = missing_label
         labels = list(self._postprocessor_id_by_label)
         active_widget = self._widgets.get("enhancement.postprocessor")
         if isinstance(active_widget, ttk.Combobox):
             active_widget.configure(values=labels)
-        active_label = self._postprocessor_label_by_id.get(
-            snapshot.config.enhancement.postprocessor,
-            "オフ",
-        )
+        active_label = self._postprocessor_label_by_id[
+            active_postprocessor_id
+        ]
         self._vars["enhancement.postprocessor_label"].set(active_label)
 
         editor_widget = self._widgets.get("postprocessor.editor")
         preset_ids = list(snapshot.postprocessors)
         if isinstance(editor_widget, ttk.Combobox):
             editor_widget.configure(values=preset_ids)
+        if not reload_editor:
+            return
         selected_id = snapshot.config.enhancement.postprocessor
         if selected_id not in snapshot.postprocessors:
             selected_id = preset_ids[0] if preset_ids else ""
         self._vars["postprocessor.editor"].set(selected_id)
         self._load_postprocessor(selected_id)
 
-    def _config_from_form(self) -> AppConfig:
+    def _config_from_form(
+        self,
+        changed_keys: tuple[str, ...] | None = None,
+    ) -> AppConfig:
         if self._snapshot is None:
             raise ValueError("設定が読み込まれていません")
+        if self._config_form_baseline is None:
+            raise ValueError("設定値の読み込みが完了していません")
+        if changed_keys is None:
+            changed_keys = self._config_changed_keys()
         cfg = copy.deepcopy(self._snapshot.config)
         cfg.hotkey.toggle = parse_hotkey_value(
             str(self._vars["hotkey.toggle"].get())
         )
+        submit_hotkey_value = str(
+            self._vars["hotkey.submit_toggle"].get()
+        ).strip()
+        if submit_hotkey_value == DISPLAY_DISABLED:
+            submit_hotkey_value = ""
         cfg.hotkey.submit_toggle = parse_hotkey_value(
-            str(self._vars["hotkey.submit_toggle"].get())
+            submit_hotkey_value
         )
         cfg.hotkey.switch_lang = str(
             self._vars["hotkey.switch_lang"].get()
@@ -1406,16 +2364,19 @@ class SettingsWindow:
         ).strip()
         cfg.recognition.hallucination_silence_threshold = (
             None
-            if not hallucination_value
+            if hallucination_value in ("", DISPLAY_DISABLED)
             else self._parse_float(
                 hallucination_value,
                 "幻覚抑制の無音長",
             )
         )
 
-        cfg.recording.microphone = str(
+        microphone = str(
             self._vars["recording.microphone"].get()
         ).strip()
+        cfg.recording.microphone = (
+            "" if microphone == DISPLAY_DEFAULT_MICROPHONE else microphone
+        )
         cfg.recording.vad_silence_threshold_sec = self._float_value(
             "recording.vad_silence_threshold_sec",
             "無音停止",
@@ -1447,15 +2408,20 @@ class SettingsWindow:
         postprocessor_label = str(
             self._vars["enhancement.postprocessor_label"].get()
         )
-        cfg.enhancement.profile = self._profile_id_by_label.get(
-            profile_label,
-            "",
-        )
-        cfg.enhancement.postprocessor = self._postprocessor_id_by_label.get(
-            postprocessor_label,
-            POSTPROCESSOR_OFF,
+        if profile_label not in self._profile_id_by_label:
+            raise ValueError("選択したプロフィールを特定できません")
+        if postprocessor_label not in self._postprocessor_id_by_label:
+            raise ValueError("選択したCLI後処理を特定できません")
+        cfg.enhancement.profile = self._profile_id_by_label[profile_label]
+        cfg.enhancement.postprocessor = (
+            self._postprocessor_id_by_label[postprocessor_label]
         )
 
+        cfg = apply_changed_config_fields(
+            self._snapshot.config,
+            cfg,
+            changed_keys,
+        )
         warnings = cfg.validate() + validate_hotkey_config(cfg.hotkey)
         if warnings:
             raise ValueError("\n".join(warnings))
@@ -1481,8 +2447,23 @@ class SettingsWindow:
         return parsed
 
     def _save_config(self) -> None:
+        if self._config_form_baseline is None:
+            messagebox.showerror(
+                "設定を保存できません",
+                "config.toml の読み込みが完了していません",
+                parent=self._root,
+            )
+            return
+        changed_keys = self._config_changed_keys()
+        if not changed_keys:
+            self._set_status("保存する設定変更はありません")
+            self._update_config_change_state()
+            return
         try:
-            cfg = self._config_from_form()
+            cfg = self._config_from_form(changed_keys)
+            if not self._confirm_config_changes(cfg, changed_keys):
+                self._set_status("設定の保存をキャンセルしました")
+                return
             if not self._confirm_external_postprocessor(cfg):
                 self._set_status("設定の保存をキャンセルしました")
                 return
@@ -1505,7 +2486,7 @@ class SettingsWindow:
             logger.exception("設定保存コールバックで例外が発生しました")
             succeeded, message = False, "設定保存中にエラーが発生しました"
         if succeeded:
-            self._refresh_snapshot(message)
+            self._refresh_config_snapshot(message)
             messagebox.showinfo(
                 "ZenWhisper 設定",
                 message,
@@ -1552,7 +2533,17 @@ class SettingsWindow:
         )
 
     def _load_selected_profile(self, event: object | None = None) -> None:
-        self._load_profile(str(self._vars["profile.editor"].get()))
+        profile_id = str(self._vars["profile.editor"].get())
+        if (
+            profile_id != self._loaded_profile_id
+            and not self._confirm_discard_profile_changes(
+                "別のプロフィールへ切り替え"
+            )
+        ):
+            self._vars["profile.editor"].set(self._loaded_profile_id)
+            self._set_status("プロフィールの切替をキャンセルしました")
+            return
+        self._load_profile(profile_id)
 
     def _load_profile(self, profile_id: str) -> None:
         profile = (
@@ -1571,8 +2562,15 @@ class SettingsWindow:
                 self._profile_context.insert("1.0", profile.context)
         self._profile_terms = list(profile.terms) if profile else []
         self._refresh_term_tree()
+        self._loaded_profile_id = profile.profile_id if profile else ""
+        self._profile_editor_baseline = self._capture_profile_editor_state()
 
     def _new_profile(self) -> None:
+        if not self._confirm_discard_profile_changes(
+            "新しいプロフィールを作成"
+        ):
+            self._set_status("新規プロフィールの作成をキャンセルしました")
+            return
         self._vars["profile.editor"].set("")
         self._load_profile("")
         self._set_status("新しいプロフィールを入力してください")
@@ -1640,8 +2638,14 @@ class SettingsWindow:
         dialog.rowconfigure(3, weight=1)
         result: list[ProfileTerm] = []
 
-        canonical = tk.StringVar(value=term.canonical if term else "")
-        description = tk.StringVar(value=term.description if term else "")
+        canonical = tk.StringVar(
+            master=dialog,
+            value=term.canonical if term else "",
+        )
+        description = tk.StringVar(
+            master=dialog,
+            value=term.description if term else "",
+        )
         ttk.Label(dialog, text="正規表記").grid(
             row=0,
             column=0,
@@ -1826,9 +2830,19 @@ class SettingsWindow:
         self,
         event: object | None = None,
     ) -> None:
-        self._load_postprocessor(
-            str(self._vars["postprocessor.editor"].get())
-        )
+        preset_id = str(self._vars["postprocessor.editor"].get())
+        if (
+            preset_id != self._loaded_postprocessor_id
+            and not self._confirm_discard_postprocessor_changes(
+                "別のCLIプリセットへ切り替え"
+            )
+        ):
+            self._vars["postprocessor.editor"].set(
+                self._loaded_postprocessor_id
+            )
+            self._set_status("CLIプリセットの切替をキャンセルしました")
+            return
+        self._load_postprocessor(preset_id)
 
     def _load_postprocessor(self, preset_id: str) -> None:
         preset = (
@@ -1876,8 +2890,17 @@ class SettingsWindow:
             if widget is not None:
                 widget.delete("1.0", "end")
                 widget.insert("1.0", value)
+        self._loaded_postprocessor_id = preset.preset_id if preset else ""
+        self._postprocessor_editor_baseline = (
+            self._capture_postprocessor_editor_state()
+        )
 
     def _new_postprocessor(self) -> None:
+        if not self._confirm_discard_postprocessor_changes(
+            "新しいCLIプリセットを作成"
+        ):
+            self._set_status("新規CLIプリセットの作成をキャンセルしました")
+            return
         self._vars["postprocessor.editor"].set("")
         self._load_postprocessor("")
         self._set_status("新しいCLIプリセットを入力してください")

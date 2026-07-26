@@ -948,6 +948,15 @@ class App:
             **guarded_callbacks,
         )
         if result.succeeded:
+            if (
+                submit_after_paste
+                and postprocessor_id != POSTPROCESSOR_DICTIONARY
+            ):
+                self.tray.notify(
+                    "CLI後処理結果を貼り付けます。"
+                    "内容確認前の誤送信を防ぐため、Enter送信はキャンセルしました。"
+                )
+                return result.text, False
             return result.text, submit_after_paste
 
         if submit_after_paste:

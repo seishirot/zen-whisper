@@ -48,7 +48,7 @@ class TestRecognitionConfig:
     def test_reazon_defaults(self):
         cfg = RecognitionConfig()
         assert cfg.reazon_language == "ja"
-        assert cfg.reazon_precision == "fp32"
+        assert cfg.reazon_precision == "int8-fp32"
         assert cfg.reazon_chunk_sec == 25.0
         assert cfg.reazon_trailing_silence_sec == 0.5
         assert cfg.cpu_threads == 4
@@ -161,13 +161,13 @@ class TestLoadConfig:
         toml_path = tmp_path / "config.toml"
         cfg = AppConfig()
         cfg.enhancement.profile = "coding"
-        cfg.enhancement.postprocessor = "codex"
+        cfg.enhancement.postprocessor = "custom"
 
         assert save_config(cfg, toml_path) is True
         loaded = load_config(toml_path)
 
         assert loaded.enhancement.profile == "coding"
-        assert loaded.enhancement.postprocessor == "codex"
+        assert loaded.enhancement.postprocessor == "custom"
 
     def test_optional_hallucination_threshold_round_trips_as_off(self, tmp_path):
         toml_path = tmp_path / "config.toml"
