@@ -158,6 +158,72 @@ final class SettingsWindowLayoutTests: XCTestCase {
         XCTAssertEqual(window.contentMinSize.height, baselineMinimumHeight, accuracy: 1)
     }
 
+    func testPostprocessorEditorKeepsFooterVisibleAndFormScrollableAtMinimumSize() {
+        let controller = PostprocessorEditorWindowController(
+            preset: EnhancementPostprocessorPreset(
+                id: "codex",
+                displayName: "Codex Cleanup",
+                executable: "codex",
+                arguments: [
+                    "exec",
+                    "--ephemeral",
+                    "--sandbox",
+                    "read-only",
+                    "--ignore-user-config",
+                    "--ignore-rules",
+                    "--skip-git-repo-check",
+                    "--color",
+                    "never",
+                    "-c",
+                    "project_doc_max_bytes=0",
+                    "-"
+                ],
+                destination: .remote,
+                promptTemplate: String(
+                    repeating:
+                        "Correct {{transcript}} while preserving its meaning. ",
+                    count: 12
+                )
+            ),
+            expectedFingerprint: .missing
+        )
+
+        guard let window = controller.window,
+              let contentView = window.contentView,
+              let saveButton = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.save,
+                  in: contentView
+              ),
+              let promptView = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.promptTemplate,
+                  in: contentView
+              ),
+              let outerScrollView = ancestors(of: promptView)
+                  .compactMap({ $0 as? NSScrollView })
+                  .last,
+              let documentView = outerScrollView.documentView else {
+            return XCTFail("Expected CLI post-processor editor layout")
+        }
+
+        window.setContentSize(window.contentMinSize)
+        contentView.layoutSubtreeIfNeeded()
+
+        let saveFrame = saveButton.convert(saveButton.bounds, to: contentView)
+        XCTAssertTrue(
+            contentView.bounds.contains(saveFrame),
+            "The fixed editor footer must remain visible at the minimum size"
+        )
+        XCTAssertGreaterThanOrEqual(saveFrame.minY, 19)
+        XCTAssertGreaterThan(
+            documentView.bounds.height,
+            outerScrollView.contentView.bounds.height,
+            "The long editor form should scroll instead of compressing controls"
+        )
+        XCTAssertFalse(contentView.hasAmbiguousLayout)
+    }
+
     func testReopeningWindowPreservesUserPosition() throws {
         let registry = try ModelRegistry.loadDefault()
         let controller = SettingsWindowController(

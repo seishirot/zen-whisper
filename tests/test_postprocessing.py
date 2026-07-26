@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes
+import json
 import logging
 import subprocess
 import sys
 from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 import src.postprocessing as postprocessing
@@ -75,6 +77,89 @@ def test_bundled_claude_preset_is_remote_stateless_and_toolless(tmp_path):
     assert argv[argv.index("--tools") + 1] == ""
     assert "{{transcript}}" not in prompt
     assert "全ウィスパー" in prompt
+
+
+def test_bundled_codex_preset_restores_hardened_historical_default(tmp_path):
+    presets = load_postprocessors(user_path=tmp_path / "missing.toml")
+
+    codex = presets["codex"]
+    argv, prompt = _build_invocation(
+        codex,
+        "全ウィスパー",
+        _profile(),
+        "ja",
+    )
+
+    assert codex.display_name == "Codex 校正"
+    assert codex.data_destination == DATA_DESTINATION_REMOTE
+    assert codex.input_mode == "stdin"
+    assert codex.timeout_sec == 30
+    assert argv == [
+        "codex",
+        "exec",
+        "--ephemeral",
+        "--sandbox",
+        "read-only",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--skip-git-repo-check",
+        "--color",
+        "never",
+        "-c",
+        "project_doc_max_bytes=0",
+        "-",
+    ]
+    assert "--model" not in argv
+    assert "{{transcript}}" not in prompt
+    assert "全ウィスパー" in prompt
+
+
+def test_native_bundled_catalog_matches_python_desktop_defaults(tmp_path):
+    root = Path(__file__).resolve().parents[1]
+    native = json.loads(
+        (
+            root
+            / "macos"
+            / "ZenWhisper"
+            / "ZenWhisper"
+            / "Resources"
+            / "postprocessors.default.json"
+        ).read_text(encoding="utf-8")
+    )["postprocessors"]
+    desktop = load_postprocessors(user_path=tmp_path / "missing.toml")
+
+    assert set(native) == set(desktop) == {"codex", "claude", "ollama"}
+    for preset_id, desktop_preset in desktop.items():
+        native_preset = native[preset_id]
+        command = postprocessing.split_command(desktop_preset.command)
+        preflight = postprocessing.split_command(
+            desktop_preset.preflight_command
+        )
+
+        assert native_preset["display_name"] == desktop_preset.display_name
+        assert native_preset["executable"] == command[0]
+        assert native_preset["arguments"] == command[1:]
+        assert native_preset["preflight_executable"] == (
+            preflight[0] if preflight else ""
+        )
+        assert native_preset["preflight_arguments"] == (
+            preflight[1:] if preflight else []
+        )
+        assert (
+            native_preset["preflight_failure_message"]
+            == desktop_preset.preflight_failure_message
+        )
+        assert native_preset["input_mode"] == desktop_preset.input_mode
+        assert (
+            native_preset["data_destination"]
+            == desktop_preset.data_destination
+        )
+        assert native_preset["timeout_sec"] == desktop_preset.timeout_sec
+        assert (
+            native_preset["prompt_template"]
+            == desktop_preset.prompt_template
+        )
+        assert native_preset["environment"] == desktop_preset.environment
 
 
 def test_user_can_define_arbitrary_argument_cli(tmp_path):

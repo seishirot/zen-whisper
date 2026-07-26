@@ -1027,10 +1027,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 guard let self, let store = self.enhancementCatalogStore else {
                     return .failure(SettingsApplicationError.appUnavailable)
                 }
+                guard !self.state.blocksSettingsChanges else {
+                    return .failure(SettingsApplicationError.busy)
+                }
                 do {
                     _ = try store.saveProfile(
                         profile,
                         expectedFingerprint: fingerprint
+                    )
+                    self.refreshEnhancementCatalog()
+                    return .success(self.enhancementCatalog)
+                } catch {
+                    return .failure(error)
+                }
+            }
+            newController.onSavePostprocessor = {
+                [weak self] preset, fingerprint, explicitlyReclassified in
+                guard let self, let store = self.enhancementCatalogStore else {
+                    return .failure(SettingsApplicationError.appUnavailable)
+                }
+                guard !self.state.blocksSettingsChanges else {
+                    return .failure(SettingsApplicationError.busy)
+                }
+                do {
+                    _ = try store.savePostprocessor(
+                        preset,
+                        expectedFingerprint: fingerprint,
+                        destinationWasExplicitlyReclassified:
+                            explicitlyReclassified
                     )
                     self.refreshEnhancementCatalog()
                     return .success(self.enhancementCatalog)

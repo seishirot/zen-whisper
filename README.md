@@ -10,7 +10,7 @@ Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe
 - **Local ASR transcription** — no data leaves your machine after models are installed
 - **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
 - **Domain profiles** — reusable project context, preferred spellings, pronunciations, and exact error mappings
-- **Optional CLI cleanup** — generic shell-free presets, including Claude Code (remote) and Ollama (loopback local)
+- **Optional CLI cleanup** — generic shell-free presets, including Codex and Claude Code (remote) plus Ollama (loopback local)
 - **Tray / menu bar** — runs in the background with a Windows tray icon or macOS menu bar item showing recording state
 - **Microphone selection** — pick the recording input from the Windows tray or macOS menu bar, including virtual mics like NVIDIA Broadcast
 - **Floating overlay** — Windows/Python draggable microphone widget with real-time VAD visual feedback
@@ -338,12 +338,16 @@ timeout.
 
 The bundled `postprocessors.default.toml` contains:
 
+- `codex`: remote Codex CLI cleanup using an ephemeral, read-only,
+  user-config/rules-independent invocation; the model follows the Codex CLI
+  default unless `--model` is added in the editor
 - `claude`: remote Claude Code cleanup using the `haiku` model alias; safe
   mode, no tools, and no session persistence
 - `ollama`: local `qwen3.5:4b` cleanup, pinned to
   `127.0.0.1:11434`
 
-The macOS native app bundles equivalent `claude` and `ollama` presets as JSON.
+The macOS native app bundles equivalent `codex`, `claude`, and `ollama` presets
+as JSON.
 It shows each preset's declared destination before saving the selection and
 requires confirmation for `remote` or `unknown`. Approval is stored against
 the exact normalized preset revision; changing its destination, executable,
@@ -381,11 +385,17 @@ prompt_template = """
 """
 ```
 
-For macOS native, place local definitions or bundled-preset overrides in
-`~/Library/Application Support/zen-whisper/postprocessors.json`. The Settings
-window selects these presets; definition editing remains an explicit trusted
-file operation. Native presets separate the executable and argument array, so
-there is no command string for a shell to reinterpret:
+For macOS native, create or edit a definition with the `New…` and `Edit…`
+buttons next to `Post-process` in Settings. Definitions and bundled-preset
+overrides are stored in
+`~/Library/Application Support/zen-whisper/postprocessors.json`. Executable,
+arguments, input mode, destination, timeout, preflight, environment, and prompt
+are editable. Argument and environment fields use JSON arrays/objects so spaces
+and empty arguments round-trip exactly. Model selection remains an ordinary CLI
+argument (`--model`, a model name after `ollama run`, and so on), matching the
+Windows editor's provider-neutral design. Native presets separate the
+executable and argument array, so there is no command string for a shell to
+reinterpret:
 
 ```json
 {

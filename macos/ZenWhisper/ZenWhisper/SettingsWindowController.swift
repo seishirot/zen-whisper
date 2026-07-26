@@ -54,6 +54,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         EnhancementProfile,
         EnhancementFileFingerprint?
     ) -> Result<EnhancementCatalogSnapshot, Error>
+    typealias PostprocessorSaveHandler = (
+        EnhancementPostprocessorPreset,
+        EnhancementFileFingerprint?,
+        Bool
+    ) -> Result<EnhancementCatalogSnapshot, Error>
     typealias ExternalDestinationConfirmationHandler = (
         EnhancementPostprocessorPreset,
         String
@@ -80,6 +85,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         static let newProfile = "settings.newProfile"
         static let editProfile = "settings.editProfile"
         static let postprocessing = "settings.postprocessing"
+        static let newPostprocessor = "settings.newPostprocessor"
+        static let editPostprocessor = "settings.editPostprocessor"
         static let enhancementMessage = "settings.enhancementMessage"
         static let silenceAutoStop = "settings.silenceAutoStop"
         static let microphone = "settings.microphone"
@@ -118,6 +125,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onSaveProfile: ProfileSaveHandler? {
         didSet { refreshEnabledState() }
     }
+    var onSavePostprocessor: PostprocessorSaveHandler? {
+        didSet { refreshEnabledState() }
+    }
     var onConfirmExternalDestination: ExternalDestinationConfirmationHandler?
 
     private let registry: ModelRegistry
@@ -149,6 +159,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let newProfileButton = NSButton()
     private let editProfileButton = NSButton()
     private let postprocessingPopup = NSPopUpButton()
+    private let newPostprocessorButton = NSButton()
+    private let editPostprocessorButton = NSButton()
     private let enhancementMessageLabel = NSTextField(wrappingLabelWithString: "")
     private let silenceAutoStopCheckbox = NSButton()
     private let microphonePopup = NSPopUpButton()
@@ -167,6 +179,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private var isUpdatingWindowLayout = false
     private var shouldCenterWindowOnFirstShow: Bool
     private var profileEditorWindowController: ProfileEditorWindowController?
+    private var postprocessorEditorWindowController:
+        PostprocessorEditorWindowController?
 
     init(
         registry: ModelRegistry,
@@ -279,6 +293,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }
         profileEditorWindowController?.close()
         profileEditorWindowController = nil
+        if let editorWindow = postprocessorEditorWindowController?.window,
+           window?.attachedSheet === editorWindow {
+            window?.endSheet(editorWindow)
+        }
+        postprocessorEditorWindowController?.close()
+        postprocessorEditorWindowController = nil
     }
 
     private func configureControls() {
@@ -351,6 +371,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             label: "Post-processing",
             identifier: AccessibilityIdentifier.postprocessing,
             action: #selector(postprocessingChanged)
+        )
+        configureButton(
+            newPostprocessorButton,
+            title: "New…",
+            label: "Create CLI post-processor",
+            identifier: AccessibilityIdentifier.newPostprocessor,
+            action: #selector(createPostprocessor)
+        )
+        configureButton(
+            editPostprocessorButton,
+            title: "Edit…",
+            label: "Edit selected CLI post-processor",
+            identifier: AccessibilityIdentifier.editPostprocessor,
+            action: #selector(editPostprocessor)
         )
         enhancementMessageLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         enhancementMessageLabel.textColor = .secondaryLabelColor
@@ -473,7 +507,14 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     title: "Profile:",
                     control: makeControlRow(profilePopup, newProfileButton, editProfileButton)
                 ),
-                makeLabeledRow(title: "Post-process:", control: postprocessingPopup),
+                makeLabeledRow(
+                    title: "Post-process:",
+                    control: makeControlRow(
+                        postprocessingPopup,
+                        newPostprocessorButton,
+                        editPostprocessorButton
+                    )
+                ),
                 enhancementMessageLabel
             ]
         )
@@ -868,6 +909,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
                     "Data destination: Unknown. The transcript, recognition language, profile name, profile context, and terms are passed to this CLI and may leave this Mac. Review the command before continuing."
                 )
             }
+            if enhancementCatalog.localPostprocessorIDs.contains(id) {
+                messages.append("Definition: Local setting.")
+            } else {
+                messages.append(
+                    "Definition: Bundled default. Edit saves a local override."
+                )
+            }
             if preset.destination != .local,
                selection.approvedPostprocessorRevision != preset.reviewRevision {
                 messages.append(
@@ -997,6 +1045,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             && editorState.draftSettings.enhancement.profileID.flatMap {
                 enhancementCatalog.profiles[$0]
             } != nil
+        newPostprocessorButton.isEnabled =
+            runtimeControlsEnabled && onSavePostprocessor != nil
+        editPostprocessorButton.isEnabled =
+            runtimeControlsEnabled
+            && onSavePostprocessor != nil
+            && editorState.draftSettings.enhancement.postprocessing.presetID
+                .flatMap { enhancementCatalog.postprocessors[$0] } != nil
         launchAtLoginCheckbox.isEnabled = !isSaving
         cancelButton.isEnabled = !isSaving
 
@@ -1282,6 +1337,65 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             self.profileEditorWindowController = nil
         }
         profileEditorWindowController = editor
+        if let editorWindow = editor.window {
+            parentWindow.beginSheet(editorWindow)
+        }
+    }
+
+    @objc private func createPostprocessor() {
+        presentPostprocessorEditor(preset: nil)
+    }
+
+    @objc private func editPostprocessor() {
+        guard let presetID =
+                editorState.draftSettings.enhancement.postprocessing.presetID,
+              let preset = enhancementCatalog.postprocessors[presetID] else {
+            return
+        }
+        presentPostprocessorEditor(preset: preset)
+    }
+
+    private func presentPostprocessorEditor(
+        preset: EnhancementPostprocessorPreset?
+    ) {
+        guard postprocessorEditorWindowController == nil,
+              let onSavePostprocessor,
+              let parentWindow = window else {
+            return
+        }
+        let editor = PostprocessorEditorWindowController(
+            preset: preset,
+            expectedFingerprint:
+                enhancementCatalog.fingerprints.postprocessors,
+            existingPresetIDs:
+                Set(enhancementCatalog.postprocessors.keys)
+                .union(enhancementCatalog.localPostprocessorIDs)
+                .union(enhancementCatalog.blockedPostprocessorIDs)
+        )
+        editor.onSave = onSavePostprocessor
+        editor.onSaved = { [weak self] catalog, presetID in
+            guard let self else {
+                return
+            }
+            self.enhancementCatalog = catalog
+            if self.editorState.draftSettings.enhancement.postprocessing
+                == .preset(presetID) {
+                self.editorState.draftSettings.enhancement
+                    .approvedPostprocessorRevision = nil
+            }
+            self.didEdit()
+        }
+        editor.onDismiss = { [weak self, weak editor] in
+            guard let self else {
+                return
+            }
+            if let editorWindow = editor?.window,
+               parentWindow.attachedSheet === editorWindow {
+                parentWindow.endSheet(editorWindow)
+            }
+            self.postprocessorEditorWindowController = nil
+        }
+        postprocessorEditorWindowController = editor
         if let editorWindow = editor.window {
             parentWindow.beginSheet(editorWindow)
         }

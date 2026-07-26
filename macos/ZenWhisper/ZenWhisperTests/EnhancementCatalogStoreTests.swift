@@ -35,6 +35,33 @@ final class EnhancementCatalogStoreTests: XCTestCase {
         defer { fixture.cleanup() }
 
         let snapshot = EnhancementCatalogStore(paths: fixture.paths).load()
+        let codex = try XCTUnwrap(snapshot.postprocessors["codex"])
+        XCTAssertEqual(codex.executable, "codex")
+        XCTAssertEqual(codex.destination, .remote)
+        XCTAssertEqual(codex.inputMode, .stdin)
+        XCTAssertEqual(codex.timeoutSeconds, 30)
+        XCTAssertEqual(
+            codex.arguments,
+            [
+                "exec",
+                "--ephemeral",
+                "--sandbox",
+                "read-only",
+                "--ignore-user-config",
+                "--ignore-rules",
+                "--skip-git-repo-check",
+                "--color",
+                "never",
+                "-c",
+                "project_doc_max_bytes=0",
+                "-"
+            ]
+        )
+        XCTAssertFalse(codex.arguments.contains("--model"))
+        XCTAssertFalse(
+            codex.arguments.joined(separator: " ").contains("{{transcript}}")
+        )
+
         let claude = try XCTUnwrap(snapshot.postprocessors["claude"])
         XCTAssertEqual(claude.executable, "claude")
         XCTAssertEqual(claude.destination, .remote)

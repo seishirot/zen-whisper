@@ -327,6 +327,277 @@ final class SettingsEnhancementUITests: XCTestCase {
         )
     }
 
+    func testPostprocessorEditorRoundTripsStructuredArgumentsAndEnvironment()
+        throws
+    {
+        let original = EnhancementPostprocessorPreset(
+            id: "remote",
+            displayName: "Remote Tool",
+            executable: "remote-tool",
+            arguments: ["--model", "small", "--empty", ""],
+            preflightExecutable: "remote-tool",
+            preflightArguments: ["--version"],
+            preflightFailureMessage: "Remote Tool is unavailable.",
+            inputMode: .stdin,
+            destination: .remote,
+            timeoutSeconds: 30,
+            promptTemplate: "Fix {{transcript}}",
+            environment: ["REMOTE_MODE": "safe"]
+        )
+        let controller = PostprocessorEditorWindowController(
+            preset: original,
+            expectedFingerprint: .missing
+        )
+        var savedPreset: EnhancementPostprocessorPreset?
+        var wasExplicitlyReclassified: Bool?
+        controller.onSave = { preset, fingerprint, explicitlyReclassified in
+            XCTAssertEqual(fingerprint, .missing)
+            savedPreset = preset
+            wasExplicitlyReclassified = explicitlyReclassified
+            return .success(
+                EnhancementCatalogSnapshot(
+                    postprocessors: [preset.id: preset]
+                )
+            )
+        }
+        guard let contentView = controller.window?.contentView,
+              let id = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.identifier,
+                  in: contentView
+              ) as? NSTextField,
+              let arguments = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.arguments,
+                  in: contentView
+              ) as? NSTextView,
+              let environment = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.environment,
+                  in: contentView
+              ) as? NSTextView,
+              let save = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected CLI post-processor editor controls")
+        }
+
+        XCTAssertFalse(id.isEnabled)
+        arguments.string = """
+        [
+          "--model",
+          "large",
+          "--empty",
+          ""
+        ]
+        """
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: arguments)
+        )
+        environment.string = """
+        {
+          "REMOTE_MODE": "strict",
+          "TRACE": "0"
+        }
+        """
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: environment)
+        )
+
+        XCTAssertTrue(save.isEnabled)
+        save.performClick(nil)
+
+        XCTAssertEqual(
+            savedPreset?.arguments,
+            ["--model", "large", "--empty", ""]
+        )
+        XCTAssertEqual(
+            savedPreset?.environment,
+            ["REMOTE_MODE": "strict", "TRACE": "0"]
+        )
+        XCTAssertEqual(savedPreset?.id, original.id)
+        XCTAssertEqual(wasExplicitlyReclassified, true)
+    }
+
+    func testPostprocessorEditorChangedLocalCommandCanSaveAsUnknown() throws {
+        let original = EnhancementPostprocessorPreset(
+            id: "local",
+            displayName: "Local Tool",
+            executable: "local-tool",
+            arguments: ["--model", "old"],
+            destination: .local
+        )
+        let controller = PostprocessorEditorWindowController(
+            preset: original,
+            expectedFingerprint: .missing
+        )
+        var reviewCount = 0
+        controller.onReviewLocalDestination = { _, text in
+            reviewCount += 1
+            XCTAssertTrue(text.contains("outside this Mac"))
+            return .saveAsUnknown
+        }
+        var savedPreset: EnhancementPostprocessorPreset?
+        var wasExplicitlyReclassified: Bool?
+        controller.onSave = { preset, _, explicitlyReclassified in
+            savedPreset = preset
+            wasExplicitlyReclassified = explicitlyReclassified
+            return .success(
+                EnhancementCatalogSnapshot(
+                    postprocessors: [preset.id: preset]
+                )
+            )
+        }
+        guard let contentView = controller.window?.contentView,
+              let arguments = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.arguments,
+                  in: contentView
+              ) as? NSTextView,
+              let save = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected local CLI post-processor editor controls")
+        }
+
+        arguments.string = #"["--model", "new"]"#
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: arguments)
+        )
+        save.performClick(nil)
+
+        XCTAssertEqual(reviewCount, 1)
+        XCTAssertEqual(savedPreset?.destination, .unknown)
+        XCTAssertEqual(wasExplicitlyReclassified, false)
+    }
+
+    func testNewPostprocessorRequiresConfirmationBeforeReplacingExistingID()
+        throws
+    {
+        let controller = PostprocessorEditorWindowController(
+            preset: nil,
+            expectedFingerprint: .missing,
+            existingPresetIDs: ["codex"]
+        )
+        var overwriteDecision = PostprocessorOverwriteDecision.cancel
+        var reviewCount = 0
+        controller.onReviewOverwrite = { preset, text in
+            reviewCount += 1
+            XCTAssertEqual(preset.id, "codex")
+            XCTAssertTrue(text.contains("local override"))
+            return overwriteDecision
+        }
+        var saveCount = 0
+        controller.onSave = { preset, _, _ in
+            saveCount += 1
+            return .success(
+                EnhancementCatalogSnapshot(
+                    postprocessors: [preset.id: preset]
+                )
+            )
+        }
+        guard let contentView = controller.window?.contentView,
+              let id = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.identifier,
+                  in: contentView
+              ) as? NSTextField,
+              let executable = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.executable,
+                  in: contentView
+              ) as? NSTextField,
+              let save = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.save,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected new CLI post-processor editor controls")
+        }
+
+        XCTAssertTrue(id.isEnabled)
+        id.stringValue = "codex"
+        controller.controlTextDidChange(
+            Notification(name: NSControl.textDidChangeNotification, object: id)
+        )
+        executable.stringValue = "codex"
+        controller.controlTextDidChange(
+            Notification(
+                name: NSControl.textDidChangeNotification,
+                object: executable
+            )
+        )
+
+        save.performClick(nil)
+        XCTAssertEqual(reviewCount, 1)
+        XCTAssertEqual(saveCount, 0)
+
+        overwriteDecision = .replace
+        save.performClick(nil)
+        XCTAssertEqual(reviewCount, 2)
+        XCTAssertEqual(saveCount, 1)
+    }
+
+    func testSettingsExposeNewAndSelectedPostprocessorEditingButtons() throws {
+        let registry = try ModelRegistry.loadDefault()
+        var settings = makeSettings()
+        let preset = EnhancementPostprocessorPreset(
+            id: "remote",
+            displayName: "Remote Tool",
+            executable: "remote-tool",
+            destination: .remote
+        )
+        settings.enhancement = EnhancementSelection(
+            postprocessing: .preset(preset.id)
+        )
+        let catalog = EnhancementCatalogSnapshot(
+            postprocessors: [preset.id: preset]
+        )
+        let controller = SettingsWindowController(
+            registry: registry,
+            settings: settings,
+            launchAtLoginStatus: .disabled,
+            enhancementCatalog: catalog
+        )
+        controller.onSavePostprocessor = { saved, _, _ in
+            .success(
+                EnhancementCatalogSnapshot(
+                    postprocessors: [saved.id: saved]
+                )
+            )
+        }
+        guard let contentView = controller.window?.contentView,
+              let newButton = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier
+                      .newPostprocessor,
+                  in: contentView
+              ) as? NSButton,
+              let editButton = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier
+                      .editPostprocessor,
+                  in: contentView
+              ) as? NSButton else {
+            return XCTFail("Expected CLI post-processor management buttons")
+        }
+
+        XCTAssertTrue(newButton.isEnabled)
+        XCTAssertTrue(editButton.isEnabled)
+
+        controller.synchronize(
+            authoritativeSettings: settings,
+            launchAtLoginStatus: .disabled,
+            audioInputDevices: [],
+            isBusy: true,
+            enhancementCatalog: catalog
+        )
+        XCTAssertFalse(newButton.isEnabled)
+        XCTAssertFalse(editButton.isEnabled)
+    }
+
     func testUnknownDestinationWarningAndConsentEnumerateAllSharedData() throws {
         let registry = try ModelRegistry.loadDefault()
         var settings = makeSettings()
