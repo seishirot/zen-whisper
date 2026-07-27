@@ -919,7 +919,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             if preset.destination != .local,
                selection.approvedPostprocessorRevision != preset.reviewRevision {
                 messages.append(
-                    "This exact command revision requires approval before it can run."
+                    "Post-processing inactive: review and save this command "
+                        + "revision before it can run. Dictionary Replacement is "
+                        + "being used. Choose “Review & Save…” below."
                 )
             }
             messages.append("Automatic Enter is disabled whenever CLI post-processing is selected.")
@@ -1075,6 +1077,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             && onSave != nil
             && canSaveCurrentDraft
             && enhancementConfigurationFitsBudget
+        if requiresPostprocessorConsent {
+            saveButton.title = "Review & Save…"
+            saveButton.setAccessibilityLabel(
+                "Review post-processing data sharing and save settings"
+            )
+        } else {
+            saveButton.title = "Save"
+            saveButton.setAccessibilityLabel("Save settings")
+        }
         updateWindowSizeConstraints()
     }
 

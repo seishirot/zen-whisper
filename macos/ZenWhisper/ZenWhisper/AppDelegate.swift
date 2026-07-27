@@ -1961,7 +1961,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "POSTPROCESSOR_UNAVAILABLE":
             return "Selected post-processor was unavailable; dictionary fallback was used."
         case "POSTPROCESSOR_CONSENT_REQUIRED":
-            return "Post-processor needs confirmation; dictionary fallback was used."
+            return "Post-processing is inactive until reviewed in Settings; dictionary fallback was used."
         case "POSTPROCESSOR_CATALOG_INVALID", "POSTPROCESSOR_BLOCKED":
             return "Post-processor configuration was invalid; dictionary fallback was used."
         case "ENHANCEMENT_CONFIGURATION_TOO_LARGE":

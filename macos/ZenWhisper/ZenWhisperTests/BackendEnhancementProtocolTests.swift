@@ -844,5 +844,11 @@ final class BackendEnhancementProtocolTests: XCTestCase {
         let message = AppDelegate.visibleEnhancementWarningMessage(code: untrustedCode)
         XCTAssertFalse(message.contains(untrustedCode))
         XCTAssertTrue(message.contains("safe fallback"))
+        let consentMessage = AppDelegate.visibleEnhancementWarningMessage(
+            code: "POSTPROCESSOR_CONSENT_REQUIRED"
+        )
+        XCTAssertTrue(consentMessage.contains("inactive"))
+        XCTAssertTrue(consentMessage.contains("Settings"))
+        XCTAssertTrue(consentMessage.contains("dictionary fallback"))
     }
 }

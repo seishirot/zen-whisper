@@ -56,6 +56,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         static let environment = "postprocessorEditor.environment"
         static let systemPrompt = "postprocessorEditor.systemPrompt"
         static let promptTemplate = "postprocessorEditor.promptTemplate"
+        static let promptHelp = "postprocessorEditor.promptHelp"
         static let securityHelp = "postprocessorEditor.securityHelp"
         static let message = "postprocessorEditor.message"
         static let cancel = "postprocessorEditor.cancel"
@@ -127,6 +128,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
     private let environmentTextView = NSTextView()
     private let systemPromptTextView = NSTextView()
     private let promptTemplateTextView = NSTextView()
+    private let promptHelpLabel = NSTextField(wrappingLabelWithString: "")
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
     private let cancelButton = NSButton()
     private let saveButton = NSButton()
@@ -285,6 +287,16 @@ final class PostprocessorEditorWindowController: NSWindowController,
         argumentsHelpLabel.setAccessibilityLabel(
             "CLI model argument guidance"
         )
+        promptHelpLabel.font = .systemFont(
+            ofSize: NSFont.smallSystemFontSize
+        )
+        promptHelpLabel.textColor = .secondaryLabelColor
+        promptHelpLabel.identifier = NSUserInterfaceItemIdentifier(
+            AccessibilityIdentifier.promptHelp
+        )
+        promptHelpLabel.setAccessibilityLabel(
+            "CLI prompt transport and placeholder guidance"
+        )
 
         configurePopup(
             inputModePopup,
@@ -293,6 +305,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             values: EnhancementPostprocessorInputMode.allCases.map(\.rawValue),
             action: #selector(popupChanged)
         )
+        refreshPromptHelp()
         configurePopup(
             destinationPopup,
             identifier: AccessibilityIdentifier.destination,
@@ -437,17 +450,11 @@ final class PostprocessorEditorWindowController: NSWindowController,
                 + "{\"OLLAMA_HOST\":\"127.0.0.1:11434\"}."
         )
         let systemPromptHelp = makeHelpLabel(
-            "Optional replacement for the CLI's built-in system prompt. When "
-                + "set, add {{system_prompt_file}} to the argument that accepts "
-                + "a system-prompt file. ZenWhisper writes it to a private "
-                + "per-run temporary file. Placeholders are not allowed here."
-        )
-        let promptHelp = makeHelpLabel(
-            "The prompt must include {{transcript}}. Supported placeholders: "
-                + "{{prompt}}, {{transcript}}, {{context}}, {{terms}}, "
-                + "{{profile_name}}, {{language}}, and {{boundary}}. "
-                + "Use {{boundary}} in delimiter names when separating "
-                + "untrusted data. Output is always stdout."
+            "Static policy only; the actual transcript, profile context, terms, "
+                + "and language are not inserted here. When set, add "
+                + "{{system_prompt_file}} to the argument that accepts a "
+                + "system-prompt file. ZenWhisper writes it to a private per-run "
+                + "temporary file. Placeholders are not allowed here."
         )
         let securityHelp = makeHelpLabel(
             "CLI definitions are trusted executable configuration. Changing an "
@@ -504,7 +511,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             ),
             makeLabeledRow(
                 title: "Prompt template:",
-                control: makeVerticalGroup(promptScroll, promptHelp),
+                control: makeVerticalGroup(promptScroll, promptHelpLabel),
                 alignment: .top
             ),
             securityHelp,
@@ -633,7 +640,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         _ textView: NSTextView,
         minimumHeight: CGFloat
     ) -> NSScrollView {
-        let scroll = NSScrollView()
+        let scroll = ChainedEditorScrollView()
         textView.minSize = NSSize(width: 0, height: minimumHeight)
         textView.maxSize = NSSize(
             width: CGFloat.greatestFiniteMagnitude,
@@ -649,6 +656,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         textView.textContainer?.widthTracksTextView = true
         scroll.documentView = textView
         scroll.hasVerticalScroller = true
+        scroll.verticalScrollElasticity = .none
         scroll.borderType = .bezelBorder
         scroll.heightAnchor.constraint(
             greaterThanOrEqualToConstant: minimumHeight
@@ -682,6 +690,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         promptTemplateTextView.string = preset.promptTemplate
         idField.isEnabled = !isExistingPreset
         refreshArgumentsHelp()
+        refreshPromptHelp()
         isRendering = false
         baselineState = draftState
         updateDocumentEditedState()
@@ -754,6 +763,27 @@ final class PostprocessorEditorWindowController: NSWindowController,
         return "Codex model is not pinned. Add “--model”, “MODEL_ID” to "
             + "the argument array to override it. Without a model option, "
             + "Codex uses its CLI default."
+    }
+
+    private func refreshPromptHelp() {
+        let transportGuidance: String
+        switch inputModePopup.selectedItem?.representedObject as? String {
+        case EnhancementPostprocessorInputMode.argument.rawValue:
+            transportGuidance =
+                "Per-run data is rendered into {{prompt}} in argv. Process "
+                + "arguments may be visible to other local processes. "
+        default:
+            transportGuidance =
+                "Per-run data is rendered into this user message and sent "
+                + "through stdin. "
+        }
+        promptHelpLabel.stringValue =
+            transportGuidance
+            + "The prompt must include {{transcript}}. Supported placeholders: "
+            + "{{prompt}}, {{transcript}}, {{context}}, {{terms}}, "
+            + "{{profile_name}}, {{language}}, and {{boundary}}. Use "
+            + "{{boundary}} in delimiter names when separating untrusted data. "
+            + "Output is always stdout."
     }
 
     private static func codexEffortGuidance(_ arguments: [String]) -> String {
@@ -936,6 +966,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         guard !isRendering else {
             return
         }
+        refreshPromptHelp()
         clearMessage()
         updateDocumentEditedState()
     }
@@ -1326,5 +1357,56 @@ final class PostprocessorEditorWindowController: NSWindowController,
 private final class FlippedDocumentView: NSView {
     override var isFlipped: Bool {
         true
+    }
+}
+
+final class ChainedEditorScrollView: NSScrollView {
+    override func scrollWheel(with event: NSEvent) {
+        guard let ancestorScrollView else {
+            super.scrollWheel(with: event)
+            return
+        }
+        let originBeforeScrolling = contentView.bounds.origin
+        let ancestorOriginBeforeScrolling =
+            ancestorScrollView.contentView.bounds.origin
+        super.scrollWheel(with: event)
+
+        guard abs(verticalDelta(for: event)) > abs(event.scrollingDeltaX),
+              abs(contentView.bounds.origin.y - originBeforeScrolling.y) < 0.5,
+              abs(
+                  ancestorScrollView.contentView.bounds.origin.y
+                      - ancestorOriginBeforeScrolling.y
+              ) < 0.5 else {
+            return
+        }
+
+        let proposedBounds = ancestorScrollView.contentView.bounds.offsetBy(
+            dx: 0,
+            dy: -verticalDelta(for: event)
+        )
+        let constrainedBounds =
+            ancestorScrollView.contentView.constrainBoundsRect(proposedBounds)
+        ancestorScrollView.contentView.scroll(to: constrainedBounds.origin)
+        ancestorScrollView.reflectScrolledClipView(
+            ancestorScrollView.contentView
+        )
+    }
+
+    var ancestorScrollView: NSScrollView? {
+        var ancestor = superview
+        while let current = ancestor {
+            if let scrollView = current as? NSScrollView {
+                return scrollView
+            }
+            ancestor = current.superview
+        }
+        return nil
+    }
+
+    private func verticalDelta(for event: NSEvent) -> CGFloat {
+        if event.scrollingDeltaY != 0 {
+            return event.scrollingDeltaY
+        }
+        return event.deltaY * 10
     }
 }

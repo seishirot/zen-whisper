@@ -389,6 +389,16 @@ final class SettingsEnhancementUITests: XCTestCase {
                       .AccessibilityIdentifier.systemPrompt,
                   in: contentView
               ) as? NSTextView,
+              let inputMode = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.inputMode,
+                  in: contentView
+              ) as? NSPopUpButton,
+              let promptHelp = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.promptHelp,
+                  in: contentView
+              ) as? NSTextField,
               let save = findView(
                   identifier: PostprocessorEditorWindowController
                       .AccessibilityIdentifier.save,
@@ -398,6 +408,15 @@ final class SettingsEnhancementUITests: XCTestCase {
         }
 
         XCTAssertFalse(id.isEnabled)
+        XCTAssertTrue(promptHelp.stringValue.contains("through stdin"))
+        XCTAssertFalse(promptHelp.stringValue.contains("visible to other"))
+        inputMode.selectItem(withTitle: EnhancementPostprocessorInputMode.argument.rawValue)
+        _ = inputMode.sendAction(inputMode.action, to: inputMode.target)
+        XCTAssertTrue(promptHelp.stringValue.contains("{{prompt}} in argv"))
+        XCTAssertTrue(promptHelp.stringValue.contains("visible to other"))
+        inputMode.selectItem(withTitle: EnhancementPostprocessorInputMode.stdin.rawValue)
+        _ = inputMode.sendAction(inputMode.action, to: inputMode.target)
+        XCTAssertTrue(promptHelp.stringValue.contains("through stdin"))
         arguments.string = """
         [
           "--model",
@@ -1041,11 +1060,19 @@ final class SettingsEnhancementUITests: XCTestCase {
               let save = findView(
                   identifier: SettingsWindowController.AccessibilityIdentifier.save,
                   in: contentView
-              ) as? NSButton else {
+              ) as? NSButton,
+              let message = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier
+                      .enhancementMessage,
+                  in: contentView
+              ) as? NSTextField else {
             return XCTFail("Expected Save button")
         }
 
         XCTAssertTrue(save.isEnabled)
+        XCTAssertEqual(save.title, "Review & Save…")
+        XCTAssertTrue(message.stringValue.contains("Post-processing inactive"))
+        XCTAssertTrue(message.stringValue.contains("Dictionary Replacement"))
         save.performClick(nil)
 
         XCTAssertEqual(
@@ -1053,6 +1080,7 @@ final class SettingsEnhancementUITests: XCTestCase {
             remote.reviewRevision
         )
         XCTAssertTrue(savedRuntimeSettingsChanged)
+        XCTAssertEqual(save.title, "Save")
     }
 
     func testMissingApprovalEnablesOneClickConfirmationWithoutTogglingSelection() throws {
@@ -1092,11 +1120,18 @@ final class SettingsEnhancementUITests: XCTestCase {
               let save = findView(
                   identifier: SettingsWindowController.AccessibilityIdentifier.save,
                   in: contentView
-              ) as? NSButton else {
+              ) as? NSButton,
+              let message = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier
+                      .enhancementMessage,
+                  in: contentView
+              ) as? NSTextField else {
             return XCTFail("Expected Save button")
         }
 
         XCTAssertTrue(save.isEnabled)
+        XCTAssertEqual(save.title, "Review & Save…")
+        XCTAssertTrue(message.stringValue.contains("Post-processing inactive"))
         save.performClick(nil)
 
         XCTAssertEqual(
@@ -1104,6 +1139,7 @@ final class SettingsEnhancementUITests: XCTestCase {
             remote.reviewRevision
         )
         XCTAssertTrue(savedRuntimeSettingsChanged)
+        XCTAssertEqual(save.title, "Save")
     }
 
     func testCombinedEnhancementBudgetShowsActionableValidationAndBlocksSave() throws {
