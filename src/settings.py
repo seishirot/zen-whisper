@@ -70,6 +70,11 @@ POSTPROCESSOR_PLACEHOLDER_HELP = (
         "認識言語コード（ja / en など）",
     ),
     (
+        "boundary",
+        "prompt",
+        "実行ごとに生成する未信頼データ境界用のランダム識別子",
+    ),
+    (
         "prompt",
         "command",
         "完成したプロンプト全体（argument方式のコマンド欄用）",

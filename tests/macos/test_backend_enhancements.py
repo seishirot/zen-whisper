@@ -249,7 +249,14 @@ def test_preset_defaults_destination_and_caps_timeout() -> None:
         _selection(timeout_sec=300.01)
 
 
-def test_stdin_cli_receives_prompt_and_uses_empty_working_directory() -> None:
+def test_stdin_cli_receives_prompt_and_uses_empty_working_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        enhancements_module.secrets,
+        "token_hex",
+        lambda _size: "b" * 32,
+    )
     profile = parse_profile(_profile_payload())
     selection = _selection(
         arguments=[
@@ -260,7 +267,8 @@ def test_stdin_cli_receives_prompt_and_uses_empty_working_directory() -> None:
             ),
         ],
         prompt_template=(
-            "{{profile_name}}|{{language}}|{{context}}|{{terms}}|{{transcript}}"
+            "{{boundary}}|{{profile_name}}|{{language}}|{{context}}|"
+            "{{terms}}|{{transcript}}"
         ),
     )
 
@@ -274,8 +282,39 @@ def test_stdin_cli_receives_prompt_and_uses_empty_working_directory() -> None:
     assert result.succeeded is True
     assert result.outcome == "cli"
     assert result.cli_selected is True
-    assert result.text.startswith("0|Zen Whisper|ja|Project context|")
+    assert result.text.startswith(f"0|{'b' * 32}|Zen Whisper|ja|Project context|")
     assert result.text.endswith("|ZenWhisper")
+
+
+def test_cli_uses_a_fresh_boundary_for_each_invocation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    boundaries = iter(("1" * 32, "2" * 32))
+    requested_sizes: list[int] = []
+
+    def fake_token_hex(size: int) -> str:
+        requested_sizes.append(size)
+        return next(boundaries)
+
+    monkeypatch.setattr(
+        enhancements_module.secrets,
+        "token_hex",
+        fake_token_hex,
+    )
+    selection = _selection(
+        arguments=[
+            "-c",
+            "import sys; sys.stdout.write(sys.stdin.read())",
+        ],
+        prompt_template="{{boundary}}|{{transcript}}",
+    )
+
+    first = process_transcript("first", None, selection, "ja")
+    second = process_transcript("second", None, selection, "ja")
+
+    assert requested_sizes == [16, 16]
+    assert first.text == ("1" * 32) + "|first"
+    assert second.text == ("2" * 32) + "|second"
 
 
 def test_argument_cli_receives_rendered_prompt_without_a_shell() -> None:

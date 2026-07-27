@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import subprocess
 import tempfile
 import tomllib
@@ -57,6 +58,7 @@ SUPPORTED_TEMPLATE_PLACEHOLDERS = (
     "terms",
     "profile_name",
     "language",
+    "boundary",
 )
 _ALLOWED_PLACEHOLDERS = frozenset(SUPPORTED_TEMPLATE_PLACEHOLDERS)
 _PLACEHOLDER_RE = re.compile(r"\{\{([a-z_]+)\}\}")
@@ -437,6 +439,7 @@ def _template_values(
         "terms": render_terms(profile),
         "profile_name": profile.name if profile else "（なし）",
         "language": language,
+        "boundary": secrets.token_hex(16),
         "prompt": "",
     }
     return values

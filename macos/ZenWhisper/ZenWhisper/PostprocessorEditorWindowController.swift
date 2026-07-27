@@ -426,7 +426,9 @@ final class PostprocessorEditorWindowController: NSWindowController,
         let promptHelp = makeHelpLabel(
             "The prompt must include {{transcript}}. Supported placeholders: "
                 + "{{prompt}}, {{transcript}}, {{context}}, {{terms}}, "
-                + "{{profile_name}}, and {{language}}. Output is always stdout."
+                + "{{profile_name}}, {{language}}, and {{boundary}}. "
+                + "Use {{boundary}} in delimiter names when separating "
+                + "untrusted data. Output is always stdout."
         )
         let securityHelp = makeHelpLabel(
             "CLI definitions are trusted executable configuration. Changing an "

@@ -21,7 +21,8 @@ final class EnhancementCatalogStore {
         "context",
         "terms",
         "profile_name",
-        "language"
+        "language",
+        "boundary"
     ]
 
     private static let profileKnownFields: Set<String> = [

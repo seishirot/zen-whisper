@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import signal
 import subprocess
 import tempfile
@@ -55,6 +56,7 @@ _ALLOWED_PLACEHOLDERS = frozenset(
         "terms",
         "profile_name",
         "language",
+        "boundary",
     }
 )
 _PROFILE_FIELDS = frozenset({"id", "name", "context", "terms"})
@@ -937,6 +939,7 @@ def _template_values(
         "terms": render_terms(profile),
         "profile_name": profile.name if profile else "（なし）",
         "language": language,
+        "boundary": secrets.token_hex(16),
     }
 
 

@@ -247,12 +247,21 @@ def test_install_app_packages_bundled_postprocessor_catalog() -> None:
         / "macos/ZenWhisper/ZenWhisper/EnhancementCatalogStore.swift"
     ).read_text(encoding="utf-8")
 
-    copy_command = (
-        '/bin/cp "$SWIFT_DIR/ZenWhisper/Resources/postprocessors.default.json" '
-        '"$APP_STAGING/Contents/Resources/postprocessors.default.json"'
+    generate_command = (
+        'PYTHONSAFEPATH=1 "$PYTHON_PATH" -P \\\n'
+        '  "$REPO_ROOT/macos/scripts/generate_postprocessor_catalog.py" \\\n'
+        '  "$REPO_ROOT/postprocessors.default.toml" \\\n'
+        '  "$APP_STAGING/Contents/Resources/postprocessors.default.json"'
     )
-    assert copy_command in install_app
-    assert install_app.index(copy_command) < install_app.index(
+    assert generate_command in install_app
+    destination = '"$APP_STAGING/Contents/Resources/postprocessors.default.json"'
+    assert install_app.count(destination) == 1
+    assert (
+        '/bin/cp "$SWIFT_DIR/ZenWhisper/Resources/postprocessors.default.json"'
+        not in install_app
+    )
+    assert install_app.startswith("#!/usr/bin/env bash\nset -euo pipefail\n")
+    assert install_app.index(generate_command) < install_app.index(
         '/usr/bin/codesign --force --deep --sign "$IDENTITY" "$APP_TEMP"'
     )
     main_lookup = "postprocessorsURL(in: Bundle.main)"
