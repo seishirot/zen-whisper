@@ -4,7 +4,7 @@
 
 [postprocessors.codex]
 display_name = "Codex 校正"
-command = "codex exec --ephemeral --sandbox read-only --ignore-user-config --ignore-rules --skip-git-repo-check --color never -c project_doc_max_bytes=0 -"
+command = "codex exec --model gpt-5.6-luna -c model_reasoning_effort=low --ephemeral --sandbox read-only --ignore-user-config --ignore-rules --skip-git-repo-check --color never -c project_doc_max_bytes=0 -"
 input_mode = "stdin"
 output_mode = "stdout"
 timeout_sec = 30

@@ -44,6 +44,10 @@ final class EnhancementCatalogStoreTests: XCTestCase {
             codex.arguments,
             [
                 "exec",
+                "--model",
+                "gpt-5.6-luna",
+                "-c",
+                "model_reasoning_effort=low",
                 "--ephemeral",
                 "--sandbox",
                 "read-only",
@@ -57,7 +61,6 @@ final class EnhancementCatalogStoreTests: XCTestCase {
                 "-"
             ]
         )
-        XCTAssertFalse(codex.arguments.contains("--model"))
         XCTAssertFalse(
             codex.arguments.joined(separator: " ").contains("{{transcript}}")
         )
@@ -68,6 +71,14 @@ final class EnhancementCatalogStoreTests: XCTestCase {
         XCTAssertEqual(claude.inputMode, .stdin)
         XCTAssertEqual(claude.preflightExecutable, "claude")
         XCTAssertEqual(claude.preflightArguments, ["--version"])
+        XCTAssertEqual(
+            claude.arguments[
+                try XCTUnwrap(claude.arguments.firstIndex(of: "--model")) + 1
+            ],
+            "haiku"
+        )
+        XCTAssertFalse(claude.arguments.contains("--effort"))
+        XCTAssertTrue(claude.arguments.contains("--safe-mode"))
         XCTAssertTrue(claude.arguments.contains("--no-session-persistence"))
         XCTAssertTrue(claude.arguments.contains("dontAsk"))
         XCTAssertFalse(claude.arguments.joined(separator: " ").contains("{{transcript}}"))

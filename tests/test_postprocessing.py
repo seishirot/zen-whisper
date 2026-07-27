@@ -97,6 +97,10 @@ def test_bundled_codex_preset_restores_hardened_historical_default(tmp_path):
     assert argv == [
         "codex",
         "exec",
+        "--model",
+        "gpt-5.6-luna",
+        "-c",
+        "model_reasoning_effort=low",
         "--ephemeral",
         "--sandbox",
         "read-only",
@@ -109,7 +113,6 @@ def test_bundled_codex_preset_restores_hardened_historical_default(tmp_path):
         "project_doc_max_bytes=0",
         "-",
     ]
-    assert "--model" not in argv
     assert "{{transcript}}" not in prompt
     assert "全ウィスパー" in prompt
 

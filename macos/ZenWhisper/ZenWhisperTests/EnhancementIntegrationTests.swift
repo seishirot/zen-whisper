@@ -451,6 +451,11 @@ final class SettingsEnhancementUITests: XCTestCase {
         XCTAssertTrue(argumentsHelp.stringValue.contains("not pinned"))
         XCTAssertTrue(argumentsHelp.stringValue.contains("CLI default"))
         XCTAssertTrue(argumentsHelp.stringValue.contains("final “-”"))
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "model_reasoning_effort=LEVEL"
+            )
+        )
 
         let overrides = [
             (
@@ -486,12 +491,159 @@ final class SettingsEnhancementUITests: XCTestCase {
             XCTAssertTrue(argumentsHelp.stringValue.contains(removal))
         }
 
+        let effortOverrides = [
+            (
+                #"["exec", "-c", "model_reasoning_effort=low", "-"]"#,
+                "Codex reasoning effort: “low”",
+                "“-c”, “model_reasoning_effort=…”",
+                "Change the following config item"
+            ),
+            (
+                #"["exec", "--config", "model_reasoning_effort=medium", "-"]"#,
+                "Codex reasoning effort: “medium”",
+                "“--config”, “model_reasoning_effort=…”",
+                "Change the following config item"
+            ),
+            (
+                #"["exec", "--config=model_reasoning_effort=\"high\"", "-"]"#,
+                "Codex reasoning effort: “high”",
+                "“--config=model_reasoning_effort=…”",
+                "Change the value after “model_reasoning_effort=”"
+            ),
+            (
+                #"["exec", "-c=model_reasoning_effort=low", "-"]"#,
+                "Codex reasoning effort: “low”",
+                "“-c=model_reasoning_effort=…”",
+                "Change the value after “model_reasoning_effort=”"
+            )
+        ]
+        for (json, expectedGuidance, expectedSyntax, expectedEdit) in effortOverrides {
+            arguments.string = json
+            controller.textDidChange(
+                Notification(
+                    name: NSText.didChangeNotification,
+                    object: arguments
+                )
+            )
+            XCTAssertTrue(
+                argumentsHelp.stringValue.contains(expectedGuidance)
+            )
+            XCTAssertTrue(argumentsHelp.stringValue.contains(expectedSyntax))
+            XCTAssertTrue(argumentsHelp.stringValue.contains(expectedEdit))
+        }
+
         arguments.string = #"["exec"]"#
         controller.textDidChange(
             Notification(name: NSText.didChangeNotification, object: arguments)
         )
         XCTAssertTrue(argumentsHelp.stringValue.contains("argument array"))
         XCTAssertFalse(argumentsHelp.stringValue.contains("final “-”"))
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "To set Codex reasoning effort"
+            )
+        )
+    }
+
+    func testPostprocessorEditorExplainsClaudeModelAndEffortOptions() throws {
+        let controller = PostprocessorEditorWindowController(
+            preset: EnhancementPostprocessorPreset(
+                id: "claude",
+                displayName: "Claude Code",
+                executable: "claude",
+                arguments: [
+                    "--print",
+                    "--model",
+                    "haiku",
+                    "--safe-mode"
+                ],
+                destination: .remote
+            ),
+            expectedFingerprint: .missing
+        )
+        guard let contentView = controller.window?.contentView,
+              let arguments = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.arguments,
+                  in: contentView
+              ) as? NSTextView,
+              let argumentsHelp = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.argumentsHelp,
+                  in: contentView
+              ) as? NSTextField else {
+            return XCTFail("Expected Claude model and effort guidance")
+        }
+
+        XCTAssertTrue(argumentsHelp.stringValue.contains("Claude model: “haiku”"))
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "Haiku models do not support “--effort”"
+            )
+        )
+
+        arguments.string =
+            #"["--print", "--model=opus", "--effort=medium"]"#
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: arguments)
+        )
+        XCTAssertTrue(argumentsHelp.stringValue.contains("Claude model: “opus”"))
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "Claude reasoning effort: “medium”"
+            )
+        )
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "Change the value after “--effort=”"
+            )
+        )
+
+        arguments.string =
+            #"["--print", "--model", "haiku", "--effort", "low"]"#
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: arguments)
+        )
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "Claude reasoning effort “low” is configured"
+            )
+        )
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "current Haiku models do not support “--effort”"
+            )
+        )
+
+        arguments.string =
+            #"["--print", "--model", "sonnet", "--effort", "low"]"#
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: arguments)
+        )
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "Claude reasoning effort: “low”"
+            )
+        )
+        XCTAssertTrue(argumentsHelp.stringValue.contains("via “--effort”"))
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains("Change the following item")
+        )
+
+        arguments.string = #"["--print", "--model", "sonnet"]"#
+        controller.textDidChange(
+            Notification(name: NSText.didChangeNotification, object: arguments)
+        )
+        XCTAssertTrue(
+            argumentsHelp.stringValue.contains(
+                "For a supported Claude model, add “--effort”"
+            )
+        )
+        XCTAssertFalse(
+            argumentsHelp.stringValue.contains(
+                "Claude reasoning effort: “medium”"
+            )
+        )
     }
 
     func testPostprocessorEditorChangedLocalCommandCanSaveAsUnknown() throws {

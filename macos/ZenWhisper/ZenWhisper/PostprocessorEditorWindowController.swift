@@ -669,60 +669,17 @@ final class PostprocessorEditorWindowController: NSWindowController,
 
         switch executable {
         case "codex":
-            if let modelOption = Self.commandOption(
-                in: arguments,
-                names: ["--model", "-m"]
-            ) {
-                switch modelOption.form {
-                case .separate:
-                    argumentsHelpLabel.stringValue =
-                        general
-                        + "Codex model override: “\(modelOption.value)” via "
-                        + "“\(modelOption.name)”. Change the following item, or "
-                        + "remove both items to use the Codex CLI default."
-                case .inline:
-                    argumentsHelpLabel.stringValue =
-                        general
-                        + "Codex model override: “\(modelOption.value)” via "
-                        + "“\(modelOption.name)=…”. Change the value after "
-                        + "“\(modelOption.name)=”, or remove that item to use "
-                        + "the Codex CLI default."
-                }
-            } else if arguments.last == "-" {
-                argumentsHelpLabel.stringValue =
-                    general
-                    + "Codex model is not pinned. To override it, insert "
-                    + "“--model”, “MODEL_ID” immediately before the final “-” item. "
-                    + "Without a model option, Codex uses its CLI default."
-            } else {
-                argumentsHelpLabel.stringValue =
-                    general
-                    + "Codex model is not pinned. Add “--model”, “MODEL_ID” to "
-                    + "the argument array to override it. Without a model option, "
-                    + "Codex uses its CLI default."
-            }
+            argumentsHelpLabel.stringValue =
+                general
+                + Self.codexModelGuidance(arguments)
+                + " "
+                + Self.codexEffortGuidance(arguments)
         case "claude":
-            if let modelOption = Self.commandOption(
-                in: arguments,
-                names: ["--model"]
-            ) {
-                switch modelOption.form {
-                case .separate:
-                    argumentsHelpLabel.stringValue =
-                        general
-                        + "Claude model: “\(modelOption.value)”. Change the "
-                        + "following item after “--model”."
-                case .inline:
-                    argumentsHelpLabel.stringValue =
-                        general
-                        + "Claude model: “\(modelOption.value)”. Change the "
-                        + "value after “--model=”."
-                }
-            } else {
-                argumentsHelpLabel.stringValue =
-                    general
-                    + "To choose a Claude model, add “--model”, “MODEL_ID”."
-            }
+            argumentsHelpLabel.stringValue =
+                general
+                + Self.claudeModelGuidance(arguments)
+                + " "
+                + Self.claudeEffortGuidance(arguments)
         case "ollama":
             if let runIndex = arguments.firstIndex(of: "run"),
                arguments.indices.contains(runIndex + 1) {
@@ -740,6 +697,161 @@ final class PostprocessorEditorWindowController: NSWindowController,
                 general
                 + "Provider model selection remains an ordinary CLI argument."
         }
+    }
+
+    private static func codexModelGuidance(_ arguments: [String]) -> String {
+        if let modelOption = commandOption(
+            in: arguments,
+            names: ["--model", "-m"]
+        ) {
+            switch modelOption.form {
+            case .separate:
+                return "Codex model override: “\(modelOption.value)” via "
+                    + "“\(modelOption.name)”. Change the following item, or "
+                    + "remove both items to use the Codex CLI default."
+            case .inline:
+                return "Codex model override: “\(modelOption.value)” via "
+                    + "“\(modelOption.name)=…”. Change the value after "
+                    + "“\(modelOption.name)=”, or remove that item to use "
+                    + "the Codex CLI default."
+            }
+        }
+        if arguments.last == "-" {
+            return "Codex model is not pinned. To override it, insert "
+                + "“--model”, “MODEL_ID” immediately before the final “-” item. "
+                + "Without a model option, Codex uses its CLI default."
+        }
+        return "Codex model is not pinned. Add “--model”, “MODEL_ID” to "
+            + "the argument array to override it. Without a model option, "
+            + "Codex uses its CLI default."
+    }
+
+    private static func codexEffortGuidance(_ arguments: [String]) -> String {
+        if let effortOption = codexConfigOption(
+            in: arguments,
+            key: "model_reasoning_effort"
+        ) {
+            switch effortOption.form {
+            case .separate:
+                return "Codex reasoning effort: “\(effortOption.value)” via "
+                    + "“\(effortOption.name)”, "
+                    + "“model_reasoning_effort=…”. Change the following "
+                    + "config item to adjust it."
+            case .inline:
+                return "Codex reasoning effort: “\(effortOption.value)” via "
+                    + "“\(effortOption.name)=model_reasoning_effort=…”. "
+                    + "Change the value after “model_reasoning_effort=” "
+                    + "to adjust it."
+            }
+        }
+        return "To set Codex reasoning effort, add "
+            + "“-c”, “model_reasoning_effort=LEVEL”."
+    }
+
+    private static func claudeModelGuidance(_ arguments: [String]) -> String {
+        guard let modelOption = commandOption(
+            in: arguments,
+            names: ["--model"]
+        ) else {
+            return "To choose a Claude model, add “--model”, “MODEL_ID”."
+        }
+        switch modelOption.form {
+        case .separate:
+            return "Claude model: “\(modelOption.value)”. Change the "
+                + "following item after “--model”."
+        case .inline:
+            return "Claude model: “\(modelOption.value)”. Change the "
+                + "value after “--model=”."
+        }
+    }
+
+    private static func claudeEffortGuidance(_ arguments: [String]) -> String {
+        let model = commandOption(
+            in: arguments,
+            names: ["--model"]
+        )?.value.lowercased()
+        let usesHaiku = model == "haiku" || model?.contains("haiku") == true
+        if let effortOption = commandOption(
+            in: arguments,
+            names: ["--effort"]
+        ) {
+            if usesHaiku {
+                return "Claude reasoning effort “\(effortOption.value)” is "
+                    + "configured, but current Haiku models do not support "
+                    + "“--effort”. Remove the effort option or change "
+                    + "“--model” to a supported model."
+            }
+            switch effortOption.form {
+            case .separate:
+                return "Claude reasoning effort: “\(effortOption.value)” via "
+                    + "“--effort”. Change the following item to adjust it."
+            case .inline:
+                return "Claude reasoning effort: “\(effortOption.value)” via "
+                    + "“--effort=…”. Change the value after “--effort=” "
+                    + "to adjust it."
+            }
+        }
+        if usesHaiku {
+            return "Current Claude Haiku models do not support “--effort”. "
+                + "To use effort, change “--model” to a supported model, then "
+                + "add “--effort”, “LEVEL”."
+        }
+        return "For a supported Claude model, add “--effort”, “LEVEL” "
+            + "to set reasoning effort."
+    }
+
+    private static func codexConfigOption(
+        in arguments: [String],
+        key: String
+    ) -> CommandOptionMatch? {
+        for (index, argument) in arguments.enumerated() {
+            if ["-c", "--config"].contains(argument),
+               arguments.indices.contains(index + 1),
+               let value = configAssignmentValue(
+                   arguments[index + 1],
+                   key: key
+               ) {
+                return CommandOptionMatch(
+                    name: argument,
+                    value: value,
+                    form: .separate
+                )
+            }
+            for name in ["-c", "--config"] {
+                let prefix = "\(name)="
+                if argument.hasPrefix(prefix),
+                   let value = configAssignmentValue(
+                       String(argument.dropFirst(prefix.count)),
+                       key: key
+                   ) {
+                    return CommandOptionMatch(
+                        name: name,
+                        value: value,
+                        form: .inline
+                    )
+                }
+            }
+        }
+        return nil
+    }
+
+    private static func configAssignmentValue(
+        _ assignment: String,
+        key: String
+    ) -> String? {
+        let prefix = "\(key)="
+        guard assignment.hasPrefix(prefix) else {
+            return nil
+        }
+        let value = String(assignment.dropFirst(prefix.count))
+        guard value.count >= 2,
+              let first = value.first,
+              let last = value.last,
+              (first == "\"" && last == "\"")
+                || (first == "'" && last == "'") else {
+            return value
+        }
+        return String(value.dropFirst().dropLast())
     }
 
     private static func commandOption(

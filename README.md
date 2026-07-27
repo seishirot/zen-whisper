@@ -339,10 +339,11 @@ timeout.
 The bundled `postprocessors.default.toml` contains:
 
 - `codex`: remote Codex CLI cleanup using an ephemeral, read-only,
-  user-config/rules-independent invocation; the model follows the Codex CLI
-  default unless `--model` is added in the editor
-- `claude`: remote Claude Code cleanup using the `haiku` model alias; safe
-  mode, no tools, and no session persistence
+  user-config/rules-independent invocation; its editable example selects
+  `gpt-5.6-luna` with `model_reasoning_effort=low`
+- `claude`: remote Claude Code cleanup using the `haiku` model alias; Haiku
+  does not support `--effort`, so the preset omits it while retaining safe
+  mode, `dontAsk` permission mode, no tools, and no session persistence
 - `ollama`: local `qwen3.5:4b` cleanup, pinned to
   `127.0.0.1:11434`
 
