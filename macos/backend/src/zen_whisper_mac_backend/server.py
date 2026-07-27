@@ -21,7 +21,11 @@ from zen_whisper_mac_backend.protocol import (
     encode_message,
     error_response,
 )
-from zen_whisper_mac_backend.service import BackendService
+from zen_whisper_mac_backend.service import (
+    BackendService,
+    ProgressDeliveryError,
+    ProgressFrame,
+)
 
 logger = logging.getLogger(__name__)
 MAX_HANDLER_THREADS = 8
@@ -176,7 +180,22 @@ def _handle_connection(
                 )
             else:
                 try:
-                    response = service.handle(request)
+                    def send_progress(progress: ProgressFrame) -> None:
+                        try:
+                            writer.write(encode_message(progress))
+                            writer.flush()
+                        except (OSError, ValueError) as exc:
+                            raise ProgressDeliveryError from exc
+
+                    response = service.handle(
+                        request,
+                        on_progress=send_progress,
+                    )
+                except ProgressDeliveryError:
+                    logger.info(
+                        "Client disconnected before progress could be sent"
+                    )
+                    return
                 except Exception as exc:  # pragma: no cover - defensive server boundary
                     logger.error(
                         "Backend error escaped service boundary: class=%s message=%s stack=%s",

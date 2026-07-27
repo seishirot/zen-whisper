@@ -770,7 +770,11 @@ def test_settings_form_loads_snapshot_and_tracks_only_real_edits():
         )
         assert window._vars["output.paste_delay_ms"].get() == "175"
         assert window._recognition_summary_var.get() == (
-            "現在の選択: Whisper / 日本語 (ja) / GPU (CUDA)"
+            recognition_selection_text(
+                cfg.recognition.engine,
+                cfg.recognition.language,
+                cfg.recognition.device,
+            )
         )
         assert "project" in window._vars[
             "enhancement.profile_label"

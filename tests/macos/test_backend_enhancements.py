@@ -18,6 +18,7 @@ BACKEND_SRC = REPO_ROOT / "macos/backend/src"
 sys.path.insert(0, str(BACKEND_SRC))
 
 import zen_whisper_mac_backend.enhancements as enhancements_module  # noqa: E402
+import zen_whisper_mac_backend.service as service_module  # noqa: E402
 from zen_whisper_mac_backend.adapters import (  # noqa: E402
     DummyAdapter,
     MlxWhisperAdapter,
@@ -34,7 +35,10 @@ from zen_whisper_mac_backend.protocol import (  # noqa: E402
     MAX_LINE_BYTES,
     encode_message,
 )
-from zen_whisper_mac_backend.service import BackendService  # noqa: E402
+from zen_whisper_mac_backend.service import (  # noqa: E402
+    BackendService,
+    ProgressDeliveryError,
+)
 
 
 def _profile_payload() -> dict[str, object]:
@@ -116,6 +120,12 @@ def _transcribe_request(audio: Path) -> dict[str, object]:
         "model": "mlx-community/whisper-large-v3-turbo",
         "language": "ja",
     }
+
+
+def _assert_nonnegative_elapsed(metadata: dict[str, object]) -> None:
+    elapsed = metadata.get("elapsed_sec")
+    assert isinstance(elapsed, float)
+    assert elapsed >= 0
 
 
 def test_profile_builds_context_and_deduplicated_hotwords() -> None:
@@ -509,18 +519,42 @@ def test_cli_stdout_cap_keeps_successful_result_inside_transport_budget(
     }
 
     try:
-        successful = service.handle(request)
-        fallback = service.handle(overflow)
+        successful_progress: list[dict[str, object]] = []
+        fallback_progress: list[dict[str, object]] = []
+        successful = service.handle(
+            request,
+            on_progress=successful_progress.append,
+        )
+        fallback = service.handle(
+            overflow,
+            on_progress=fallback_progress.append,
+        )
     finally:
         service.close()
 
     encoded = encode_message(successful)
     assert successful["type"] == "result"
     assert successful["enhancement"]["outcome"] == "cli"
+    _assert_nonnegative_elapsed(successful["enhancement"])
+    assert successful_progress == [
+        {
+            "type": "progress",
+            "request_id": "enhanced-transcribe",
+            "stage": "postprocessing",
+        }
+    ]
     assert len(encoded) < MAX_LINE_BYTES
     assert fallback["type"] == "result"
     assert fallback["text"] == "fallback"
     assert fallback["enhancement"]["outcome"] == "cli_fallback"
+    _assert_nonnegative_elapsed(fallback["enhancement"])
+    assert fallback_progress == [
+        {
+            "type": "progress",
+            "request_id": "overflow-transcribe",
+            "stage": "postprocessing",
+        }
+    ]
     assert (
         fallback["enhancement"]["warning_code"]
         == "CLI_OUTPUT_TOO_LARGE"
@@ -621,20 +655,30 @@ def test_legacy_transcribe_request_stays_raw_and_uses_three_argument_adapter(
     service = BackendService(
         adapters={"mlx-whisper": DummyAdapter("mlx-whisper", " raw text ")}
     )
+    progress: list[dict[str, object]] = []
     try:
-        result = service.handle(_transcribe_request(audio))
+        result = service.handle(
+            _transcribe_request(audio),
+            on_progress=progress.append,
+        )
     finally:
         service.close()
 
     assert result["type"] == "result"
     assert result["text"] == "raw text"
     assert result["hints_applied"] is False
-    assert result["enhancement"] == {
+    assert {
+        key: value
+        for key, value in result["enhancement"].items()
+        if key != "elapsed_sec"
+    } == {
         "outcome": "raw",
         "cli_selected": False,
         "succeeded": True,
         "applied": False,
     }
+    _assert_nonnegative_elapsed(result["enhancement"])
+    assert progress == []
 
 
 def test_service_applies_mlx_profile_hints_and_dictionary(
@@ -659,25 +703,175 @@ def test_service_applies_mlx_profile_hints_and_dictionary(
     request = _transcribe_request(audio)
     request["profile"] = _profile_payload()
     request["postprocessor"] = {"mode": "dictionary"}
+    progress: list[dict[str, object]] = []
     try:
-        result = service.handle(request)
+        result = service.handle(request, on_progress=progress.append)
     finally:
         service.close()
 
     assert result["type"] == "result"
     assert result["text"] == "ZenWhisper"
     assert result["hints_applied"] is True
-    assert result["enhancement"] == {
+    assert {
+        key: value
+        for key, value in result["enhancement"].items()
+        if key != "elapsed_sec"
+    } == {
         "outcome": "dictionary",
         "cli_selected": False,
         "succeeded": True,
         "applied": True,
     }
+    _assert_nonnegative_elapsed(result["enhancement"])
+    assert progress == [
+        {
+            "type": "progress",
+            "request_id": "enhanced-transcribe",
+            "stage": "postprocessing",
+        }
+    ]
     assert len(calls) == 2
     assert "initial_prompt" not in calls[0]
     assert calls[1]["initial_prompt"] == recognition_hints(
         parse_profile(_profile_payload())
     ).context
+
+
+def test_postprocessor_timing_excludes_progress_delivery_delay(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    clock = {"now": 10.0}
+    monkeypatch.setattr(
+        service_module.time,
+        "monotonic",
+        lambda: clock["now"],
+    )
+    audio = _audio_file(tmp_path)
+    service = BackendService(
+        adapters={
+            "mlx-whisper": DummyAdapter(
+                "mlx-whisper",
+                "全ウィスパー",
+            )
+        }
+    )
+    request = _transcribe_request(audio)
+    request["profile"] = _profile_payload()
+    request["postprocessor"] = {"mode": "dictionary"}
+
+    def delayed_progress(_: dict[str, object]) -> None:
+        clock["now"] += 100
+
+    try:
+        result = service.handle(
+            request,
+            on_progress=delayed_progress,
+        )
+    finally:
+        service.close()
+
+    assert result["enhancement"]["elapsed_sec"] == 0.0
+
+
+def test_service_propagates_progress_delivery_failure(
+    tmp_path: Path,
+) -> None:
+    audio = _audio_file(tmp_path)
+    service = BackendService(
+        adapters={"mlx-whisper": DummyAdapter("mlx-whisper", "hello")}
+    )
+    request = _transcribe_request(audio)
+    request["postprocessor"] = {"mode": "dictionary"}
+
+    def fail_progress(_: dict[str, object]) -> None:
+        raise ProgressDeliveryError
+
+    try:
+        with pytest.raises(ProgressDeliveryError):
+            service.handle(request, on_progress=fail_progress)
+    finally:
+        service.close()
+
+
+def test_service_postprocessor_log_records_safe_timing_metadata_only(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    private_transcript = "PRIVATE TRANSCRIPT CONTENT"
+    audio = _audio_file(tmp_path)
+    service = BackendService(
+        adapters={
+            "mlx-whisper": DummyAdapter(
+                "mlx-whisper",
+                private_transcript,
+            )
+        }
+    )
+    request = _transcribe_request(audio)
+    request["postprocessor"] = {
+        "mode": "preset",
+        "preset": _preset_payload(
+            arguments=[
+                "-c",
+                "import sys; sys.stdout.write('corrected')",
+            ],
+        ),
+    }
+    caplog.set_level(logging.INFO)
+
+    try:
+        result = service.handle(request)
+    finally:
+        service.close()
+
+    assert result["enhancement"]["outcome"] == "cli"
+    assert "Postprocessor completed: id=test-cli outcome=cli" in caplog.text
+    assert "succeeded=True applied=True elapsed_sec=" in caplog.text
+    assert private_transcript not in caplog.text
+
+
+def test_service_fallback_log_never_includes_private_cli_content(
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+) -> None:
+    private_transcript = "PRIVATE FALLBACK TRANSCRIPT"
+    private_stderr = "PRIVATE CLI STDERR"
+    audio = _audio_file(tmp_path)
+    service = BackendService(
+        adapters={
+            "mlx-whisper": DummyAdapter(
+                "mlx-whisper",
+                private_transcript,
+            )
+        }
+    )
+    request = _transcribe_request(audio)
+    request["postprocessor"] = {
+        "mode": "preset",
+        "preset": _preset_payload(
+            arguments=[
+                "-c",
+                (
+                    "import sys; "
+                    f"sys.stderr.write({private_stderr!r}); "
+                    "raise SystemExit(7)"
+                ),
+            ],
+        ),
+    }
+    caplog.set_level(logging.INFO)
+
+    try:
+        result = service.handle(request)
+    finally:
+        service.close()
+
+    assert result["enhancement"]["outcome"] == "cli_fallback"
+    assert "Postprocessor completed: id=test-cli outcome=cli_fallback" in caplog.text
+    assert "succeeded=False applied=True elapsed_sec=" in caplog.text
+    assert private_transcript not in caplog.text
+    assert private_stderr not in caplog.text
 
 
 def test_hint_unsupported_engine_still_applies_dictionary(

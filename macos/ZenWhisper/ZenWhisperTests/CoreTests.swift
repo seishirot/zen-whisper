@@ -1,3 +1,4 @@
+import AppKit
 import Carbon
 import CoreGraphics
 import CryptoKit
@@ -28,6 +29,11 @@ final class CoreTests: XCTestCase {
         )
         XCTAssertEqual(StatusIconFactory.kind(for: .preloading(message: "x")), .loading)
         XCTAssertEqual(StatusIconFactory.kind(for: .transcribing), .processing)
+        XCTAssertEqual(StatusIconFactory.kind(for: .postprocessing), .postprocessing)
+        XCTAssertTrue(
+            StatusIconFactory.processingColor(for: .postprocessing)?
+                .isEqual(NSColor.systemPurple) == true
+        )
         XCTAssertEqual(StatusIconFactory.kind(for: .copySkipped("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .copyFailed("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .enhancementWarning("x")), .warning)
@@ -83,6 +89,7 @@ final class CoreTests: XCTestCase {
             "Paste tried"
         )
         XCTAssertEqual(AppState.enhancementWarning("safe fallback").title, "Fallback")
+        XCTAssertEqual(AppState.postprocessing.title, "Post-processing")
         XCTAssertEqual(StatusText.copyOnlyReason("paste event unavailable"), "No paste")
         XCTAssertEqual(
             AppDelegate.copySkippedReasonAfterRestoredPasteFailure("paste event unavailable"),

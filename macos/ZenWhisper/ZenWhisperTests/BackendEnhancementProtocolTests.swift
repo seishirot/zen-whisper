@@ -116,6 +116,7 @@ final class BackendEnhancementProtocolTests: XCTestCase {
         XCTAssertEqual(result.text, "hello")
         XCTAssertFalse(result.hintsApplied)
         XCTAssertEqual(result.enhancement, .legacyRaw)
+        XCTAssertNil(result.enhancement.elapsedSeconds)
     }
 
     func testEnhancedRequestRequiresStructuredResponseMetadata() {
@@ -131,6 +132,30 @@ final class BackendEnhancementProtocolTests: XCTestCase {
             XCTAssertEqual(
                 error as? BackendProtocolError,
                 .invalidTranscriptionResult("missing enhancement metadata")
+            )
+        }
+
+        XCTAssertThrowsError(
+            try decodeBackendTranscriptionResult(
+                [
+                    "type": "result",
+                    "text": "hello",
+                    "hints_applied": false,
+                    "enhancement": [
+                        "outcome": "raw",
+                        "cli_selected": false,
+                        "succeeded": true,
+                        "applied": false
+                    ]
+                ],
+                requireEnhancementMetadata: true
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? BackendProtocolError,
+                .invalidTranscriptionResult(
+                    "missing enhancement elapsed_sec"
+                )
             )
         }
 
@@ -162,7 +187,8 @@ final class BackendEnhancementProtocolTests: XCTestCase {
                 "succeeded": false,
                 "applied": true,
                 "warning_code": "CLI_TIMEOUT",
-                "error": "postprocessor timed out"
+                "error": "postprocessor timed out",
+                "elapsed_sec": 1.234
             ]
         ])
 
@@ -174,6 +200,7 @@ final class BackendEnhancementProtocolTests: XCTestCase {
         XCTAssertTrue(result.enhancement.applied)
         XCTAssertEqual(result.enhancement.warningCode, "CLI_TIMEOUT")
         XCTAssertEqual(result.enhancement.error, "postprocessor timed out")
+        XCTAssertEqual(result.enhancement.elapsedSeconds, 1.234)
     }
 
     func testStructuredTranscriptionResultRejectsMalformedEnhancement() {
@@ -250,6 +277,366 @@ final class BackendEnhancementProtocolTests: XCTestCase {
                 .invalidTranscriptionResult("contradictory raw enhancement")
             )
         }
+
+        for invalidElapsed: Any in [
+            -0.1,
+            "fast",
+            true,
+            Double.nan,
+            Double.infinity
+        ] {
+            XCTAssertThrowsError(try decodeBackendTranscriptionResult([
+                "text": "hello",
+                "enhancement": [
+                    "outcome": "raw",
+                    "cli_selected": false,
+                    "succeeded": true,
+                    "applied": false,
+                    "elapsed_sec": invalidElapsed
+                ]
+            ])) { error in
+                XCTAssertEqual(
+                    error as? BackendProtocolError,
+                    .invalidTranscriptionResult(
+                        "invalid enhancement elapsed_sec"
+                    )
+                )
+            }
+        }
+    }
+
+    func testPostprocessingProgressRequiresMatchingRequestAndKnownStage() throws {
+        let request: [String: Any] = [
+            "type": "transcribe",
+            "request_id": "request-1"
+        ]
+        XCTAssertEqual(
+            try decodeBackendProgress(
+                [
+                    "type": "progress",
+                    "request_id": "request-1",
+                    "stage": "postprocessing"
+                ],
+                request: request
+            ),
+            .postprocessing
+        )
+
+        XCTAssertThrowsError(
+            try decodeBackendProgress(
+                [
+                    "type": "progress",
+                    "request_id": "wrong-request",
+                    "stage": "postprocessing"
+                ],
+                request: request
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? BackendProtocolError,
+                .requestIDMismatch(
+                    expected: "request-1",
+                    actual: "wrong-request"
+                )
+            )
+        }
+
+        XCTAssertThrowsError(
+            try decodeBackendProgress(
+                [
+                    "type": "progress",
+                    "request_id": "request-1",
+                    "stage": "future-stage"
+                ],
+                request: request
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? BackendProtocolError,
+                .invalidProgress("invalid stage")
+            )
+        }
+
+        XCTAssertThrowsError(
+            try decodeBackendProgress(
+                [
+                    "type": "progress",
+                    "request_id": "health-1",
+                    "stage": "postprocessing"
+                ],
+                request: [
+                    "type": "health",
+                    "request_id": "health-1"
+                ]
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? BackendProtocolError,
+                .invalidProgress("unexpected request type")
+            )
+        }
+    }
+
+    func testSocketReaderHandlesFragmentedProgressBeforeFinalResult() throws {
+        var chunks = [
+            Data(
+                """
+                {"type":"progress","request_id":"request-1","stage":"post
+                """.utf8
+            ),
+            Data(
+                """
+                processing"}
+                {"type":"progress","request_id":"request-1","stage":"postprocessing"}
+                {"type":"result","request_id":"request-1","text":"hello"}
+
+                """.utf8
+            )
+        ]
+        var progressResponses: [[String: Any]] = []
+
+        let result = try UnixSocketClient.readResponse(
+            readChunk: {
+                chunks.isEmpty ? nil : chunks.removeFirst()
+            },
+            onProgress: { progressResponses.append($0) }
+        )
+
+        XCTAssertEqual(progressResponses.count, 2)
+        XCTAssertEqual(progressResponses[0]["type"] as? String, "progress")
+        XCTAssertEqual(
+            progressResponses[0]["stage"] as? String,
+            "postprocessing"
+        )
+        XCTAssertEqual(
+            progressResponses[1]["stage"] as? String,
+            "postprocessing"
+        )
+        XCTAssertEqual(result["type"] as? String, "result")
+        XCTAssertEqual(result["text"] as? String, "hello")
+    }
+
+    func testSocketReaderBoundsProgressAndResponseFrames() {
+        let progressFrame = Data(
+            """
+            {"type":"progress","request_id":"request-1","stage":"postprocessing"}
+
+            """.utf8
+        )
+        var excessiveProgress = Array(
+            repeating: progressFrame,
+            count: UnixSocketClient.maxProgressMessages + 1
+        )
+
+        XCTAssertThrowsError(
+            try UnixSocketClient.readResponse(
+                readChunk: {
+                    excessiveProgress.isEmpty
+                        ? nil
+                        : excessiveProgress.removeFirst()
+                }
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? UnixSocketError,
+                .tooManyProgressMessages
+            )
+        }
+
+        var progressOnly = [progressFrame]
+        XCTAssertThrowsError(
+            try UnixSocketClient.readResponse(
+                readChunk: {
+                    progressOnly.isEmpty ? nil : progressOnly.removeFirst()
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? UnixSocketError, .emptyResponse)
+        }
+
+        var oversizedPending = [
+            Data(
+                repeating: 0x78,
+                count: UnixSocketClient.maxResponseBytes + 1
+            )
+        ]
+        XCTAssertThrowsError(
+            try UnixSocketClient.readResponse(
+                readChunk: {
+                    oversizedPending.isEmpty
+                        ? nil
+                        : oversizedPending.removeFirst()
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? UnixSocketError, .responseTooLarge)
+        }
+
+        var oversizedTerminatedFrame = Data(
+            repeating: 0x78,
+            count: UnixSocketClient.maxResponseBytes + 1
+        )
+        oversizedTerminatedFrame.append(0x0A)
+        var terminatedChunks = [oversizedTerminatedFrame]
+        XCTAssertThrowsError(
+            try UnixSocketClient.readResponse(
+                readChunk: {
+                    terminatedChunks.isEmpty
+                        ? nil
+                        : terminatedChunks.removeFirst()
+                }
+            )
+        ) { error in
+            XCTAssertEqual(error as? UnixSocketError, .responseTooLarge)
+        }
+    }
+
+    func testSocketReaderReturnsTerminalErrorAfterProgress() throws {
+        var chunks = [
+            Data(
+                """
+                {"type":"progress","request_id":"request-1","stage":"postprocessing"}
+                {"type":"error","request_id":"request-1","code":"BACKEND_ERROR","message":"failed","recoverable":false}
+
+                """.utf8
+            )
+        ]
+        var progressCount = 0
+
+        let response = try UnixSocketClient.readResponse(
+            readChunk: {
+                chunks.isEmpty ? nil : chunks.removeFirst()
+            },
+            onProgress: { _ in progressCount += 1 }
+        )
+
+        XCTAssertEqual(progressCount, 1)
+        XCTAssertEqual(response["type"] as? String, "error")
+        XCTAssertEqual(response["code"] as? String, "BACKEND_ERROR")
+    }
+
+    func testEnhancementLogContainsOnlySafeOutcomeAndTimingMetadata() {
+        let privateContent = "PRIVATE TRANSCRIPT AND CLI ERROR"
+        let preset = EnhancementPostprocessorPreset(
+            id: "codex",
+            displayName: "Codex",
+            executable: "codex"
+        )
+        let result = BackendEnhancementResult(
+            outcome: .cliFallback,
+            cliSelected: true,
+            succeeded: false,
+            applied: true,
+            warningCode: "CLI_TIMEOUT",
+            error: privateContent,
+            elapsedSeconds: 2.3456
+        )
+
+        let message = AppDelegate.enhancementLogMessage(
+            result,
+            postprocessor: .preset(preset)
+        )
+
+        XCTAssertEqual(
+            message,
+            "enhancement result postprocessor=codex "
+                + "outcome=cli_fallback cli_selected=true "
+                + "succeeded=false applied=true "
+                + "warning_code=CLI_TIMEOUT elapsed_sec=2.346"
+        )
+        XCTAssertFalse(message.contains(privateContent))
+    }
+
+    func testPostprocessingProgressOnlyAdvancesActiveTranscription() {
+        XCTAssertEqual(
+            AppDelegate.state(
+                for: .postprocessing,
+                currentState: .transcribing
+            ),
+            .postprocessing
+        )
+        XCTAssertNil(
+            AppDelegate.state(
+                for: .postprocessing,
+                currentState: .inputWaiting
+            )
+        )
+    }
+
+    func testBackendClientForwardsValidatedProgressBeforeResult() throws {
+        let root = URL(
+            fileURLWithPath: NSTemporaryDirectory(),
+            isDirectory: true
+        ).appendingPathComponent(
+            "zw-progress-client-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let paths = AppPaths(
+            appSupport: root.appendingPathComponent(
+                "support",
+                isDirectory: true
+            ),
+            logs: root.appendingPathComponent("logs", isDirectory: true),
+            runtimeDirectoryOverride: root.appendingPathComponent(
+                "runtime",
+                isDirectory: true
+            )
+        )
+        var callbackOrder: [String] = []
+        var currentState: AppState = .transcribing
+        let client = BackendClient(
+            paths: paths,
+            requestTransport: { request, _, onProgress in
+                let requestID = try XCTUnwrap(
+                    request["request_id"] as? String
+                )
+                try onProgress?([
+                    "type": "progress",
+                    "request_id": requestID,
+                    "stage": "postprocessing"
+                ])
+                callbackOrder.append("result")
+                return [
+                    "type": "result",
+                    "request_id": requestID,
+                    "text": "corrected",
+                    "hints_applied": false,
+                    "enhancement": [
+                        "outcome": "dictionary",
+                        "cli_selected": false,
+                        "succeeded": true,
+                        "applied": true,
+                        "elapsed_sec": 0.125
+                    ]
+                ]
+            }
+        )
+
+        let result = try client.transcribe(
+            audioURL: root.appendingPathComponent("audio.wav"),
+            engine: "mlx-whisper",
+            model: "model",
+            language: "ja",
+            postprocessor: .dictionary,
+            onProgress: { progress in
+                XCTAssertEqual(progress, .postprocessing)
+                currentState = AppDelegate.state(
+                    for: progress,
+                    currentState: currentState
+                ) ?? currentState
+                callbackOrder.append("progress")
+            }
+        )
+
+        XCTAssertEqual(callbackOrder, ["progress", "result"])
+        XCTAssertEqual(result.text, "corrected")
+        XCTAssertEqual(result.enhancement.elapsedSeconds, 0.125)
+        XCTAssertEqual(currentState, .postprocessing)
+        XCTAssertEqual(AppState.postprocessing.title, "Post-processing")
+        XCTAssertEqual(
+            StatusIconFactory.kind(for: .postprocessing),
+            .postprocessing
+        )
     }
 
     func testBackendEnvironmentKeepsRestrictedParentPathAndAddsDedicatedCLIPath() {

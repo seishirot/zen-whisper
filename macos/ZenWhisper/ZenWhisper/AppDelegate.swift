@@ -393,11 +393,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         model: model,
                         language: language,
                         profile: enhancementRequest.profile,
-                        postprocessor: enhancementRequest.postprocessor
+                        postprocessor: enhancementRequest.postprocessor,
+                        onProgress: { progress in
+                            DispatchQueue.main.async {
+                                guard let nextState = Self.state(
+                                    for: progress,
+                                    currentState: self.state
+                                ) else {
+                                    return
+                                }
+                                self.setState(nextState)
+                            }
+                        }
                     )
                     DispatchQueue.main.async {
                         self.removeRecordingFile(audioURL, context: "post-transcription recording cleanup")
-                        self.logEnhancementResult(result.enhancement)
+                        self.logEnhancementResult(
+                            result.enhancement,
+                            postprocessor: enhancementRequest.postprocessor
+                        )
                         self.handleTranscript(
                             result.text,
                             startTarget: startTarget,
@@ -1555,7 +1569,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied,
                  .copySkipped, .copyFailed, .enhancementWarning, .microphoneError:
                 restartBackendForModelChange()
-            case .idle, .recording, .preloading, .transcribing,
+            case .idle, .recording, .preloading, .transcribing, .postprocessing,
                  .backendRepairRequired, .repairingBackend, .hotkeyError,
                  .appSignatureChanged, .error:
                 break
@@ -1565,7 +1579,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied,
                  .copySkipped, .copyFailed, .enhancementWarning:
                 preloadSelectedModel()
-            case .idle, .recording, .preloading, .transcribing,
+            case .idle, .recording, .preloading, .transcribing, .postprocessing,
                  .backendRepairRequired, .repairingBackend, .microphoneError,
                  .hotkeyError, .appSignatureChanged, .error:
                 break
@@ -1624,7 +1638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied, .copySkipped,
              .copyFailed, .enhancementWarning:
             preloadSelectedModel()
-        case .idle, .recording, .preloading, .transcribing, .backendRepairRequired,
+        case .idle, .recording, .preloading, .transcribing, .postprocessing, .backendRepairRequired,
              .repairingBackend, .microphoneError, .hotkeyError, .appSignatureChanged, .error:
             break
         }
@@ -1636,7 +1650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .inputWaiting, .pasteUnavailable, .modelUnavailable, .copied, .copySkipped,
              .copyFailed, .enhancementWarning, .microphoneError:
             restartBackendForModelChange()
-        case .idle, .recording, .preloading, .transcribing, .backendRepairRequired,
+        case .idle, .recording, .preloading, .transcribing, .postprocessing, .backendRepairRequired,
              .repairingBackend, .hotkeyError, .appSignatureChanged, .error:
             break
         }
@@ -1840,7 +1854,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         logInfo("invalidated stale postprocessor approval")
     }
 
-    private func logEnhancementResult(_ result: BackendEnhancementResult) {
+    private func logEnhancementResult(
+        _ result: BackendEnhancementResult,
+        postprocessor: BackendPostprocessorRequest
+    ) {
+        logInfo(Self.enhancementLogMessage(
+            result,
+            postprocessor: postprocessor
+        ))
+    }
+
+    nonisolated static func enhancementLogMessage(
+        _ result: BackendEnhancementResult,
+        postprocessor: BackendPostprocessorRequest
+    ) -> String {
         let allowedWarningCodes: Set<String> = [
             "PREFLIGHT_FAILED",
             "PREFLIGHT_TIMEOUT",
@@ -1860,13 +1887,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             warningCode = result.warningCode == nil ? "none" : "UNKNOWN"
         }
-        logInfo(
-            "enhancement result outcome=\(result.outcome.rawValue) "
-                + "cli_selected=\(result.cliSelected) "
-                + "succeeded=\(result.succeeded) "
-                + "applied=\(result.applied) "
-                + "warning_code=\(warningCode)"
-        )
+        let elapsedSeconds = result.elapsedSeconds.map {
+            String(
+                format: "%.3f",
+                locale: Locale(identifier: "en_US_POSIX"),
+                $0
+            )
+        } ?? "unknown"
+        return "enhancement result postprocessor=\(postprocessor.logIdentifier) "
+            + "outcome=\(result.outcome.rawValue) "
+            + "cli_selected=\(result.cliSelected) "
+            + "succeeded=\(result.succeeded) "
+            + "applied=\(result.applied) "
+            + "warning_code=\(warningCode) "
+            + "elapsed_sec=\(elapsedSeconds)"
+    }
+
+    nonisolated static func state(
+        for progress: BackendProgressStage,
+        currentState: AppState
+    ) -> AppState? {
+        guard progress == .postprocessing,
+              currentState == .transcribing else {
+            return nil
+        }
+        return .postprocessing
     }
 
     nonisolated static func shouldSubmitAfterPaste(
@@ -2041,7 +2086,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed,
              .enhancementWarning:
             return true
-        case .idle, .recording, .preloading, .transcribing, .modelUnavailable,
+        case .idle, .recording, .preloading, .transcribing, .postprocessing, .modelUnavailable,
              .backendRepairRequired, .repairingBackend, .microphoneError,
              .hotkeyError, .appSignatureChanged, .error:
             return false

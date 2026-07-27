@@ -7,6 +7,7 @@ enum AppState: Equatable {
     case recording(elapsed: TimeInterval, voiceActive: Bool)
     case preloading(message: String)
     case transcribing
+    case postprocessing
     case copied(pasteDispatched: Bool, reason: String?)
     case copySkipped(String)
     case copyFailed(String)
@@ -33,6 +34,8 @@ enum AppState: Equatable {
             return "Loading"
         case .transcribing:
             return "Processing"
+        case .postprocessing:
+            return "Post-processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
                 if reason?.lowercased().contains("enter attempted") == true {
@@ -72,7 +75,7 @@ enum AppState: Equatable {
         case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed,
              .enhancementWarning, .microphoneError:
             return true
-        case .idle, .recording, .preloading, .transcribing, .modelUnavailable,
+        case .idle, .recording, .preloading, .transcribing, .postprocessing, .modelUnavailable,
              .backendRepairRequired, .repairingBackend, .hotkeyError, .appSignatureChanged, .error:
             return false
         }
@@ -87,7 +90,7 @@ enum AppState: Equatable {
 
     var blocksSettingsChanges: Bool {
         switch self {
-        case .recording, .preloading, .transcribing, .repairingBackend:
+        case .recording, .preloading, .transcribing, .postprocessing, .repairingBackend:
             return true
         case .idle, .inputWaiting, .pasteUnavailable, .copied, .copySkipped,
              .copyFailed, .enhancementWarning, .modelUnavailable, .backendRepairRequired,
@@ -102,7 +105,7 @@ enum AppState: Equatable {
              .appSignatureChanged, .error:
             return true
         case .idle, .inputWaiting, .pasteUnavailable, .recording, .preloading,
-             .transcribing, .copied, .copySkipped, .copyFailed, .enhancementWarning,
+             .transcribing, .postprocessing, .copied, .copySkipped, .copyFailed, .enhancementWarning,
              .repairingBackend, .hotkeyError:
             return false
         }
@@ -114,7 +117,7 @@ enum AppState: Equatable {
              .error:
             return true
         case .idle, .inputWaiting, .pasteUnavailable, .recording, .preloading,
-             .transcribing, .copied, .copySkipped, .copyFailed, .enhancementWarning,
+             .transcribing, .postprocessing, .copied, .copySkipped, .copyFailed, .enhancementWarning,
              .repairingBackend, .microphoneError, .hotkeyError:
             return false
         }

@@ -150,6 +150,7 @@ final class SettingsEditorStateTests: XCTestCase {
             .recording(elapsed: 1, voiceActive: true),
             .preloading(message: "model"),
             .transcribing,
+            .postprocessing,
             .repairingBackend,
         ]
         XCTAssertTrue(busyStates.allSatisfy(\.blocksSettingsChanges))

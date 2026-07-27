@@ -43,7 +43,10 @@ def test_settings_menu_shows_selected_values_and_disables_while_busy() -> None:
     assert "launchAtLoginMenuItem.state = .mixed" in status_controller
     assert "private func applySettingsEnabledState()" in status_controller
     assert "var blocksSettingsChanges: Bool" in app_state
-    assert "case .recording, .preloading, .transcribing, .repairingBackend:" in app_state
+    assert (
+        "case .recording, .preloading, .transcribing, .postprocessing, "
+        ".repairingBackend:"
+    ) in app_state
     assert "state.blocksSettingsChanges" in status_controller
     assert "microphoneMenuItem.isEnabled = enabled" in status_controller
     assert (

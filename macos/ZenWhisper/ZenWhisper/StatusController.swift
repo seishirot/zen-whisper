@@ -156,7 +156,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     private func isAnimated(_ state: AppState) -> Bool {
         switch state {
-        case .preloading, .transcribing, .repairingBackend:
+        case .preloading, .transcribing, .postprocessing, .repairingBackend:
             return true
         case .idle, .inputWaiting, .pasteUnavailable, .recording, .copied, .copySkipped,
              .copyFailed, .enhancementWarning, .modelUnavailable,
@@ -478,6 +478,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             return "Loading model: \(message)"
         case .transcribing:
             return "Transcribing"
+        case .postprocessing:
+            return "Post-processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
                 let enterText: String
@@ -546,7 +548,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         case .modelUnavailable, .inputWaiting, .pasteUnavailable, .copied, .copySkipped,
              .copyFailed, .enhancementWarning:
             return true
-        case .idle, .recording, .preloading, .transcribing, .backendRepairRequired,
+        case .idle, .recording, .preloading, .transcribing, .postprocessing, .backendRepairRequired,
              .repairingBackend, .microphoneError, .hotkeyError, .appSignatureChanged, .error:
             return false
         }
@@ -630,7 +632,7 @@ final class StatusController: NSObject, NSMenuDelegate {
                 return nil
             }
             return ("Accept Signature Change", .acceptSignatureChange)
-        case .idle, .inputWaiting, .recording, .preloading, .transcribing, .copied,
+        case .idle, .inputWaiting, .recording, .preloading, .transcribing, .postprocessing, .copied,
              .copySkipped, .copyFailed, .enhancementWarning, .repairingBackend,
              .hotkeyError, .error:
             return nil

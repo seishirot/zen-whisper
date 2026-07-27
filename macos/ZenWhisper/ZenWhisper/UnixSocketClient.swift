@@ -11,16 +11,21 @@ enum UnixSocketError: Error, Equatable {
     case emptyResponse
     case requestTooLarge
     case responseTooLarge
+    case tooManyProgressMessages
 }
 
 struct UnixSocketClient {
     static let maxRequestBytes = 524_288
     static let maxResponseBytes = 1_048_576
+    static let maxProgressMessages = 8
 
     let socketPath: String
     var timeoutSeconds: TimeInterval = 30
 
-    func request(_ message: [String: Any]) throws -> [String: Any] {
+    func request(
+        _ message: [String: Any],
+        onProgress: (([String: Any]) throws -> Void)? = nil
+    ) throws -> [String: Any] {
         let payload = try Self.encodeRequest(message)
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
@@ -77,32 +82,79 @@ struct UnixSocketClient {
             }
         }
 
-        var response = Data()
         var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
+        return try Self.readResponse(
+            readChunk: {
             let count = Darwin.read(fd, &buffer, buffer.count)
             if count < 0 {
                 throw UnixSocketError.readFailed(errno)
             }
             if count == 0 {
-                break
+                    return nil
             }
-            if let newlineIndex = buffer[..<count].firstIndex(of: 0x0A) {
-                response.append(buffer, count: newlineIndex)
-                guard response.count <= Self.maxResponseBytes else {
-                    throw UnixSocketError.responseTooLarge
+                return Data(buffer.prefix(count))
+            },
+            onProgress: onProgress
+        )
+    }
+
+    static func readResponse(
+        readChunk: () throws -> Data?,
+        onProgress: (([String: Any]) throws -> Void)? = nil
+    ) throws -> [String: Any] {
+        var pending = Data()
+        var progressCount = 0
+
+        while let chunk = try readChunk() {
+            pending.append(chunk)
+            while let newlineIndex = pending.firstIndex(of: 0x0A) {
+                let frame = Data(pending[..<newlineIndex])
+                pending.removeSubrange(...newlineIndex)
+                if let response = try decodeFrame(
+                    frame,
+                    progressCount: &progressCount,
+                    onProgress: onProgress
+                ) {
+                    return response
                 }
-                break
             }
-            response.append(buffer, count: count)
-            guard response.count <= Self.maxResponseBytes else {
+            guard pending.count <= maxResponseBytes else {
                 throw UnixSocketError.responseTooLarge
             }
         }
-        guard !response.isEmpty else {
+
+        if !pending.isEmpty,
+           let response = try decodeFrame(
+               pending,
+               progressCount: &progressCount,
+               onProgress: onProgress
+           ) {
+            return response
+        }
+        throw UnixSocketError.emptyResponse
+    }
+
+    private static func decodeFrame(
+        _ frame: Data,
+        progressCount: inout Int,
+        onProgress: (([String: Any]) throws -> Void)?
+    ) throws -> [String: Any]? {
+        guard !frame.isEmpty else {
             throw UnixSocketError.emptyResponse
         }
-        return try decodeBackendResponseObject(response)
+        guard frame.count <= maxResponseBytes else {
+            throw UnixSocketError.responseTooLarge
+        }
+        let response = try decodeBackendResponseObject(frame)
+        guard response["type"] as? String == "progress" else {
+            return response
+        }
+        progressCount += 1
+        guard progressCount <= maxProgressMessages else {
+            throw UnixSocketError.tooManyProgressMessages
+        }
+        try onProgress?(response)
+        return nil
     }
 
     static func encodeRequest(_ message: [String: Any]) throws -> Data {

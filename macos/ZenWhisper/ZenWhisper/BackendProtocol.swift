@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 enum BackendPostprocessorRequest: Equatable, Sendable {
@@ -22,6 +23,17 @@ enum BackendPostprocessorRequest: Equatable, Sendable {
         )
         let preflightTimeout: TimeInterval = preset.preflightExecutable.isEmpty ? 0 : 10
         return preflightTimeout + boundedPresetTimeout
+    }
+
+    var logIdentifier: String {
+        switch self {
+        case .off:
+            return "off"
+        case .dictionary:
+            return "dictionary"
+        case .preset(let preset):
+            return preset.id
+        }
     }
 
     fileprivate var backendPayload: [String: Any]? {
@@ -87,6 +99,7 @@ struct BackendRequest {
 enum BackendProtocolError: Error, Equatable, Sendable {
     case invalidJSON
     case invalidBackendError(String)
+    case invalidProgress(String)
     case invalidTranscriptionResult(String)
     case backendError(code: String, message: String, recoverable: Bool)
     case unexpectedResponse(String)
@@ -101,6 +114,10 @@ enum BackendEnhancementOutcome: String, Equatable, Sendable {
     case cliFallback = "cli_fallback"
 }
 
+enum BackendProgressStage: String, Equatable, Sendable {
+    case postprocessing
+}
+
 struct BackendEnhancementResult: Equatable, Sendable {
     let outcome: BackendEnhancementOutcome
     let cliSelected: Bool
@@ -108,6 +125,7 @@ struct BackendEnhancementResult: Equatable, Sendable {
     let applied: Bool
     let warningCode: String?
     let error: String?
+    let elapsedSeconds: TimeInterval?
 
     static let legacyRaw = BackendEnhancementResult(
         outcome: .raw,
@@ -115,7 +133,8 @@ struct BackendEnhancementResult: Equatable, Sendable {
         succeeded: true,
         applied: false,
         warningCode: nil,
-        error: nil
+        error: nil,
+        elapsedSeconds: nil
     )
 }
 
@@ -181,6 +200,27 @@ func validateBackendResponse(
     return response
 }
 
+func decodeBackendProgress(
+    _ response: [String: Any],
+    request: [String: Any]
+) throws -> BackendProgressStage {
+    guard request["type"] as? String == "transcribe" else {
+        throw BackendProtocolError.invalidProgress(
+            "unexpected request type"
+        )
+    }
+    let validated = try validateBackendResponse(
+        response,
+        request: request,
+        expectedType: "progress"
+    )
+    guard let rawStage = validated["stage"] as? String,
+          let stage = BackendProgressStage(rawValue: rawStage) else {
+        throw BackendProtocolError.invalidProgress("invalid stage")
+    }
+    return stage
+}
+
 func decodeBackendTranscriptionResult(
     _ response: [String: Any],
     requireEnhancementMetadata: Bool = false
@@ -211,7 +251,10 @@ func decodeBackendTranscriptionResult(
         guard let object = value as? [String: Any] else {
             throw BackendProtocolError.invalidTranscriptionResult("invalid enhancement")
         }
-        enhancement = try decodeBackendEnhancementResult(object)
+        enhancement = try decodeBackendEnhancementResult(
+            object,
+            requireElapsedSeconds: requireEnhancementMetadata
+        )
     } else {
         enhancement = .legacyRaw
     }
@@ -224,7 +267,8 @@ func decodeBackendTranscriptionResult(
 }
 
 private func decodeBackendEnhancementResult(
-    _ object: [String: Any]
+    _ object: [String: Any],
+    requireElapsedSeconds: Bool
 ) throws -> BackendEnhancementResult {
     guard let outcomeValue = object["outcome"] as? String,
           let outcome = BackendEnhancementOutcome(rawValue: outcomeValue) else {
@@ -248,6 +292,24 @@ private func decodeBackendEnhancementResult(
         object["error"],
         field: "enhancement error"
     )
+    let elapsedSeconds: TimeInterval?
+    if let value = object["elapsed_sec"] {
+        guard let number = value as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite,
+              number.doubleValue >= 0 else {
+            throw BackendProtocolError.invalidTranscriptionResult(
+                "invalid enhancement elapsed_sec"
+            )
+        }
+        elapsedSeconds = number.doubleValue
+    } else if requireElapsedSeconds {
+        throw BackendProtocolError.invalidTranscriptionResult(
+            "missing enhancement elapsed_sec"
+        )
+    } else {
+        elapsedSeconds = nil
+    }
 
     let outcomeSelectsCLI = outcome == .cli || outcome == .cliFallback
     guard cliSelected == outcomeSelectsCLI else {
@@ -288,7 +350,8 @@ private func decodeBackendEnhancementResult(
         succeeded: succeeded,
         applied: applied,
         warningCode: warningCode,
-        error: error
+        error: error,
+        elapsedSeconds: elapsedSeconds
     )
 }
 

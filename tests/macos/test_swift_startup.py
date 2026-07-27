@@ -197,4 +197,5 @@ def test_unix_socket_client_caps_response_size() -> None:
     assert "guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else" in socket_client
     assert "guard setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else" in socket_client
     assert socket_client.count("throw UnixSocketError.timeoutSetupFailed(errno)") == 2
-    assert "response.count <= Self.maxResponseBytes" in socket_client
+    assert "pending.count <= maxResponseBytes" in socket_client
+    assert "frame.count <= maxResponseBytes" in socket_client

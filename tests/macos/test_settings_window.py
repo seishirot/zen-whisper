@@ -74,7 +74,10 @@ def test_settings_window_and_menu_share_the_central_busy_policy() -> None:
     app_state = _read_swift("AppState.swift")
 
     assert "var blocksSettingsChanges: Bool" in app_state
-    assert "case .recording, .preloading, .transcribing, .repairingBackend:" in app_state
+    assert (
+        "case .recording, .preloading, .transcribing, .postprocessing, "
+        ".repairingBackend:"
+    ) in app_state
     assert "state.blocksSettingsChanges" in status_controller
     assert "microphoneMenuItem.isEnabled = enabled" in status_controller
 

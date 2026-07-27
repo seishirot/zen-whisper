@@ -1,5 +1,11 @@
 import Foundation
 
+typealias BackendRequestTransport = @Sendable (
+    [String: Any],
+    TimeInterval,
+    (([String: Any]) throws -> Void)?
+) throws -> [String: Any]
+
 enum BackendClientError: Error {
     case backendPythonMissing(URL)
     case processAlreadyRunning
@@ -28,16 +34,31 @@ struct BackendStopResult: Equatable {
 }
 
 final class BackendClient: @unchecked Sendable {
+    static let supportedProtocolVersion = 2
     static let recognitionTimeoutSeconds: TimeInterval = 600
     static let responseGraceSeconds: TimeInterval = 15
 
     private let paths: AppPaths
     private var process: Process?
     private let authToken = "\(UUID().uuidString)-\(UUID().uuidString)"
+    private let requestTransport: BackendRequestTransport
 
-    init(paths: AppPaths, process: Process? = nil) {
+    init(
+        paths: AppPaths,
+        process: Process? = nil,
+        requestTransport: BackendRequestTransport? = nil
+    ) {
         self.paths = paths
         self.process = process
+        self.requestTransport = requestTransport ?? {
+            request,
+            timeoutSeconds,
+            onProgress in
+            try UnixSocketClient(
+                socketPath: paths.socketPath.path,
+                timeoutSeconds: timeoutSeconds
+            ).request(request, onProgress: onProgress)
+        }
     }
 
     var isRunning: Bool {
@@ -138,8 +159,11 @@ final class BackendClient: @unchecked Sendable {
         let request = BackendRequest.health()
         let response = try send(request, expectedType: "health_result", timeoutSeconds: 30)
         let protocolVersion = response["protocol_version"] as? Int
-        guard protocolVersion == 1 else {
-            throw BackendProtocolError.protocolMismatch(expected: 1, actual: protocolVersion)
+        guard protocolVersion == Self.supportedProtocolVersion else {
+            throw BackendProtocolError.protocolMismatch(
+                expected: Self.supportedProtocolVersion,
+                actual: protocolVersion
+            )
         }
         return response
     }
@@ -188,7 +212,8 @@ final class BackendClient: @unchecked Sendable {
         model: String,
         language: String,
         profile: EnhancementProfile? = nil,
-        postprocessor: BackendPostprocessorRequest = .off
+        postprocessor: BackendPostprocessorRequest = .off,
+        onProgress: ((BackendProgressStage) throws -> Void)? = nil
     ) throws -> BackendTranscriptionResult {
         let request = BackendRequest.transcribe(
             audioPath: audioURL.path,
@@ -201,7 +226,8 @@ final class BackendClient: @unchecked Sendable {
         let response = try send(
             request,
             expectedType: "result",
-            timeoutSeconds: Self.transcriptionTimeout(postprocessor: postprocessor)
+            timeoutSeconds: Self.transcriptionTimeout(postprocessor: postprocessor),
+            onProgress: onProgress
         )
         return try decodeBackendTranscriptionResult(
             response,
@@ -221,15 +247,23 @@ final class BackendClient: @unchecked Sendable {
     private func send(
         _ request: [String: Any],
         expectedType: String,
-        timeoutSeconds: TimeInterval
+        timeoutSeconds: TimeInterval,
+        onProgress: ((BackendProgressStage) throws -> Void)? = nil
     ) throws -> [String: Any] {
-        let response = try UnixSocketClient(
-            socketPath: paths.socketPath.path,
-            timeoutSeconds: timeoutSeconds
-        ).request(authorized(request))
+        let authorizedRequest = authorized(request)
+        let response = try requestTransport(
+            authorizedRequest,
+            timeoutSeconds
+        ) { progressResponse in
+            let stage = try decodeBackendProgress(
+                progressResponse,
+                request: authorizedRequest
+            )
+            try onProgress?(stage)
+        }
         return try validateBackendResponse(
             response,
-            request: authorized(request),
+            request: authorizedRequest,
             expectedType: expectedType
         )
     }
