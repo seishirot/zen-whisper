@@ -79,6 +79,11 @@ POSTPROCESSOR_PLACEHOLDER_HELP = (
         "command",
         "完成したプロンプト全体（argument方式のコマンド欄用）",
     ),
+    (
+        "system_prompt_file",
+        "command",
+        "実行ごとに作るsystem prompt一時ファイルのパス",
+    ),
 )
 RECOGNITION_SELECTION_KEYS = frozenset(
     {
@@ -527,6 +532,7 @@ class SettingsWindow:
         self._profile_terms: list[ProfileTerm] = []
         self._profile_editor_baseline: tuple[object, ...] | None = None
         self._loaded_profile_id = ""
+        self._system_prompt_text: tk.Text | None = None
         self._prompt_text: tk.Text | None = None
         self._command_text: tk.Text | None = None
         self._environment_text: tk.Text | None = None
@@ -1347,7 +1353,7 @@ class SettingsWindow:
             padding=10,
         )
         tab.columnconfigure(1, weight=1)
-        tab.rowconfigure(9, weight=1)
+        tab.rowconfigure(11, weight=1)
 
         ttk.Label(
             tab,
@@ -1495,10 +1501,45 @@ class SettingsWindow:
             pady=4,
         )
 
-        ttk.Label(tab, text="プロンプト").grid(row=9, column=0, sticky="nw", pady=4)
+        ttk.Label(tab, text="System prompt").grid(
+            row=9,
+            column=0,
+            sticky="nw",
+            pady=4,
+        )
+        self._system_prompt_text = tk.Text(tab, height=6, wrap="word")
+        self._system_prompt_text.grid(
+            row=9,
+            column=1,
+            columnspan=2,
+            sticky="nsew",
+            pady=4,
+        )
+        ttk.Label(
+            tab,
+            text=(
+                "CLI組み込みsystem promptの置換内容。指定する場合はコマンドに"
+                " {{system_prompt_file}} が必要です。テンプレート変数は使えません。"
+            ),
+            foreground="#555555",
+            wraplength=680,
+        ).grid(
+            row=10,
+            column=1,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 4),
+        )
+
+        ttk.Label(tab, text="プロンプト").grid(
+            row=11,
+            column=0,
+            sticky="nw",
+            pady=4,
+        )
         self._prompt_text = tk.Text(tab, height=6, wrap="word")
         self._prompt_text.grid(
-            row=9,
+            row=11,
             column=1,
             columnspan=2,
             sticky="nsew",
@@ -1514,7 +1555,7 @@ class SettingsWindow:
             padding=8,
         )
         placeholder_frame.grid(
-            row=10,
+            row=12,
             column=0,
             columnspan=3,
             sticky="ew",
@@ -1582,7 +1623,7 @@ class SettingsWindow:
 
         footer = ttk.Frame(tab)
         footer.grid(
-            row=11,
+            row=13,
             column=0,
             columnspan=3,
             sticky="ew",
@@ -1728,6 +1769,7 @@ class SettingsWindow:
             ).strip(),
             text_value(self._command_text),
             text_value(self._environment_text),
+            text_value(self._system_prompt_text),
             text_value(self._prompt_text),
         )
 
@@ -2888,6 +2930,10 @@ class SettingsWindow:
                 environment_to_text(preset.environment) if preset else "",
             ),
             (
+                self._system_prompt_text,
+                preset.system_prompt if preset else "",
+            ),
+            (
                 self._prompt_text,
                 preset.prompt_template if preset else "{{transcript}}",
             ),
@@ -2944,6 +2990,11 @@ class SettingsWindow:
             timeout_sec=timeout_sec,
             data_destination=str(
                 self._vars["postprocessor.destination"].get()
+            ),
+            system_prompt=(
+                self._system_prompt_text.get("1.0", "end").strip()
+                if self._system_prompt_text is not None
+                else ""
             ),
             prompt_template=(
                 self._prompt_text.get("1.0", "end").strip()

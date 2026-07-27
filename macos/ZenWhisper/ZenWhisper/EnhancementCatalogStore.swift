@@ -17,6 +17,7 @@ private struct RawPostprocessorDocument {
 final class EnhancementCatalogStore {
     private static let supportedPlaceholders: Set<String> = [
         "prompt",
+        "system_prompt_file",
         "transcript",
         "context",
         "terms",
@@ -50,6 +51,7 @@ final class EnhancementCatalogStore {
         "input_mode",
         "data_destination",
         "timeout_sec",
+        "system_prompt",
         "prompt_template",
         "environment",
         "destination_review_revision",
@@ -947,6 +949,18 @@ final class EnhancementCatalogStore {
                     local["environment"] = .object([:])
                 }
             }
+            if commandDefinitionChanged,
+               local["system_prompt"] == nil {
+                let effectiveArguments = local["arguments"]?.arrayValue
+                    ?? bundled?["arguments"]?.arrayValue
+                    ?? []
+                let usesSystemPromptFile = effectiveArguments.contains {
+                    $0.stringValue?.contains("{{system_prompt_file}}") == true
+                }
+                if !usesSystemPromptFile {
+                    local["system_prompt"] = .string("")
+                }
+            }
             if bundled != nil,
                commandDefinitionChanged,
                local["data_destination"] == nil {
@@ -1047,6 +1061,15 @@ final class EnhancementCatalogStore {
         guard let promptTemplate = raw["prompt_template"]?.stringValue else {
             throw EnhancementValidationFailure.invalidField("prompt_template")
         }
+        let systemPrompt: String
+        if let value = raw["system_prompt"] {
+            guard let parsed = value.stringValue else {
+                throw EnhancementValidationFailure.invalidField("system_prompt")
+            }
+            systemPrompt = parsed
+        } else {
+            systemPrompt = ""
+        }
         let environment = try stringDictionary(
             raw["environment"],
             field: "environment"
@@ -1075,6 +1098,7 @@ final class EnhancementCatalogStore {
                 inputMode: inputMode,
                 destination: destination,
                 timeoutSeconds: timeoutSeconds,
+                systemPrompt: systemPrompt,
                 promptTemplate: promptTemplate,
                 environment: environment,
                 destinationReviewRevision: destinationReviewRevision,
@@ -1121,10 +1145,16 @@ final class EnhancementCatalogStore {
               !containsNUL(preset.promptTemplate) else {
             throw EnhancementValidationFailure.invalidField("prompt_template")
         }
+        guard hasAcceptableStringSize(preset.systemPrompt),
+              !containsNUL(preset.systemPrompt),
+              !containsTemplateSyntax(preset.systemPrompt) else {
+            throw EnhancementValidationFailure.invalidField("system_prompt")
+        }
         let promptPlaceholders = Set(placeholders(in: preset.promptTemplate))
         guard !containsUnknownPlaceholders(preset.promptTemplate),
               promptPlaceholders.isSubset(of: supportedPlaceholders),
-              promptPlaceholders.contains("transcript") else {
+              promptPlaceholders.contains("transcript"),
+              !promptPlaceholders.contains("system_prompt_file") else {
             throw EnhancementValidationFailure.invalidField("prompt_template")
         }
         guard preset.arguments.count
@@ -1139,9 +1169,13 @@ final class EnhancementCatalogStore {
               argumentPlaceholders.isSubset(of: supportedPlaceholders) else {
             throw EnhancementValidationFailure.invalidField("arguments")
         }
+        guard preset.systemPrompt.isEmpty
+                != argumentPlaceholders.contains("system_prompt_file") else {
+            throw EnhancementValidationFailure.invalidField("system_prompt")
+        }
         switch preset.inputMode {
         case .stdin:
-            guard argumentPlaceholders.isEmpty else {
+            guard argumentPlaceholders.subtracting(["system_prompt_file"]).isEmpty else {
                 throw EnhancementValidationFailure.invalidField("arguments")
             }
         case .argument:
@@ -1209,6 +1243,7 @@ final class EnhancementCatalogStore {
             inputMode: preset.inputMode,
             destination: preset.destination,
             timeoutSeconds: preset.timeoutSeconds,
+            systemPrompt: preset.systemPrompt,
             promptTemplate: preset.promptTemplate,
             environment: preset.environment,
             destinationReviewRevision: preset.destinationReviewRevision,
@@ -1240,6 +1275,7 @@ final class EnhancementCatalogStore {
         raw["input_mode"] = .string(preset.inputMode.rawValue)
         raw["data_destination"] = .string(preset.destination.rawValue)
         raw["timeout_sec"] = .number(preset.timeoutSeconds)
+        raw["system_prompt"] = .string(preset.systemPrompt)
         raw["prompt_template"] = .string(preset.promptTemplate)
         raw["environment"] = .object(
             preset.environment.mapValues(JSONValue.string)

@@ -54,6 +54,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         static let preflightFailureMessage =
             "postprocessorEditor.preflightFailureMessage"
         static let environment = "postprocessorEditor.environment"
+        static let systemPrompt = "postprocessorEditor.systemPrompt"
         static let promptTemplate = "postprocessorEditor.promptTemplate"
         static let securityHelp = "postprocessorEditor.securityHelp"
         static let message = "postprocessorEditor.message"
@@ -80,6 +81,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         let preflightArgumentsJSON: String
         let preflightFailureMessage: String
         let environmentJSON: String
+        let systemPrompt: String
         let promptTemplate: String
     }
 
@@ -123,6 +125,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
     private let preflightArgumentsTextView = NSTextView()
     private let preflightFailureMessageField = NSTextField()
     private let environmentTextView = NSTextView()
+    private let systemPromptTextView = NSTextView()
     private let promptTemplateTextView = NSTextView()
     private let messageLabel = NSTextField(wrappingLabelWithString: "")
     private let cancelButton = NSButton()
@@ -259,6 +262,12 @@ final class PostprocessorEditorWindowController: NSWindowController,
             environmentTextView,
             identifier: AccessibilityIdentifier.environment,
             label: "Environment as a JSON string object"
+        )
+        configureTextView(
+            systemPromptTextView,
+            identifier: AccessibilityIdentifier.systemPrompt,
+            label: "Replacement system prompt",
+            monospaced: false
         )
         configureTextView(
             promptTemplateTextView,
@@ -414,6 +423,10 @@ final class PostprocessorEditorWindowController: NSWindowController,
             environmentTextView,
             minimumHeight: 88
         )
+        let systemPromptScroll = makeTextScrollView(
+            systemPromptTextView,
+            minimumHeight: 150
+        )
         let promptScroll = makeTextScrollView(
             promptTemplateTextView,
             minimumHeight: 180
@@ -422,6 +435,12 @@ final class PostprocessorEditorWindowController: NSWindowController,
         let environmentHelp = makeHelpLabel(
             "Enter a JSON object whose keys and values are strings, for example "
                 + "{\"OLLAMA_HOST\":\"127.0.0.1:11434\"}."
+        )
+        let systemPromptHelp = makeHelpLabel(
+            "Optional replacement for the CLI's built-in system prompt. When "
+                + "set, add {{system_prompt_file}} to the argument that accepts "
+                + "a system-prompt file. ZenWhisper writes it to a private "
+                + "per-run temporary file. Placeholders are not allowed here."
         )
         let promptHelp = makeHelpLabel(
             "The prompt must include {{transcript}}. Supported placeholders: "
@@ -473,6 +492,14 @@ final class PostprocessorEditorWindowController: NSWindowController,
             makeLabeledRow(
                 title: "Environment (JSON):",
                 control: makeVerticalGroup(environmentScroll, environmentHelp),
+                alignment: .top
+            ),
+            makeLabeledRow(
+                title: "System prompt:",
+                control: makeVerticalGroup(
+                    systemPromptScroll,
+                    systemPromptHelp
+                ),
                 alignment: .top
             ),
             makeLabeledRow(
@@ -651,6 +678,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         preflightFailureMessageField.stringValue =
             preset.preflightFailureMessage
         environmentTextView.string = Self.formattedJSON(preset.environment)
+        systemPromptTextView.string = preset.systemPrompt
         promptTemplateTextView.string = preset.promptTemplate
         idField.isEnabled = !isExistingPreset
         refreshArgumentsHelp()
@@ -899,6 +927,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             preflightArgumentsJSON: preflightArgumentsTextView.string,
             preflightFailureMessage: preflightFailureMessageField.stringValue,
             environmentJSON: environmentTextView.string,
+            systemPrompt: systemPromptTextView.string,
             promptTemplate: promptTemplateTextView.string
         )
     }
@@ -984,7 +1013,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         guard !executable.isEmpty else {
             throw DraftValidationError(message: "Enter an executable.")
         }
-        guard !executable.contains("{{") else {
+        guard !executable.contains("{{"), !executable.contains("}}") else {
             throw DraftValidationError(
                 message: "The executable cannot contain placeholders."
             )
@@ -1053,11 +1082,35 @@ final class PostprocessorEditorWindowController: NSWindowController,
                 message: "The prompt template must contain {{transcript}}."
             )
         }
+        let systemPrompt = systemPromptTextView.string
+        guard !systemPrompt.contains("{{"), !systemPrompt.contains("}}") else {
+            throw DraftValidationError(
+                message: "The system prompt cannot contain placeholders."
+            )
+        }
+        let hasSystemPromptFile = arguments.contains {
+            $0.contains("{{system_prompt_file}}")
+        }
+        guard systemPrompt.isEmpty != hasSystemPromptFile else {
+            throw DraftValidationError(
+                message: "Set both the system prompt and "
+                    + "{{system_prompt_file}} argument, or leave both empty."
+            )
+        }
         switch inputMode {
         case .stdin:
-            guard arguments.allSatisfy({ !$0.contains("{{") }) else {
+            guard arguments.allSatisfy({
+                let withoutSystemPromptFile = $0.replacingOccurrences(
+                    of: "{{system_prompt_file}}",
+                    with: ""
+                )
+                return !withoutSystemPromptFile.contains("{{")
+                    && !withoutSystemPromptFile.contains("}}")
+            }) else {
                 throw DraftValidationError(
-                    message: "stdin arguments must be static. Put placeholders in the prompt template."
+                    message: "stdin arguments may only use "
+                        + "{{system_prompt_file}}. Put transcript placeholders "
+                        + "in the prompt template."
                 )
             }
         case .argument:
@@ -1089,6 +1142,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             inputMode: inputMode,
             destination: destination,
             timeoutSeconds: timeout,
+            systemPrompt: systemPrompt,
             promptTemplate: promptTemplate,
             environment: environment,
             destinationReviewRevision:
@@ -1239,6 +1293,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             argumentsTextView,
             preflightArgumentsTextView,
             environmentTextView,
+            systemPromptTextView,
             promptTemplateTextView
         ] {
             textView.isEditable = enabled

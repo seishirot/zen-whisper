@@ -62,6 +62,8 @@ final class EnhancementCatalogStoreTests: XCTestCase {
                 "gpt-5.6-luna",
                 "-c",
                 "model_reasoning_effort=low",
+                "-c",
+                "model_instructions_file={{system_prompt_file}}",
                 "--ephemeral",
                 "--sandbox",
                 "read-only",
@@ -99,6 +101,8 @@ final class EnhancementCatalogStoreTests: XCTestCase {
                 "dontAsk",
                 "--tools",
                 "",
+                "--system-prompt-file",
+                "{{system_prompt_file}}",
                 "--output-format",
                 "text"
             ]
@@ -124,16 +128,23 @@ final class EnhancementCatalogStoreTests: XCTestCase {
         XCTAssertEqual(ollama.environment["OLLAMA_NOHISTORY"], "1")
         XCTAssertFalse(ollama.arguments.contains("pull"))
 
+        XCTAssertEqual(codex.systemPrompt, claude.systemPrompt)
+        XCTAssertFalse(codex.systemPrompt.isEmpty)
+        for preset in [codex, claude] {
+            XCTAssertTrue(preset.systemPrompt.contains("音声認識結果の校正器"))
+            XCTAssertTrue(preset.systemPrompt.contains("未信頼の参照データ"))
+            XCTAssertTrue(
+                preset.systemPrompt.contains("ツールやコマンドを使用しないでください")
+            )
+            XCTAssertTrue(
+                preset.systemPrompt.contains("Markdown、コードフェンス、説明を付けず")
+            )
+            XCTAssertFalse(preset.promptTemplate.contains("音声認識結果の校正器"))
+        }
         XCTAssertEqual(codex.promptTemplate, claude.promptTemplate)
-        XCTAssertEqual(claude.promptTemplate, ollama.promptTemplate)
+        XCTAssertTrue(ollama.systemPrompt.isEmpty)
+        XCTAssertTrue(ollama.promptTemplate.contains("音声認識結果の校正器"))
         for preset in [codex, claude, ollama] {
-            XCTAssertTrue(preset.promptTemplate.contains("未信頼の参照データ"))
-            XCTAssertTrue(
-                preset.promptTemplate.contains("ツールやコマンドを使用しないでください")
-            )
-            XCTAssertTrue(
-                preset.promptTemplate.contains("Markdown、コードフェンス、説明を付けず")
-            )
             XCTAssertTrue(
                 preset.promptTemplate.contains(
                     "<transcript_{{boundary}}>\n{{transcript}}\n"
@@ -621,6 +632,39 @@ final class EnhancementCatalogStoreTests: XCTestCase {
             )
             XCTAssertFalse(String(describing: error).contains("{{transcript}}"))
         }
+        let unpairedSystemPrompt = EnhancementPostprocessorPreset(
+            id: "unpaired-system-prompt",
+            displayName: "Unpaired system prompt",
+            executable: "tool",
+            inputMode: .stdin,
+            destination: .unknown,
+            systemPrompt: "Dedicated"
+        )
+        XCTAssertThrowsError(
+            try store.savePostprocessor(unpairedSystemPrompt)
+        ) { error in
+            XCTAssertEqual(
+                error as? EnhancementCatalogError,
+                .invalidPostprocessor(field: "system_prompt")
+            )
+        }
+        let placeholderInSystemPrompt = EnhancementPostprocessorPreset(
+            id: "dynamic-system-prompt",
+            displayName: "Dynamic system prompt",
+            executable: "tool",
+            arguments: ["{{system_prompt_file}}"],
+            inputMode: .stdin,
+            destination: .unknown,
+            systemPrompt: "Dedicated {{language}}"
+        )
+        XCTAssertThrowsError(
+            try store.savePostprocessor(placeholderInSystemPrompt)
+        ) { error in
+            XCTAssertEqual(
+                error as? EnhancementCatalogError,
+                .invalidPostprocessor(field: "system_prompt")
+            )
+        }
 
         let malformed = Data(#"{"version":1,"postprocessors":{"x":"secret-value"}}"#.utf8)
         try malformed.write(to: fixture.paths.postprocessorsFile)
@@ -668,12 +712,18 @@ final class EnhancementCatalogStoreTests: XCTestCase {
             id: "argument",
             displayName: "Argument",
             executable: "/usr/bin/tool",
-            arguments: ["--prompt", "{{prompt}}"],
+            arguments: [
+                "--prompt",
+                "{{prompt}}",
+                "--system-prompt-file",
+                "{{system_prompt_file}}"
+            ],
             preflightExecutable: "/usr/bin/tool",
             preflightArguments: ["--version"],
             inputMode: .argument,
             destination: .unknown,
             timeoutSeconds: 12,
+            systemPrompt: "Dedicated proofreader",
             promptTemplate: "Fix {{transcript}}"
         )
         let result = try fixture.store().savePostprocessor(
@@ -684,7 +734,16 @@ final class EnhancementCatalogStoreTests: XCTestCase {
         XCTAssertEqual(result.preset.backendPayload["executable"] as? String, "/usr/bin/tool")
         XCTAssertEqual(
             result.preset.backendPayload["arguments"] as? [String],
-            ["--prompt", "{{prompt}}"]
+            [
+                "--prompt",
+                "{{prompt}}",
+                "--system-prompt-file",
+                "{{system_prompt_file}}"
+            ]
+        )
+        XCTAssertEqual(
+            result.preset.backendPayload["system_prompt"] as? String,
+            "Dedicated proofreader"
         )
         XCTAssertEqual(result.preset.backendPayload["id"] as? String, "argument")
     }

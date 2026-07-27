@@ -334,13 +334,21 @@ final class SettingsEnhancementUITests: XCTestCase {
             id: "remote",
             displayName: "Remote Tool",
             executable: "remote-tool",
-            arguments: ["--model", "small", "--empty", ""],
+            arguments: [
+                "--model",
+                "small",
+                "--empty",
+                "",
+                "--system-prompt-file",
+                "{{system_prompt_file}}"
+            ],
             preflightExecutable: "remote-tool",
             preflightArguments: ["--version"],
             preflightFailureMessage: "Remote Tool is unavailable.",
             inputMode: .stdin,
             destination: .remote,
             timeoutSeconds: 30,
+            systemPrompt: "Original proofreader",
             promptTemplate: "Fix {{transcript}}",
             environment: ["REMOTE_MODE": "safe"]
         )
@@ -376,6 +384,11 @@ final class SettingsEnhancementUITests: XCTestCase {
                       .AccessibilityIdentifier.environment,
                   in: contentView
               ) as? NSTextView,
+              let systemPrompt = findView(
+                  identifier: PostprocessorEditorWindowController
+                      .AccessibilityIdentifier.systemPrompt,
+                  in: contentView
+              ) as? NSTextView,
               let save = findView(
                   identifier: PostprocessorEditorWindowController
                       .AccessibilityIdentifier.save,
@@ -390,7 +403,9 @@ final class SettingsEnhancementUITests: XCTestCase {
           "--model",
           "large",
           "--empty",
-          ""
+          "",
+          "--system-prompt-file",
+          "{{system_prompt_file}}"
         ]
         """
         controller.textDidChange(
@@ -405,19 +420,34 @@ final class SettingsEnhancementUITests: XCTestCase {
         controller.textDidChange(
             Notification(name: NSText.didChangeNotification, object: environment)
         )
+        systemPrompt.string = "Dedicated voice proofreader"
+        controller.textDidChange(
+            Notification(
+                name: NSText.didChangeNotification,
+                object: systemPrompt
+            )
+        )
 
         XCTAssertTrue(save.isEnabled)
         save.performClick(nil)
 
         XCTAssertEqual(
             savedPreset?.arguments,
-            ["--model", "large", "--empty", ""]
+            [
+                "--model",
+                "large",
+                "--empty",
+                "",
+                "--system-prompt-file",
+                "{{system_prompt_file}}"
+            ]
         )
         XCTAssertEqual(
             savedPreset?.environment,
             ["REMOTE_MODE": "strict", "TRACE": "0"]
         )
         XCTAssertEqual(savedPreset?.id, original.id)
+        XCTAssertEqual(savedPreset?.systemPrompt, "Dedicated voice proofreader")
         XCTAssertEqual(wasExplicitlyReclassified, true)
     }
 

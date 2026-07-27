@@ -40,13 +40,14 @@ def test_generator_translates_commands_and_skips_disabled_presets(tmp_path):
         """
 [postprocessors.example]
 display_name = "Example"
-command = 'cleaner --label "two words"'
+command = 'cleaner --label "two words" --system-prompt-file "{{system_prompt_file}}"'
 preflight_command = "cleaner --version"
 input_mode = "stdin"
 output_mode = "stdout"
 timeout_sec = 12
 data_destination = "local"
 environment = { MODE = "strict" }
+system_prompt = "Dedicated proofreader"
 prompt_template = "<transcript>\\n{{transcript}}\\n</transcript>"
 
 [postprocessors.disabled]
@@ -65,10 +66,16 @@ prompt_template = "{{transcript}}"
     assert set(catalog["postprocessors"]) == {"example"}
     preset = catalog["postprocessors"]["example"]
     assert preset["executable"] == "cleaner"
-    assert preset["arguments"] == ["--label", "two words"]
+    assert preset["arguments"] == [
+        "--label",
+        "two words",
+        "--system-prompt-file",
+        "{{system_prompt_file}}",
+    ]
     assert preset["preflight_executable"] == "cleaner"
     assert preset["preflight_arguments"] == ["--version"]
     assert preset["environment"] == {"MODE": "strict"}
+    assert preset["system_prompt"] == "Dedicated proofreader"
     assert preset["timeout_sec"] == 12
     if os.name != "nt":
         assert stat.S_IMODE(destination.stat().st_mode) == 0o644
@@ -162,6 +169,36 @@ environment = {"BAD=KEY" = "value"}
 prompt_template = "{{transcript}}"
 """,
             "environment key",
+        ),
+        (
+            """
+command = "cleaner"
+system_prompt = "Dedicated"
+prompt_template = "{{transcript}}"
+""",
+            "{{system_prompt_file}}",
+        ),
+        (
+            """
+command = 'cleaner "{{system_prompt_file}}"'
+prompt_template = "{{transcript}}"
+""",
+            "system_prompt",
+        ),
+        (
+            """
+command = 'cleaner "{{system_prompt_file}}"'
+system_prompt = "Dedicated {{language}}"
+prompt_template = "{{transcript}}"
+""",
+            "system_prompt",
+        ),
+        (
+            """
+command = "cleaner"
+prompt_template = "{{system_prompt_file}} {{transcript}}"
+""",
+            "prompt_template",
         ),
     ],
 )

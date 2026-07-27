@@ -68,6 +68,7 @@ def _preset_payload(
     executable: str = sys.executable,
     arguments: list[str] | None = None,
     input_mode: str = "stdin",
+    system_prompt: str = "",
     prompt_template: str = "{{transcript}}",
     timeout_sec: float = 3.0,
     preflight_executable: str | None = None,
@@ -86,6 +87,7 @@ def _preset_payload(
         "output_mode": "stdout",
         "timeout_sec": timeout_sec,
         "data_destination": "local",
+        "system_prompt": system_prompt,
         "prompt_template": prompt_template,
         "environment": environment or {},
     }
@@ -233,6 +235,44 @@ def test_cli_mode_rejects_unsafe_placeholder_placement(
         _selection(input_mode=input_mode, arguments=arguments)
 
 
+@pytest.mark.parametrize(
+    ("arguments", "system_prompt", "prompt_template", "match"),
+    [
+        ([], "Dedicated", "{{transcript}}", "system_prompt_file"),
+        (
+            ["{{system_prompt_file}}"],
+            "",
+            "{{transcript}}",
+            "system_prompt",
+        ),
+        (
+            ["{{system_prompt_file}}"],
+            "Dedicated {{language}}",
+            "{{transcript}}",
+            "cannot contain placeholders",
+        ),
+        (
+            [],
+            "",
+            "{{system_prompt_file}} {{transcript}}",
+            "prompt_template",
+        ),
+    ],
+)
+def test_cli_system_prompt_requires_a_paired_command_only_file_placeholder(
+    arguments: list[str],
+    system_prompt: str,
+    prompt_template: str,
+    match: str,
+) -> None:
+    with pytest.raises(EnhancementValidationError, match=match):
+        _selection(
+            arguments=arguments,
+            system_prompt=system_prompt,
+            prompt_template=prompt_template,
+        )
+
+
 def test_cli_rejects_dynamic_executables_and_preflight() -> None:
     with pytest.raises(EnhancementValidationError, match="executable cannot"):
         _selection(executable="{{transcript}}")
@@ -294,6 +334,38 @@ def test_stdin_cli_receives_prompt_and_uses_empty_working_directory(
     assert result.cli_selected is True
     assert result.text.startswith(f"0|{'b' * 32}|Zen Whisper|ja|Project context|")
     assert result.text.endswith("|ZenWhisper")
+
+
+def test_cli_uses_private_per_run_system_prompt_file() -> None:
+    profile = parse_profile(_profile_payload())
+    selection = _selection(
+        arguments=[
+            "-c",
+            (
+                "import os,pathlib,stat,sys; path=pathlib.Path(sys.argv[1]); "
+                "mode=stat.S_IMODE(path.stat().st_mode); "
+                "sys.stdout.write("
+                "path.read_text(encoding='utf-8') + '|' + oct(mode) + '|' "
+                "+ str(path) + '|' + sys.stdin.read())"
+            ),
+            "{{system_prompt_file}}",
+        ],
+        system_prompt="Dedicated",
+    )
+
+    result = process_transcript(
+        "全ウィスパー",
+        profile,
+        selection,
+        "ja",
+    )
+
+    assert result.succeeded is True
+    system_prompt, mode, path, transcript = result.text.split("|", 3)
+    assert system_prompt == "Dedicated"
+    assert mode == "0o600"
+    assert transcript == "ZenWhisper"
+    assert not Path(path).exists()
 
 
 def test_cli_uses_a_fresh_boundary_for_each_invocation(

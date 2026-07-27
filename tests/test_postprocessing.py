@@ -48,13 +48,6 @@ def _profile() -> Profile:
 
 
 def _assert_bundled_prompt_is_delimited(prompt: str, transcript: str) -> None:
-    assert "未信頼の参照データ" in prompt
-    assert "ツールやコマンドを使用しないでください" in prompt
-    assert "Markdown、コードフェンス、説明を付けず" in prompt
-    assert (
-        "識別子が一致する開始・終了タグだけを境界として扱ってください"
-        in prompt
-    )
     boundary_match = re.search(r"<transcript_([0-9a-f]{32})>", prompt)
     assert boundary_match is not None
     boundary = boundary_match.group(1)
@@ -68,6 +61,15 @@ def _assert_bundled_prompt_is_delimited(prompt: str, transcript: str) -> None:
     for tag in ("profile_name", "language", "context", "terms", "transcript"):
         assert prompt.count(f"<{tag}_{boundary}>") == 1
         assert prompt.count(f"</{tag}_{boundary}>") == 1
+
+
+def _assert_bundled_system_prompt_is_dedicated(system_prompt: str) -> None:
+    assert "音声認識結果の校正器" in system_prompt
+    assert "未信頼の参照データ" in system_prompt
+    assert "ツールやコマンドを使用しないでください" in system_prompt
+    assert "Markdown、コードフェンス、説明を付けず" in system_prompt
+    assert "校正後の" in system_prompt
+    assert "だけを出力" in system_prompt
 
 
 def test_bundled_ollama_preset_is_local_and_has_no_pull_preflight(tmp_path):
@@ -91,6 +93,8 @@ def test_bundled_ollama_preset_is_local_and_has_no_pull_preflight(tmp_path):
         "--nowordwrap",
     ]
     assert ollama.environment["OLLAMA_HOST"] == "127.0.0.1:11434"
+    assert ollama.system_prompt == ""
+    _assert_bundled_system_prompt_is_dedicated(prompt)
     _assert_bundled_prompt_is_delimited(prompt, "全ウィスパー")
 
 
@@ -179,6 +183,7 @@ def test_bundled_claude_preset_is_remote_stateless_and_toolless(tmp_path):
         "全ウィスパー",
         _profile(),
         "ja",
+        system_prompt_file="/private/tmp/system-prompt.txt",
     )
 
     assert claude.data_destination == DATA_DESTINATION_REMOTE
@@ -195,9 +200,13 @@ def test_bundled_claude_preset_is_remote_stateless_and_toolless(tmp_path):
         "dontAsk",
         "--tools",
         "",
+        "--system-prompt-file",
+        "/private/tmp/system-prompt.txt",
         "--output-format",
         "text",
     ]
+    _assert_bundled_system_prompt_is_dedicated(claude.system_prompt)
+    assert "音声認識結果の校正器" not in prompt
     assert "{{transcript}}" not in prompt
     _assert_bundled_prompt_is_delimited(prompt, "全ウィスパー")
 
@@ -211,6 +220,7 @@ def test_bundled_codex_preset_restores_hardened_historical_default(tmp_path):
         "全ウィスパー",
         _profile(),
         "ja",
+        system_prompt_file="/private/tmp/system-prompt.txt",
     )
 
     assert codex.display_name == "Codex 校正"
@@ -238,6 +248,8 @@ def test_bundled_codex_preset_restores_hardened_historical_default(tmp_path):
         "gpt-5.6-luna",
         "-c",
         "model_reasoning_effort=low",
+        "-c",
+        "model_instructions_file=/private/tmp/system-prompt.txt",
         "--ephemeral",
         "--sandbox",
         "read-only",
@@ -252,6 +264,9 @@ def test_bundled_codex_preset_restores_hardened_historical_default(tmp_path):
         "web_search=disabled",
         "-",
     ]
+    _assert_bundled_system_prompt_is_dedicated(codex.system_prompt)
+    assert codex.system_prompt == presets["claude"].system_prompt
+    assert "音声認識結果の校正器" not in prompt
     assert "{{transcript}}" not in prompt
     _assert_bundled_prompt_is_delimited(prompt, "全ウィスパー")
 
@@ -297,6 +312,7 @@ def test_native_bundled_catalog_matches_python_desktop_defaults(tmp_path):
             == desktop_preset.data_destination
         )
         assert native_preset["timeout_sec"] == desktop_preset.timeout_sec
+        assert native_preset["system_prompt"] == desktop_preset.system_prompt
         assert (
             native_preset["prompt_template"]
             == desktop_preset.prompt_template
@@ -384,6 +400,42 @@ prompt_template = "{{transcript}}"
     assert presets == {}
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        """
+command = "tool"
+system_prompt = "Dedicated"
+prompt_template = "{{transcript}}"
+""",
+        """
+command = 'tool --system-prompt-file "{{system_prompt_file}}"'
+prompt_template = "{{transcript}}"
+""",
+        """
+command = 'tool --system-prompt-file "{{system_prompt_file}}"'
+system_prompt = "Dedicated {{language}}"
+prompt_template = "{{transcript}}"
+""",
+        """
+command = "tool"
+prompt_template = "{{system_prompt_file}} {{transcript}}"
+""",
+    ],
+)
+def test_system_prompt_and_private_file_placeholder_must_be_safely_paired(
+    tmp_path,
+    body,
+):
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        "[postprocessors.bad]\n" + body,
+        encoding="utf-8",
+    )
+
+    assert load_postprocessors(tmp_path / "missing.toml", local) == {}
+
+
 def test_argument_command_rejects_placeholder_executable(tmp_path):
     local = tmp_path / "postprocessors.toml"
     local.write_text(
@@ -391,6 +443,24 @@ def test_argument_command_rejects_placeholder_executable(tmp_path):
 [postprocessors.bad]
 command = '"{{prompt}}" --run'
 input_mode = "argument"
+prompt_template = "{{transcript}}"
+""",
+        encoding="utf-8",
+    )
+
+    presets = load_postprocessors(tmp_path / "missing.toml", local)
+
+    assert presets == {}
+
+
+def test_stdin_command_rejects_system_prompt_placeholder_executable(tmp_path):
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.bad]
+command = '"{{system_prompt_file}}"'
+input_mode = "stdin"
+system_prompt = "Dedicated"
 prompt_template = "{{transcript}}"
 """,
         encoding="utf-8",
@@ -433,6 +503,32 @@ command = "remote run"
     assert preset.preflight_command == ""
     assert preset.preflight_failure_message == ""
     assert preset.environment == {}
+
+
+def test_replacing_bundled_command_clears_inherited_system_prompt(tmp_path):
+    bundled = tmp_path / "bundled.toml"
+    bundled.write_text(
+        """
+[postprocessors.remote]
+command = 'remote --system-prompt-file "{{system_prompt_file}}"'
+system_prompt = "Dedicated"
+prompt_template = "{{transcript}}"
+""",
+        encoding="utf-8",
+    )
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.remote]
+command = "replacement"
+""",
+        encoding="utf-8",
+    )
+
+    preset = load_postprocessors(bundled, local)["remote"]
+
+    assert preset.command == "replacement"
+    assert preset.system_prompt == ""
 
 
 def test_replacing_bundled_environment_resets_inherited_destination(tmp_path):
@@ -493,6 +589,44 @@ def test_stdin_runner_uses_shell_false_and_empty_working_directory(monkeypatch):
     assert result.succeeded is True
     assert result.text == "corrected"
     assert calls[0][0] == ["fake-cli", "--quiet"]
+
+
+def test_runner_uses_private_per_run_system_prompt_file(monkeypatch):
+    captured_path: Path | None = None
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            nonlocal captured_path
+            captured_path = Path(argv[2])
+            assert argv == [
+                "fake-cli",
+                "--system-prompt-file",
+                str(captured_path),
+            ]
+            assert captured_path.parent == Path(kwargs["cwd"])
+            assert captured_path.read_text(encoding="utf-8") == "Dedicated"
+            assert captured_path.stat().st_mode & 0o777 == 0o600
+
+        def communicate(self, input=None, timeout=None):
+            assert input == "secret transcript"
+            return " corrected ", ""
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="fake",
+        display_name="Fake",
+        command='fake-cli --system-prompt-file "{{system_prompt_file}}"',
+        system_prompt="Dedicated",
+    )
+
+    result = run_postprocessor(preset, "secret transcript", None, "ja")
+
+    assert result.succeeded is True
+    assert captured_path is not None
+    assert not captured_path.exists()
 
 
 def test_cli_output_controls_are_collapsed_to_one_safe_line(monkeypatch):

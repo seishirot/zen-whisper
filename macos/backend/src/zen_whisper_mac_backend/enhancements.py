@@ -51,6 +51,7 @@ _PROCESS_CLEANUP_TIMEOUT_SEC = 1.0
 _ALLOWED_PLACEHOLDERS = frozenset(
     {
         "prompt",
+        "system_prompt_file",
         "transcript",
         "context",
         "terms",
@@ -77,6 +78,7 @@ _PRESET_FIELDS = frozenset(
         "output_mode",
         "timeout_sec",
         "data_destination",
+        "system_prompt",
         "prompt_template",
         "environment",
     }
@@ -131,6 +133,7 @@ class PostprocessorPreset:
     output_mode: Literal["stdout"]
     timeout_sec: float
     data_destination: Literal["local", "remote", "unknown"]
+    system_prompt: str
     prompt_template: str
     environment: tuple[tuple[str, str], ...]
 
@@ -445,6 +448,7 @@ def _parse_preset(value: object) -> PostprocessorPreset:
     required_fields = _PRESET_FIELDS - {
         "preflight_executable",
         "data_destination",
+        "system_prompt",
     }
     _require_fields(raw, required_fields, "postprocessor.preset")
 
@@ -519,6 +523,9 @@ def _parse_preset(value: object) -> PostprocessorPreset:
     prompt_template = _string(
         raw["prompt_template"], "postprocessor.preset.prompt_template"
     )
+    system_prompt = _string(
+        raw.get("system_prompt", ""), "postprocessor.preset.system_prompt"
+    )
     environment = _environment(raw["environment"])
 
     _validate_no_nul(executable, "postprocessor.preset.executable")
@@ -534,8 +541,19 @@ def _parse_preset(value: object) -> PostprocessorPreset:
             argument,
             f"postprocessor.preset.preflight_arguments[{index}]",
         )
+    _validate_no_nul(system_prompt, "postprocessor.preset.system_prompt")
 
+    _validate_template(system_prompt, "postprocessor.preset.system_prompt")
+    if _contains_placeholder(system_prompt):
+        raise EnhancementValidationError(
+            "postprocessor.preset.system_prompt cannot contain placeholders"
+        )
     _validate_template(prompt_template, "postprocessor.preset.prompt_template")
+    if "system_prompt_file" in _find_placeholders(prompt_template):
+        raise EnhancementValidationError(
+            "postprocessor.preset.prompt_template cannot contain "
+            "{{system_prompt_file}}"
+        )
     if "{{transcript}}" not in prompt_template:
         raise EnhancementValidationError(
             "postprocessor.preset.prompt_template must contain {{transcript}}"
@@ -555,9 +573,17 @@ def _parse_preset(value: object) -> PostprocessorPreset:
     )
     for index, argument in enumerate(arguments):
         _validate_template(argument, f"postprocessor.preset.arguments[{index}]")
-    if input_mode == "stdin" and invocation_placeholders:
+    if bool(system_prompt) != ("system_prompt_file" in invocation_placeholders):
         raise EnhancementValidationError(
-            "postprocessor.preset stdin arguments cannot contain placeholders"
+            "postprocessor.preset.system_prompt and {{system_prompt_file}} "
+            "must either both be configured or both be omitted"
+        )
+    if input_mode == "stdin" and invocation_placeholders - {
+        "system_prompt_file"
+    }:
+        raise EnhancementValidationError(
+            "postprocessor.preset stdin arguments can only contain "
+            "{{system_prompt_file}}"
         )
     if input_mode == "argument" and "prompt" not in invocation_placeholders:
         raise EnhancementValidationError(
@@ -576,6 +602,7 @@ def _parse_preset(value: object) -> PostprocessorPreset:
         output_mode=output_mode,  # type: ignore[arg-type]
         timeout_sec=timeout_sec,
         data_destination=data_destination,  # type: ignore[arg-type]
+        system_prompt=system_prompt,
         prompt_template=prompt_template,
         environment=environment,
     )
@@ -627,7 +654,6 @@ def _run_postprocessor_impl(
     values = _template_values(transcript, profile, language)
     prompt = _render(preset.prompt_template, values)
     values["prompt"] = prompt
-    arguments = tuple(_render(argument, values) for argument in preset.arguments)
     environment = os.environ.copy()
     cli_path = os.environ.get("ZEN_WHISPER_CLI_PATH")
     environment["PATH"] = cli_path or os.environ.get("PATH") or os.defpath
@@ -635,6 +661,14 @@ def _run_postprocessor_impl(
     environment.update(dict(preset.environment))
 
     with tempfile.TemporaryDirectory(prefix="zen_whisper_postprocess_") as temp_dir:
+        values["system_prompt_file"] = (
+            _write_system_prompt_file(temp_dir, preset.system_prompt)
+            if preset.system_prompt
+            else ""
+        )
+        arguments = tuple(
+            _render(argument, values) for argument in preset.arguments
+        )
         if preset.preflight_executable is not None:
             failure = _run_preflight(
                 preset,
@@ -940,7 +974,27 @@ def _template_values(
         "profile_name": profile.name if profile else "（なし）",
         "language": language,
         "boundary": secrets.token_hex(16),
+        "system_prompt_file": "",
     }
+
+
+def _write_system_prompt_file(temp_dir: str, system_prompt: str) -> str:
+    path = os.path.join(temp_dir, "system-prompt.txt")
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
+            file.write(system_prompt)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+    return path
 
 
 def _render(template: str, values: dict[str, str]) -> str:

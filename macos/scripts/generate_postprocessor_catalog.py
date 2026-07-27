@@ -34,12 +34,14 @@ ALLOWED_FIELDS = {
     "output_mode",
     "timeout_sec",
     "data_destination",
+    "system_prompt",
     "prompt_template",
     "environment",
     "enabled",
 }
 ALLOWED_PLACEHOLDERS = {
     "prompt",
+    "system_prompt_file",
     "transcript",
     "context",
     "terms",
@@ -147,6 +149,7 @@ def _validate_backend_payload(
         "output_mode": "stdout",
         "timeout_sec": preset["timeout_sec"],
         "data_destination": preset["data_destination"],
+        "system_prompt": preset["system_prompt"],
         "prompt_template": preset["prompt_template"],
         "environment": preset["environment"],
     }
@@ -201,6 +204,10 @@ def _native_preset(
     input_mode = _string_field(raw, "input_mode", "stdin")
     output_mode = _string_field(raw, "output_mode", "stdout")
     data_destination = _string_field(raw, "data_destination", "unknown")
+    system_prompt = _validate_string(
+        _string_field(raw, "system_prompt", ""),
+        "system_prompt",
+    )
     prompt_template = _validate_string(
         _string_field(raw, "prompt_template", "{{transcript}}"),
         "prompt_template",
@@ -251,11 +258,25 @@ def _native_preset(
 
     prompt_placeholders = _validate_placeholders(prompt_template)
     command_placeholders = _validate_placeholders(command_text)
+    if PLACEHOLDER_RE.search(system_prompt):
+        raise CatalogGenerationError(
+            "system_prompt ではプレースホルダーを使用できません"
+        )
+    if "system_prompt_file" in prompt_placeholders:
+        raise CatalogGenerationError(
+            "prompt_template では {{system_prompt_file}} を使用できません"
+        )
     if "transcript" not in prompt_placeholders:
         raise CatalogGenerationError("prompt_template には {{transcript}} が必要です")
-    if input_mode == "stdin" and command_placeholders:
+    if bool(system_prompt) != ("system_prompt_file" in command_placeholders):
         raise CatalogGenerationError(
-            "stdin モードでは command にプレースホルダーを使用できません"
+            "system_prompt と command の {{system_prompt_file}} は"
+            "両方を指定するか両方を省略してください"
+        )
+    if input_mode == "stdin" and command_placeholders - {"system_prompt_file"}:
+        raise CatalogGenerationError(
+            "stdin モードの command では {{system_prompt_file}} 以外の"
+            "プレースホルダーを使用できません"
         )
     if input_mode == "argument" and "prompt" not in command_placeholders:
         raise CatalogGenerationError(
@@ -320,6 +341,7 @@ def _native_preset(
         "input_mode": input_mode,
         "data_destination": data_destination,
         "timeout_sec": timeout,
+        "system_prompt": system_prompt,
         "prompt_template": prompt_template,
         "environment": dict(sorted(environment.items())),
     }

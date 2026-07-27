@@ -330,6 +330,7 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
     var inputMode: EnhancementPostprocessorInputMode
     var destination: EnhancementDataDestination
     var timeoutSeconds: Double
+    var systemPrompt: String
     var promptTemplate: String
     var environment: [String: String]
     var destinationReviewRevision: String?
@@ -346,6 +347,7 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
         inputMode: EnhancementPostprocessorInputMode = .stdin,
         destination: EnhancementDataDestination = .unknown,
         timeoutSeconds: Double = 30,
+        systemPrompt: String = "",
         promptTemplate: String = "{{transcript}}",
         environment: [String: String] = [:],
         destinationReviewRevision: String? = nil,
@@ -361,6 +363,7 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
         self.inputMode = inputMode
         self.destination = destination
         self.timeoutSeconds = timeoutSeconds
+        self.systemPrompt = systemPrompt
         self.promptTemplate = promptTemplate
         self.environment = environment
         let normalizedDestinationReviewRevision = destinationReviewRevision?
@@ -384,6 +387,7 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
             "output_mode": "stdout",
             "timeout_sec": timeoutSeconds,
             "data_destination": destination.rawValue,
+            "system_prompt": systemPrompt,
             "prompt_template": promptTemplate,
             "environment": environment
         ]
