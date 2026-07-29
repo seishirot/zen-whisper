@@ -22,6 +22,7 @@ enum ProcessEnvironment {
         environment["PYTHONNOUSERSITE"] = "1"
         environment["PYTHONSAFEPATH"] = "1"
         environment["PYTHONUNBUFFERED"] = "1"
+        environment["ZEN_WHISPER_CLI_PATH"] = cliExecutablePath()
         return environment
     }
 
@@ -48,6 +49,25 @@ enum ProcessEnvironment {
             "/usr/local/bin",
             "\(NSHomeDirectory())/.local/bin",
             "\(NSHomeDirectory())/.local/share/mise/bin"
+        ].joined(separator: ":")
+    }
+
+    static func cliExecutablePath(
+        homeDirectory: String = NSHomeDirectory()
+    ) -> String {
+        [
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+            "/opt/homebrew/bin",
+            "/opt/homebrew/sbin",
+            "/usr/local/bin",
+            "/usr/local/sbin",
+            "\(homeDirectory)/.local/bin",
+            "\(homeDirectory)/bin",
+            "\(homeDirectory)/.local/share/mise/shims",
+            "\(homeDirectory)/.local/share/mise/bin"
         ].joined(separator: ":")
     }
 }

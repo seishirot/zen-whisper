@@ -13,7 +13,10 @@ def test_processing_status_item_uses_animation_timer() -> None:
     assert "private var animationTimer: Timer?" in controller
     assert "Timer(timeInterval: 0.12" in controller
     assert "RunLoop.main.add(timer, forMode: .common)" in controller
-    assert "case .preloading, .transcribing, .repairingBackend:" in controller
+    assert (
+        "case .preloading, .transcribing, .postprocessing, "
+        ".repairingBackend:"
+    ) in controller
     assert "StatusIconFactory.image(for: currentState, animationFrame: frame)" in controller
 
 

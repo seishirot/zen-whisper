@@ -7,9 +7,11 @@ enum AppState: Equatable {
     case recording(elapsed: TimeInterval, voiceActive: Bool)
     case preloading(message: String)
     case transcribing
+    case postprocessing
     case copied(pasteDispatched: Bool, reason: String?)
     case copySkipped(String)
     case copyFailed(String)
+    case enhancementWarning(String)
     case modelUnavailable(String)
     case backendRepairRequired(String)
     case repairingBackend
@@ -32,6 +34,8 @@ enum AppState: Equatable {
             return "Loading"
         case .transcribing:
             return "Processing"
+        case .postprocessing:
+            return "Post-processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
                 if reason?.lowercased().contains("enter attempted") == true {
@@ -47,6 +51,8 @@ enum AppState: Equatable {
             return "Skipped: \(StatusText.copyOnlyReason(reason))"
         case .copyFailed:
             return "Copy failed"
+        case .enhancementWarning:
+            return "Fallback"
         case .modelUnavailable:
             return "Model"
         case .backendRepairRequired:
@@ -66,9 +72,10 @@ enum AppState: Equatable {
 
     var canStartRecording: Bool {
         switch self {
-        case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed, .microphoneError:
+        case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed,
+             .enhancementWarning, .microphoneError:
             return true
-        case .idle, .recording, .preloading, .transcribing, .modelUnavailable,
+        case .idle, .recording, .preloading, .transcribing, .postprocessing, .modelUnavailable,
              .backendRepairRequired, .repairingBackend, .hotkeyError, .appSignatureChanged, .error:
             return false
         }
@@ -79,6 +86,41 @@ enum AppState: Equatable {
             return true
         }
         return canStartRecording
+    }
+
+    var blocksSettingsChanges: Bool {
+        switch self {
+        case .recording, .preloading, .transcribing, .postprocessing, .repairingBackend:
+            return true
+        case .idle, .inputWaiting, .pasteUnavailable, .copied, .copySkipped,
+             .copyFailed, .enhancementWarning, .modelUnavailable, .backendRepairRequired,
+             .microphoneError, .hotkeyError, .appSignatureChanged, .error:
+            return false
+        }
+    }
+
+    var shouldRestoreAfterHotkeyRecovery: Bool {
+        switch self {
+        case .modelUnavailable, .backendRepairRequired, .microphoneError,
+             .appSignatureChanged, .error:
+            return true
+        case .idle, .inputWaiting, .pasteUnavailable, .recording, .preloading,
+             .transcribing, .postprocessing, .copied, .copySkipped, .copyFailed, .enhancementWarning,
+             .repairingBackend, .hotkeyError:
+            return false
+        }
+    }
+
+    var shouldRestoreAfterHotkeyRecoveryWithoutBackend: Bool {
+        switch self {
+        case .modelUnavailable, .backendRepairRequired, .appSignatureChanged,
+             .error:
+            return true
+        case .idle, .inputWaiting, .pasteUnavailable, .recording, .preloading,
+             .transcribing, .postprocessing, .copied, .copySkipped, .copyFailed, .enhancementWarning,
+             .repairingBackend, .microphoneError, .hotkeyError:
+            return false
+        }
     }
 }
 

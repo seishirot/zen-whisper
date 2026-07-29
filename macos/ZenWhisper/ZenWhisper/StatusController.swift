@@ -15,6 +15,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     private let retryMicMenuItem = NSMenuItem(title: "Retry Microphone", action: #selector(recoverMicrophone), keyEquivalent: "")
     private let copyDiagnosticsMenuItem = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnostics), keyEquivalent: "")
     private let troubleshootingMenuItem = NSMenuItem(title: "Troubleshooting", action: nil, keyEquivalent: "")
+    private let settingsMenuItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
     private let languageMenuItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
     private let recognitionModelMenuItem = NSMenuItem(title: "Recognition Model", action: nil, keyEquivalent: "")
     private let hotkeyMenuItem = NSMenuItem(title: "Hotkey", action: nil, keyEquivalent: "")
@@ -33,7 +34,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     private var animationFrame = 0
     private var registry: ModelRegistry?
     private var settings: SettingsSnapshot?
-    private var launchAtLoginEnabled = false
+    private var launchAtLoginStatus: LoginItemStatus = .disabled
     private var primaryRecoveryAction: RecoveryAction?
     private var microphoneRecoveryAction: RecoveryAction?
 
@@ -51,6 +52,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     var onRepairBackend: (() -> Void)?
     var onAcceptSignatureChange: (() -> Void)?
     var onRetryMicrophone: (() -> Void)?
+    var onOpenSettings: (() -> Void)?
     var onSelectLanguage: ((String) -> Void)?
     var onSelectModel: ((String, String) -> Void)?
     var onSelectHotkey: ((HotkeyShortcut) -> Void)?
@@ -87,9 +89,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         applySettingsEnabledState()
     }
 
-    func updateLaunchAtLogin(enabled: Bool) {
-        launchAtLoginEnabled = enabled
-        launchAtLoginMenuItem.state = enabled ? .on : .off
+    func updateLaunchAtLogin(status: LoginItemStatus) {
+        launchAtLoginStatus = status
+        renderLaunchAtLoginState()
     }
 
     func update(state: AppState) {
@@ -154,9 +156,10 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     private func isAnimated(_ state: AppState) -> Bool {
         switch state {
-        case .preloading, .transcribing, .repairingBackend:
+        case .preloading, .transcribing, .postprocessing, .repairingBackend:
             return true
-        case .idle, .inputWaiting, .pasteUnavailable, .recording, .copied, .copySkipped, .copyFailed, .modelUnavailable,
+        case .idle, .inputWaiting, .pasteUnavailable, .recording, .copied, .copySkipped,
+             .copyFailed, .enhancementWarning, .modelUnavailable,
              .backendRepairRequired, .microphoneError, .hotkeyError, .appSignatureChanged, .error:
             return false
         }
@@ -174,6 +177,9 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(primaryRecoveryMenuItem)
 
         menu.addItem(.separator())
+        settingsMenuItem.target = self
+        menu.addItem(settingsMenuItem)
+        menu.addItem(.separator())
         menu.addItem(languageMenuItem)
         menu.addItem(recognitionModelMenuItem)
         menu.addItem(hotkeyMenuItem)
@@ -186,8 +192,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         menu.addItem(unverifiedPasteFallbackMenuItem)
         menu.addItem(microphoneMenuItem)
         launchAtLoginMenuItem.target = self
-        launchAtLoginMenuItem.state = launchAtLoginEnabled ? .on : .off
         menu.addItem(launchAtLoginMenuItem)
+        renderLaunchAtLoginState()
 
         menu.addItem(.separator())
         troubleshootingMenuItem.submenu = troubleshootingMenu()
@@ -248,7 +254,7 @@ final class StatusController: NSObject, NSMenuDelegate {
             unverifiedPasteFallbackMenuItem.state = .off
             microphoneMenuItem.title = "Microphone: System Default"
             microphoneMenuItem.submenu = microphoneMenu(selectedUID: nil)
-            launchAtLoginMenuItem.state = launchAtLoginEnabled ? .on : .off
+            renderLaunchAtLoginState()
             return
         }
 
@@ -305,6 +311,7 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     private func applySettingsEnabledState() {
         let enabled = registry != nil && settings != nil && !isBusy(currentState)
+        settingsMenuItem.isEnabled = registry != nil && settings != nil
         languageMenuItem.isEnabled = enabled
         recognitionModelMenuItem.isEnabled = enabled
         hotkeyMenuItem.isEnabled = enabled
@@ -312,9 +319,26 @@ final class StatusController: NSObject, NSMenuDelegate {
         silenceAutoStopMenuItem.isEnabled = enabled
         outputModeMenuItem.isEnabled = enabled
         unverifiedPasteFallbackMenuItem.isEnabled = enabled
-        microphoneMenuItem.isEnabled = settings != nil
+        microphoneMenuItem.isEnabled = enabled
         launchAtLoginMenuItem.isEnabled = true
-        launchAtLoginMenuItem.state = launchAtLoginEnabled ? .on : .off
+        renderLaunchAtLoginState()
+    }
+
+    private func renderLaunchAtLoginState() {
+        switch launchAtLoginStatus {
+        case .enabled:
+            launchAtLoginMenuItem.title = "Launch at Login"
+            launchAtLoginMenuItem.state = .on
+            launchAtLoginMenuItem.toolTip = nil
+        case .disabled:
+            launchAtLoginMenuItem.title = "Launch at Login"
+            launchAtLoginMenuItem.state = .off
+            launchAtLoginMenuItem.toolTip = nil
+        case .invalid(let reason):
+            launchAtLoginMenuItem.title = "Launch at Login: Needs Attention"
+            launchAtLoginMenuItem.state = .mixed
+            launchAtLoginMenuItem.toolTip = reason
+        }
     }
 
     private func modelMenuKey(engineID: String, modelID: String) -> String {
@@ -454,6 +478,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             return "Loading model: \(message)"
         case .transcribing:
             return "Transcribing"
+        case .postprocessing:
+            return "Post-processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
                 let enterText: String
@@ -491,6 +517,8 @@ final class StatusController: NSObject, NSMenuDelegate {
             return "Copy Skipped: \(reason)"
         case .copyFailed(let message):
             return "Copy Failed: \(StatusText.visibleErrorSummary(message))"
+        case .enhancementWarning(let message):
+            return "Enhancement Fallback: \(message)"
         case .modelUnavailable(let message):
             return "Model Not Available: \(StatusText.visibleErrorSummary(message))"
         case .backendRepairRequired(let message):
@@ -517,9 +545,10 @@ final class StatusController: NSObject, NSMenuDelegate {
 
     private func canRetryPreload(_ state: AppState) -> Bool {
         switch state {
-        case .modelUnavailable, .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed:
+        case .modelUnavailable, .inputWaiting, .pasteUnavailable, .copied, .copySkipped,
+             .copyFailed, .enhancementWarning:
             return true
-        case .idle, .recording, .preloading, .transcribing, .backendRepairRequired,
+        case .idle, .recording, .preloading, .transcribing, .postprocessing, .backendRepairRequired,
              .repairingBackend, .microphoneError, .hotkeyError, .appSignatureChanged, .error:
             return false
         }
@@ -603,23 +632,19 @@ final class StatusController: NSObject, NSMenuDelegate {
                 return nil
             }
             return ("Accept Signature Change", .acceptSignatureChange)
-        case .idle, .inputWaiting, .recording, .preloading, .transcribing, .copied,
-             .copySkipped, .copyFailed, .repairingBackend, .hotkeyError, .error:
+        case .idle, .inputWaiting, .recording, .preloading, .transcribing, .postprocessing, .copied,
+             .copySkipped, .copyFailed, .enhancementWarning, .repairingBackend,
+             .hotkeyError, .error:
             return nil
         }
     }
 
     private func isBusy(_ state: AppState) -> Bool {
-        switch state {
-        case .recording, .preloading, .transcribing, .repairingBackend:
-            return true
-        case .idle, .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed, .modelUnavailable, .backendRepairRequired,
-             .microphoneError, .hotkeyError, .appSignatureChanged, .error:
-            return false
-        }
+        state.blocksSettingsChanges
     }
 
     @objc private func toggleRecording() { onToggleRecording?() }
+    @objc private func openSettings() { onOpenSettings?() }
     @objc private func primaryRecovery() {
         performRecovery(primaryRecoveryAction)
     }

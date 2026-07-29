@@ -10,6 +10,7 @@ struct SettingsSnapshot: Equatable {
     var microphoneDeviceUID: String?
     var outputMode: OutputMode
     var allowUnverifiedPasteFallback: Bool
+    var enhancement: EnhancementSelection = .off
 }
 
 enum OutputMode: String, CaseIterable, Codable {
@@ -48,6 +49,10 @@ final class SettingsStore {
         static let microphoneDeviceUID = "microphoneDeviceUID"
         static let outputMode = "outputMode"
         static let allowUnverifiedPasteFallback = "allowUnverifiedPasteFallback"
+        static let enhancementProfile = "enhancementProfile"
+        static let enhancementPostprocessor = "enhancementPostprocessor"
+        static let enhancementPostprocessorApprovalRevision =
+            "enhancementPostprocessorApprovalRevision"
     }
 
     private let defaults: UserDefaults
@@ -73,6 +78,19 @@ final class SettingsStore {
         let microphoneDeviceUID = defaults.string(forKey: Key.microphoneDeviceUID)
         let outputMode = OutputMode(rawValue: defaults.string(forKey: Key.outputMode) ?? "")
             ?? .pasteRestoreClipboard
+        let profileID = defaults.string(forKey: Key.enhancementProfile)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let enhancement = EnhancementSelection(
+            profileID: profileID?.isEmpty == false ? profileID : nil,
+            postprocessing: PostprocessingSelection(
+                storageValue: defaults.string(
+                    forKey: Key.enhancementPostprocessor
+                )
+            ),
+            approvedPostprocessorRevision: defaults.string(
+                forKey: Key.enhancementPostprocessorApprovalRevision
+            )
+        )
         return SettingsSnapshot(
             hotkey: hotkey,
             submitHotkey: submitHotkey,
@@ -82,7 +100,8 @@ final class SettingsStore {
             silenceAutoStopEnabled: hasSilenceSetting ? defaults.bool(forKey: Key.silenceAutoStopEnabled) : true,
             microphoneDeviceUID: microphoneDeviceUID,
             outputMode: outputMode,
-            allowUnverifiedPasteFallback: defaults.bool(forKey: Key.allowUnverifiedPasteFallback)
+            allowUnverifiedPasteFallback: defaults.bool(forKey: Key.allowUnverifiedPasteFallback),
+            enhancement: enhancement
         )
     }
 
@@ -105,5 +124,30 @@ final class SettingsStore {
         }
         defaults.set(snapshot.outputMode.rawValue, forKey: Key.outputMode)
         defaults.set(snapshot.allowUnverifiedPasteFallback, forKey: Key.allowUnverifiedPasteFallback)
+        if let profileID = snapshot.enhancement.profileID,
+           !profileID.isEmpty {
+            defaults.set(profileID, forKey: Key.enhancementProfile)
+        } else {
+            defaults.removeObject(forKey: Key.enhancementProfile)
+        }
+        defaults.set(
+            snapshot.enhancement.postprocessing.storageValue,
+            forKey: Key.enhancementPostprocessor
+        )
+        let approvalRevision = snapshot.enhancement
+            .approvedPostprocessorRevision?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if snapshot.enhancement.postprocessing.isCLI,
+           let approvalRevision,
+           !approvalRevision.isEmpty {
+            defaults.set(
+                approvalRevision,
+                forKey: Key.enhancementPostprocessorApprovalRevision
+            )
+        } else {
+            defaults.removeObject(
+                forKey: Key.enhancementPostprocessorApprovalRevision
+            )
+        }
     }
 }

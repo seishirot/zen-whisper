@@ -17,6 +17,8 @@ from typing import Literal, Protocol
 
 import numpy as np
 
+from zen_whisper_mac_backend.enhancements import RecognitionHints
+
 AdapterErrorKind = Literal["model_unavailable", "audio_unreadable"]
 _ADAPTER_ERROR_KINDS = {"model_unavailable", "audio_unreadable"}
 _MODEL_ID_TOKEN_PREFIX = "__ZW_PUBLIC_MODEL_ID_"
@@ -169,6 +171,36 @@ class MlxWhisperAdapter:
         self._loaded_model = model_id
 
     def transcribe(self, audio_path: Path, model_id: str, language: str) -> str:
+        return self._transcribe(
+            audio_path,
+            model_id,
+            language,
+            initial_prompt="",
+        )
+
+    def transcribe_with_hints(
+        self,
+        audio_path: Path,
+        model_id: str,
+        language: str,
+        hints: RecognitionHints,
+    ) -> str:
+        """Transcribe with profile context through MLX Whisper's initial prompt."""
+        return self._transcribe(
+            audio_path,
+            model_id,
+            language,
+            initial_prompt=hints.initial_prompt,
+        )
+
+    def _transcribe(
+        self,
+        audio_path: Path,
+        model_id: str,
+        language: str,
+        *,
+        initial_prompt: str,
+    ) -> str:
         if self._loaded_model != model_id:
             self.preload(model_id, language)
         try:
@@ -180,13 +212,22 @@ class MlxWhisperAdapter:
         try:
             import mlx_whisper
 
+            kwargs = _language_kwargs(language)
+            if initial_prompt:
+                kwargs["initial_prompt"] = initial_prompt
             result = mlx_whisper.transcribe(
                 audio,
                 path_or_hf_repo=model_id,
-                **_language_kwargs(language),
+                **kwargs,
             )
         except Exception as exc:  # pragma: no cover - depends on optional MLX/model IO
-            raise AdapterError("MLX Whisper transcribe failed") from exc
+            error = AdapterError("MLX Whisper transcribe failed")
+            if initial_prompt:
+                # A dependency exception may echo keyword arguments. Profile
+                # context is private, so hinted calls must not retain a cause
+                # that the service's diagnostic chain could log.
+                raise error from None
+            raise error from exc
         return _extract_text(result)
 
 

@@ -84,10 +84,13 @@ ORT API不整合を避けるため、通常依存で `sherpa-onnx==1.13.1` と `
 `postprocessors.default.toml` とローカルの `postprocessors.toml` から汎用
 `shell=False` コマンドとして読み込む。外部送信／送信先不明のプリセットを
 有効にすると、認識結果・文脈・辞書データが指定 CLI に渡る旨を表示する。
-組み込みは Claude Code（外部送信）と Ollama（ローカル）。Claude Code は
-safe mode・tools無効・session非保存の stdin 一回実行にし、`haiku` を
-校正用の軽量既定として明示する。任意のモデル指定はCLIコマンド引数で
-上書きする。
+組み込みは Codex／Claude Code（外部送信）と Ollama（ローカル）。Codex は
+`gpt-5.6-luna`／low reasoning を使い、approval・extensions・agent delegation・
+shell tools・web searchを無効化する。Claude Code はsafe mode・tools無効・
+session非保存の stdin 一回実行にし、`haiku` を校正用の軽量既定として明示する。
+プロンプト内のプロファイルと文字起こしは未信頼データとして実行ごとの
+ランダム識別子付きタグで区切り、CLIにはMarkdownなしの校正本文だけを返させる。
+任意のモデル指定はCLIコマンド引数で上書きする。
 後処理失敗時は辞書置換までの結果へフォールバックし、送信付きホットキーの
 Enter はキャンセルする。CLI後処理が成功した場合も生成／外部変換結果を
 確認せず送信しないようEnterをキャンセルする（辞書置換のみは送信可）。

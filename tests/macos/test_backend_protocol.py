@@ -67,6 +67,114 @@ def test_protocol_round_trip() -> None:
     assert decode_line(line) == {"type": "health", "request_id": "r1"}
 
 
+def test_server_streams_postprocessing_progress_before_result() -> None:
+    class ProgressService:
+        should_shutdown = False
+
+        def handle(
+            self,
+            request: dict[str, object],
+            *,
+            on_progress: Callable[[dict[str, object]], None] | None = None,
+        ) -> dict[str, object]:
+            assert on_progress is not None
+            on_progress(
+                {
+                    "type": "progress",
+                    "request_id": request["request_id"],
+                    "stage": "postprocessing",
+                }
+            )
+            return {
+                "type": "result",
+                "request_id": request["request_id"],
+                "text": "hello",
+            }
+
+    client, server = socket.socketpair()
+    try:
+        client.settimeout(5)
+        client.sendall(b'{"request_id":"stream-1","type":"transcribe"}\n')
+        slots = threading.BoundedSemaphore(1)
+        assert slots.acquire(blocking=False)
+        server_module._handle_connection(  # noqa: SLF001
+            server,
+            ProgressService(),  # type: ignore[arg-type]
+            slots,
+        )
+        reader = client.makefile("rb")
+        progress = json.loads(reader.readline().decode("utf-8"))
+        result = json.loads(reader.readline().decode("utf-8"))
+    finally:
+        client.close()
+
+    assert progress == {
+        "type": "progress",
+        "request_id": "stream-1",
+        "stage": "postprocessing",
+    }
+    assert result == {
+        "type": "result",
+        "request_id": "stream-1",
+        "text": "hello",
+    }
+
+
+def test_server_treats_progress_write_failure_as_client_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ProgressService:
+        should_shutdown = False
+
+        def handle(
+            self,
+            request: dict[str, object],
+            *,
+            on_progress: Callable[[dict[str, object]], None] | None = None,
+        ) -> dict[str, object]:
+            assert on_progress is not None
+            on_progress(
+                {
+                    "type": "progress",
+                    "request_id": request["request_id"],
+                    "stage": "postprocessing",
+                }
+            )
+            raise AssertionError("progress delivery failure must stop dispatch")
+
+    original_encode_message = server_module.encode_message
+
+    def fail_progress(message: dict[str, object]) -> bytes:
+        if message.get("type") == "progress":
+            raise BrokenPipeError
+        return original_encode_message(message)
+
+    logs: list[str] = []
+    monkeypatch.setattr(server_module, "encode_message", fail_progress)
+    monkeypatch.setattr(
+        server_module.logger,
+        "info",
+        lambda message, *args: logs.append(message % args),
+    )
+    client, server = socket.socketpair()
+    try:
+        client.settimeout(5)
+        client.sendall(b'{"request_id":"disconnect-1","type":"transcribe"}\n')
+        slots = threading.BoundedSemaphore(1)
+        assert slots.acquire(blocking=False)
+        server_module._handle_connection(  # noqa: SLF001
+            server,
+            ProgressService(),  # type: ignore[arg-type]
+            slots,
+        )
+        response = client.makefile("rb").readline()
+    finally:
+        client.close()
+
+    assert response == b""
+    assert logs == ["Client disconnected before progress could be sent"]
+
+
 def test_protocol_rejects_oversized_lines() -> None:
     with pytest.raises(ProtocolError, match="too large"):
         decode_line(b"x" * (MAX_LINE_BYTES + 1))
@@ -394,7 +502,12 @@ def test_service_exception_escaping_server_boundary_is_backend_error(
     class ExplodingService:
         should_shutdown = False
 
-        def handle(self, request: dict[str, object]) -> dict[str, object]:
+        def handle(
+            self,
+            request: dict[str, object],
+            *,
+            on_progress: Callable[[dict[str, object]], None] | None = None,
+        ) -> dict[str, object]:
             raise RuntimeError(f"bad near {private_path}")
 
     monkeypatch.setattr(
@@ -1349,7 +1462,7 @@ def test_service_health_and_dummy_transcribe(tmp_path: Path) -> None:
 
     health = service.handle({"type": "health", "request_id": "h1"})
     assert health["type"] == "health_result"
-    assert health["protocol_version"] == 1
+    assert health["protocol_version"] == 2
 
     result = service.handle(
         {

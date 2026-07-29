@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import re
+import secrets
 import subprocess
 import tempfile
 import tomllib
@@ -52,11 +53,13 @@ ProcessCallback = Callable[[subprocess.Popen[str]], None]
 
 SUPPORTED_TEMPLATE_PLACEHOLDERS = (
     "prompt",
+    "system_prompt_file",
     "transcript",
     "context",
     "terms",
     "profile_name",
     "language",
+    "boundary",
 )
 _ALLOWED_PLACEHOLDERS = frozenset(SUPPORTED_TEMPLATE_PLACEHOLDERS)
 _PLACEHOLDER_RE = re.compile(r"\{\{([a-z_]+)\}\}")
@@ -73,6 +76,7 @@ _PRESET_FIELDS = {
     "output_mode",
     "timeout_sec",
     "data_destination",
+    "system_prompt",
     "prompt_template",
     "environment",
     "enabled",
@@ -92,6 +96,7 @@ class PostprocessorPreset:
     output_mode: str = "stdout"
     timeout_sec: float = 30.0
     data_destination: str = DATA_DESTINATION_UNKNOWN
+    system_prompt: str = ""
     prompt_template: str = "{{transcript}}"
     preflight_command: str = ""
     preflight_failure_message: str = ""
@@ -183,6 +188,7 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
     input_mode = raw.get("input_mode", "stdin")
     output_mode = raw.get("output_mode", "stdout")
     data_destination = raw.get("data_destination", DATA_DESTINATION_UNKNOWN)
+    system_prompt = raw.get("system_prompt", "")
     prompt_template = raw.get("prompt_template", "{{transcript}}")
     preflight_command = raw.get("preflight_command", "")
     preflight_failure_message = raw.get("preflight_failure_message", "")
@@ -195,6 +201,7 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
         "input_mode": input_mode,
         "output_mode": output_mode,
         "data_destination": data_destination,
+        "system_prompt": system_prompt,
         "prompt_template": prompt_template,
         "preflight_command": preflight_command,
         "preflight_failure_message": preflight_failure_message,
@@ -229,19 +236,37 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
     ):
         raise PostprocessorConfigError("environment は文字列キー・値のテーブルで指定してください")
 
-    unknown_placeholders = _find_unknown_placeholders(command) | _find_unknown_placeholders(
-        prompt_template
+    unknown_placeholders = (
+        _find_unknown_placeholders(command)
+        | _find_unknown_placeholders(system_prompt)
+        | _find_unknown_placeholders(prompt_template)
     )
     if unknown_placeholders:
         raise PostprocessorConfigError(
             f"未対応のプレースホルダーがあります: {', '.join(sorted(unknown_placeholders))}"
         )
+    if _ANY_PLACEHOLDER_RE.search(system_prompt):
+        raise PostprocessorConfigError(
+            "system_prompt ではプレースホルダーを使用できません"
+        )
+    prompt_placeholders = set(_PLACEHOLDER_RE.findall(prompt_template))
+    if "system_prompt_file" in prompt_placeholders:
+        raise PostprocessorConfigError(
+            "prompt_template では {{system_prompt_file}} を使用できません"
+        )
     if "{{transcript}}" not in prompt_template:
         raise PostprocessorConfigError("prompt_template には {{transcript}} が必要です")
     command_placeholders = set(_PLACEHOLDER_RE.findall(command))
-    if input_mode == "stdin" and command_placeholders:
+    has_system_prompt_file = "system_prompt_file" in command_placeholders
+    if bool(system_prompt) != has_system_prompt_file:
         raise PostprocessorConfigError(
-            "stdin モードでは command にプレースホルダーを使用できません"
+            "system_prompt と command の {{system_prompt_file}} は"
+            "両方を指定するか両方を省略してください"
+        )
+    if input_mode == "stdin" and command_placeholders - {"system_prompt_file"}:
+        raise PostprocessorConfigError(
+            "stdin モードの command では {{system_prompt_file}} 以外の"
+            "プレースホルダーを使用できません"
         )
     if input_mode == "argument" and "{{prompt}}" not in command:
         raise PostprocessorConfigError(
@@ -259,7 +284,7 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
             raise ValueError("empty preflight command")
     except ValueError as exc:
         raise PostprocessorConfigError(f"command の解析に失敗しました: {exc}") from exc
-    if input_mode == "argument" and _PLACEHOLDER_RE.search(command_argv[0]):
+    if _PLACEHOLDER_RE.search(command_argv[0]):
         raise PostprocessorConfigError(
             "実行ファイル名にはプレースホルダーを使用できません"
         )
@@ -272,6 +297,7 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
         output_mode=output_mode,
         timeout_sec=float(timeout_sec),
         data_destination=data_destination,
+        system_prompt=system_prompt,
         prompt_template=prompt_template,
         preflight_command=preflight_command,
         preflight_failure_message=preflight_failure_message.strip(),
@@ -306,6 +332,8 @@ def load_postprocessors(
             safe_override.setdefault("preflight_command", "")
             safe_override.setdefault("preflight_failure_message", "")
             safe_override.setdefault("environment", {})
+            if "{{system_prompt_file}}" not in str(safe_override["command"]):
+                safe_override.setdefault("system_prompt", "")
         if bundled and (command_changed or environment_changed):
             if "data_destination" not in override:
                 safe_override["data_destination"] = DATA_DESTINATION_UNKNOWN
@@ -347,6 +375,7 @@ def _preset_data(preset: PostprocessorPreset) -> dict[str, object]:
         "output_mode": preset.output_mode,
         "timeout_sec": preset.timeout_sec,
         "data_destination": preset.data_destination,
+        "system_prompt": preset.system_prompt,
         "prompt_template": preset.prompt_template,
         "preflight_command": preset.preflight_command,
         "preflight_failure_message": preset.preflight_failure_message,
@@ -429,6 +458,7 @@ def _template_values(
     transcript: str,
     profile: Profile | None,
     language: str,
+    system_prompt_file: str,
 ) -> dict[str, str]:
     context = profile.context.strip() if profile and profile.context.strip() else "（なし）"
     values = {
@@ -437,7 +467,9 @@ def _template_values(
         "terms": render_terms(profile),
         "profile_name": profile.name if profile else "（なし）",
         "language": language,
+        "boundary": secrets.token_hex(16),
         "prompt": "",
+        "system_prompt_file": system_prompt_file,
     }
     return values
 
@@ -447,12 +479,38 @@ def _build_invocation(
     transcript: str,
     profile: Profile | None,
     language: str,
+    *,
+    system_prompt_file: str = "",
 ) -> tuple[list[str], str]:
-    values = _template_values(transcript, profile, language)
+    values = _template_values(
+        transcript,
+        profile,
+        language,
+        system_prompt_file,
+    )
     prompt = _render(preset.prompt_template, values)
     values["prompt"] = prompt
     argv = [_render(argument, values) for argument in split_command(preset.command)]
     return argv, prompt
+
+
+def _write_system_prompt_file(temp_dir: str, system_prompt: str) -> str:
+    path = Path(temp_dir) / "system-prompt.txt"
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
+            file.write(system_prompt)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+    return str(path)
 
 
 def _process_environment(preset: PostprocessorPreset) -> dict[str, str]:
@@ -578,26 +636,51 @@ def run_postprocessor(
     on_process_finished: ProcessCallback | None = None,
 ) -> PostprocessResult:
     """Run one trusted preset without a shell and return stdout as corrected text."""
-    argv, prompt = _build_invocation(preset, transcript, profile, language)
     environment = _process_environment(preset)
-    if (
-        preset.input_mode == "argument"
-        and command_uses_windows_batch(argv[0], environment)
-    ):
-        return PostprocessResult(
-            text=transcript,
-            succeeded=False,
-            applied=True,
-            error=(
-                f"{preset.display_name} は Windows の .cmd/.bat 経由では"
-                " argument モードを安全に実行できません"
-            ),
-        )
 
     with tempfile.TemporaryDirectory(
         prefix="zen_whisper_postprocess_",
         ignore_cleanup_errors=True,
     ) as temp_dir:
+        try:
+            system_prompt_file = (
+                _write_system_prompt_file(temp_dir, preset.system_prompt)
+                if preset.system_prompt
+                else ""
+            )
+        except OSError as exc:
+            logger.warning(
+                "後処理system promptの準備に失敗しました: "
+                "preset=%s type=%s",
+                preset.preset_id,
+                type(exc).__name__,
+            )
+            return PostprocessResult(
+                text=transcript,
+                succeeded=False,
+                applied=True,
+                error=f"{preset.display_name} の実行準備に失敗しました",
+            )
+        argv, prompt = _build_invocation(
+            preset,
+            transcript,
+            profile,
+            language,
+            system_prompt_file=system_prompt_file,
+        )
+        if (
+            preset.input_mode == "argument"
+            and command_uses_windows_batch(argv[0], environment)
+        ):
+            return PostprocessResult(
+                text=transcript,
+                succeeded=False,
+                applied=True,
+                error=(
+                    f"{preset.display_name} は Windows の .cmd/.bat 経由では"
+                    " argument モードを安全に実行できません"
+                ),
+            )
         preflight_error = _run_preflight(
             preset,
             temp_dir,

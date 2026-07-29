@@ -3,6 +3,6 @@
 from __future__ import annotations
 
 BACKEND_VERSION = "0.1.0"
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 __all__ = ["BACKEND_VERSION", "PROTOCOL_VERSION"]

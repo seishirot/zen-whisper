@@ -95,7 +95,8 @@ def test_root_logger_uses_private_rotating_file_handler() -> None:
     assert "maxBytes=5 * 1024 * 1024" in main
     assert "backupCount=5" in main
     assert "os.chmod(path, 0o600)" in main
-    assert "os.write(" in main
+    assert "def _write_startup_warning(message: str)" in main
+    assert "sys.stderr.write(message.rstrip()" in main
 
 
 def test_repo_source_tree_has_no_python_bytecode_artifacts() -> None:

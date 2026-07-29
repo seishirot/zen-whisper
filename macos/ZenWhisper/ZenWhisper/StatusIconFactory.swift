@@ -7,11 +7,26 @@ enum StatusIconKind: Equatable {
     case recordingSpeech
     case loading
     case processing
+    case postprocessing
     case copied
     case warning
 }
 
 struct StatusIconFactory {
+    static func processingColor(for kind: StatusIconKind) -> NSColor? {
+        switch kind {
+        case .loading:
+            return .systemBlue
+        case .processing:
+            return .systemOrange
+        case .postprocessing:
+            return .systemPurple
+        case .idle, .inputWaiting, .recordingSilent, .recordingSpeech,
+             .copied, .warning:
+            return nil
+        }
+    }
+
     static func kind(for state: AppState) -> StatusIconKind {
         switch state {
         case .idle:
@@ -26,9 +41,12 @@ struct StatusIconFactory {
             return .loading
         case .transcribing, .repairingBackend:
             return .processing
+        case .postprocessing:
+            return .postprocessing
         case .copied:
             return .copied
-        case .copySkipped, .copyFailed, .modelUnavailable, .backendRepairRequired, .microphoneError,
+        case .copySkipped, .copyFailed, .enhancementWarning, .modelUnavailable,
+             .backendRepairRequired, .microphoneError,
              .hotkeyError, .appSignatureChanged, .error:
             return .warning
         }
@@ -64,10 +82,10 @@ struct StatusIconFactory {
         case .recordingSpeech:
             drawCircle(color: NSColor.systemGreen, radius: 6.0, center: CGPoint(x: 9, y: 9))
             drawCircle(color: NSColor.white.withAlphaComponent(0.9), radius: 2.0, center: CGPoint(x: 9, y: 9))
-        case .loading:
-            drawProcessingCircle(color: NSColor.systemBlue, animationFrame: animationFrame)
-        case .processing:
-            drawProcessingCircle(color: NSColor.systemOrange, animationFrame: animationFrame)
+        case .loading, .processing, .postprocessing:
+            if let color = processingColor(for: kind) {
+                drawProcessingCircle(color: color, animationFrame: animationFrame)
+            }
         case .copied:
             drawCircle(color: NSColor.systemGreen, radius: 5.5, center: CGPoint(x: 9, y: 9))
         case .warning:

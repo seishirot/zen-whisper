@@ -1,3 +1,4 @@
+import AppKit
 import Carbon
 import CoreGraphics
 import CryptoKit
@@ -28,8 +29,14 @@ final class CoreTests: XCTestCase {
         )
         XCTAssertEqual(StatusIconFactory.kind(for: .preloading(message: "x")), .loading)
         XCTAssertEqual(StatusIconFactory.kind(for: .transcribing), .processing)
+        XCTAssertEqual(StatusIconFactory.kind(for: .postprocessing), .postprocessing)
+        XCTAssertTrue(
+            StatusIconFactory.processingColor(for: .postprocessing)?
+                .isEqual(NSColor.systemPurple) == true
+        )
         XCTAssertEqual(StatusIconFactory.kind(for: .copySkipped("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .copyFailed("x")), .warning)
+        XCTAssertEqual(StatusIconFactory.kind(for: .enhancementWarning("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .hotkeyError("x")), .warning)
         XCTAssertEqual(StatusIconFactory.kind(for: .backendRepairRequired("x")), .warning)
     }
@@ -45,14 +52,20 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(HotkeyShortcut.fromStorageValue(custom.storageValue), custom)
         XCTAssertEqual(HotkeyShortcut.parseComboString("cmd+shift+a")?.label, "Shift+Cmd+A")
         XCTAssertEqual(HotkeyShortcut.parseComboString("option+return")?.label, "Option+Return")
+        XCTAssertEqual(HotkeyShortcut.shiftCommandSpace.label, "Shift+Cmd+Space")
+        XCTAssertEqual(HotkeyShortcut.shiftCommandSpace.storageValue, "shift+cmd+space")
         XCTAssertEqual(HotkeyShortcut.controlOptionCommandReturn.label, "Ctrl+Option+Cmd+Return")
         XCTAssertEqual(HotkeyShortcut.controlOptionCommandReturn.storageValue, "ctrl+option+cmd+return")
-        XCTAssertEqual(HotkeyShortcut.submitPresets, [.controlOptionCommandReturn])
+        XCTAssertEqual(HotkeyShortcut.submitPresets, [.shiftCommandSpace, .controlOptionCommandReturn])
         XCTAssertNil(HotkeyShortcut.optionalFromStorageValue(""))
         XCTAssertNil(HotkeyShortcut.optionalFromStorageValue("off"))
         XCTAssertEqual(
             HotkeyShortcut.optionalFromStorageValue("ctrl+option+cmd+return"),
             .controlOptionCommandReturn
+        )
+        XCTAssertEqual(
+            HotkeyShortcut.optionalFromStorageValue("cmd+shift+space"),
+            .shiftCommandSpace
         )
         XCTAssertNil(HotkeyShortcut.parseComboString("space"))
         XCTAssertNil(HotkeyShortcut.parseComboString("shift+a"))
@@ -75,6 +88,8 @@ final class CoreTests: XCTestCase {
             AppState.copied(pasteDispatched: true, reason: "clipboard kept").title,
             "Paste tried"
         )
+        XCTAssertEqual(AppState.enhancementWarning("safe fallback").title, "Fallback")
+        XCTAssertEqual(AppState.postprocessing.title, "Post-processing")
         XCTAssertEqual(StatusText.copyOnlyReason("paste event unavailable"), "No paste")
         XCTAssertEqual(
             AppDelegate.copySkippedReasonAfterRestoredPasteFailure("paste event unavailable"),
@@ -905,6 +920,98 @@ final class CoreTests: XCTestCase {
             XCTAssertEqual(plistPath, manager.plistURL.path)
         }
         XCTAssertTrue(FileManager.default.fileExists(atPath: manager.plistURL.path))
+    }
+
+    func testLoginItemStatusStateKeepsBootstrapCleanupFailureRetryable() {
+        var state = LoginItemStatusState(status: .disabled)
+        let error = LoginItemError.bootstrapCleanupFailed(
+            bootstrap: "launchctl failed",
+            cleanup: "permission denied",
+            plistPath: "/tmp/com.seishirot.zenwhisper.plist"
+        )
+
+        let failedStatus = state.didFail(
+            error,
+            requestedEnabled: true,
+            observed: .enabled
+        )
+        guard case .invalid(let reason) = failedStatus else {
+            return XCTFail("Expected cleanup failure to remain unresolved")
+        }
+        XCTAssertTrue(reason.contains("cleanup also failed"))
+
+        XCTAssertEqual(
+            state.refresh(observed: .enabled),
+            failedStatus,
+            "A leftover matching plist must not clear the failed change"
+        )
+        XCTAssertEqual(state.didApply(enabled: true), .enabled)
+        XCTAssertEqual(state.refresh(observed: .disabled), .disabled)
+    }
+
+    func testLoginItemStatusStateUsesObservedStatusForRecoverableFailure() {
+        var state = LoginItemStatusState(status: .enabled)
+
+        XCTAssertEqual(
+            state.didFail(
+                LoginItemError.launchctlFailed("permission denied"),
+                requestedEnabled: true,
+                observed: .disabled
+            ),
+            .disabled
+        )
+        XCTAssertEqual(state.refresh(observed: .enabled), .enabled)
+    }
+
+    func testLoginItemStatusStateLatchesAnyAmbiguousRequestedStatus() {
+        var state = LoginItemStatusState(status: .disabled)
+
+        let failedStatus = state.didFail(
+            LoginItemError.permissionFailed(EACCES),
+            requestedEnabled: true,
+            observed: .enabled
+        )
+        guard case .invalid(let reason) = failedStatus else {
+            return XCTFail("Expected requested-looking failed state to be invalid")
+        }
+        XCTAssertTrue(reason.contains("ambiguous"))
+        XCTAssertEqual(state.refresh(observed: .enabled), failedStatus)
+    }
+
+    func testOnlyPersistentErrorsSurviveHotkeyRecoveryWithoutBackend() {
+        XCTAssertTrue(
+            AppState.modelUnavailable("missing")
+                .shouldRestoreAfterHotkeyRecovery
+        )
+        XCTAssertTrue(
+            AppState.microphoneError("denied")
+                .shouldRestoreAfterHotkeyRecovery
+        )
+        XCTAssertFalse(AppState.inputWaiting.shouldRestoreAfterHotkeyRecovery)
+
+        XCTAssertTrue(
+            AppState.modelUnavailable("missing")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertTrue(
+            AppState.backendRepairRequired("broken")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertTrue(
+            AppState.appSignatureChanged
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertTrue(
+            AppState.error("failed")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertFalse(
+            AppState.inputWaiting.shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
+        XCTAssertFalse(
+            AppState.microphoneError("denied")
+                .shouldRestoreAfterHotkeyRecoveryWithoutBackend
+        )
     }
 
     func testPasteDecisionRequiresCompleteStableTargetHistory() {

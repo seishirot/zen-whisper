@@ -6,20 +6,39 @@ import concurrent.futures
 import logging
 import queue
 import re
+import subprocess
 import threading
 import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from zen_whisper_mac_backend import BACKEND_VERSION, PROTOCOL_VERSION
 from zen_whisper_mac_backend.adapters import AdapterError, ASRAdapter, make_adapter
+from zen_whisper_mac_backend.enhancements import (
+    EnhancementValidationError,
+    parse_postprocessor,
+    parse_profile,
+    process_transcript,
+    recognition_hints,
+    terminate_process_group,
+    validate_transcribe_request,
+)
 from zen_whisper_mac_backend.protocol import JsonDict, error_response
 from zen_whisper_mac_backend.registry import ModelRegistry, RegistryError, load_registry
 
 logger = logging.getLogger(__name__)
+
+
+class ProgressFrame(TypedDict):
+    type: Literal["progress"]
+    request_id: str
+    stage: Literal["postprocessing"]
+
+
+ProgressCallback = Callable[[ProgressFrame], None]
 _MODEL_ID_TOKEN_PREFIX = "__ZW_PUBLIC_MODEL_ID_"
 _PUBLIC_MODEL_ID_RE = re.compile(
     r"\b(?:mlx-community|Qwen|openai|Blaizzy)/[A-Za-z0-9][A-Za-z0-9._-]*\b"
@@ -104,6 +123,18 @@ _AUDIO_NAME_RE = re.compile(
 )
 
 
+class ProgressDeliveryError(Exception):
+    """Raised when the connected client cannot receive a progress frame."""
+
+
+def postprocessing_progress_frame(request_id: str) -> ProgressFrame:
+    return {
+        "type": "progress",
+        "request_id": request_id,
+        "stage": "postprocessing",
+    }
+
+
 class BackendService:
     def __init__(
         self,
@@ -117,6 +148,7 @@ class BackendService:
         self._busy = threading.Lock()
         self._lifecycle = threading.Lock()
         self._asr_worker: _AsrWorker | None = None
+        self._active_enhancement_process: subprocess.Popen[Any] | None = None
         self._closed = False
         self._should_shutdown = False
 
@@ -125,7 +157,12 @@ class BackendService:
         with self._lifecycle:
             return self._closed or self._should_shutdown
 
-    def handle(self, request: JsonDict) -> JsonDict:
+    def handle(
+        self,
+        request: JsonDict,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> JsonDict:
         request_id = str(request["request_id"])
         request_type = str(request["type"])
         try:
@@ -146,7 +183,11 @@ class BackendService:
             if request_type == "preload":
                 return self._with_busy(request_id, request, lambda: self._preload(request))
             if request_type == "transcribe":
-                return self._with_busy(request_id, request, lambda: self._transcribe(request))
+                return self._with_busy(
+                    request_id,
+                    request,
+                    lambda: self._transcribe(request, on_progress=on_progress),
+                )
             logger.info(
                 "Unknown request type: request_id=%s type=%s",
                 _public_log_request_field(request, "request_id"),
@@ -158,7 +199,7 @@ class BackendService:
                 "Unsupported request type",
                 recoverable=False,
             )
-        except InvalidRequestError as exc:
+        except (InvalidRequestError, EnhancementValidationError) as exc:
             logger.info(
                 "Invalid request %s/%s: %s",
                 _public_log_request_field(request, "request_id"),
@@ -194,6 +235,8 @@ class BackendService:
                 _error_message_for(exc),
                 recoverable=True,
             )
+        except ProgressDeliveryError:
+            raise
         except OSError as exc:
             logger.info(
                 "Backend I/O error: class=%s errno=%s request_id=%s type=%s engine=%s model=%s",
@@ -257,6 +300,10 @@ class BackendService:
             already_closed = self._closed
             self._closed = True
             worker = self._asr_worker
+            process = self._active_enhancement_process
+            self._active_enhancement_process = None
+        if process is not None:
+            terminate_process_group(process)
         if already_closed and worker is None:
             return True
         if worker is not None:
@@ -264,7 +311,8 @@ class BackendService:
         return True
 
     def shutdown(self, *, wait: bool = True, timeout: float | None = None) -> bool:
-        self._should_shutdown = True
+        with self._lifecycle:
+            self._should_shutdown = True
         return self.close(wait=wait, timeout=timeout)
 
     def _submit_asr(
@@ -319,32 +367,107 @@ class BackendService:
             "elapsed_sec": round(time.monotonic() - started, 3),
         }
 
-    def _transcribe(self, request: JsonDict) -> JsonDict:
+    def _transcribe(
+        self,
+        request: JsonDict,
+        *,
+        on_progress: ProgressCallback | None = None,
+    ) -> JsonDict:
+        validate_transcribe_request(request)
         request_id = str(request["request_id"])
         engine_id = _required_str(request, "engine")
         model_id = self.registry.validate_engine_model(
             engine_id, _optional_str_field(request, "model")
         )
         language_id = _optional_str_field(request, "language")
+        selected_language = (
+            language_id if language_id is not None else self.registry.default_language
+        )
         language = self.registry.language_for_engine(
-            language_id if language_id is not None else self.registry.default_language,
+            selected_language,
             engine_id,
         )
+        profile = parse_profile(request.get("profile"))
+        postprocessor = parse_postprocessor(request.get("postprocessor"))
         audio_path = Path(_required_str(request, "audio_path"))
         if not audio_path.exists():
             raise FileNotFoundError(audio_path)
         started = time.monotonic()
-        text = self._adapter(engine_id).transcribe(audio_path, model_id, language)
+        adapter = self._adapter(engine_id)
+        hints = recognition_hints(profile)
+        transcribe_with_hints = getattr(adapter, "transcribe_with_hints", None)
+        hints_applied = bool(hints.initial_prompt) and callable(transcribe_with_hints)
+        if hints_applied:
+            text = transcribe_with_hints(
+                audio_path,
+                model_id,
+                language,
+                hints,
+            )
+        else:
+            text = adapter.transcribe(audio_path, model_id, language)
         elapsed = time.monotonic() - started
+        if postprocessor.mode != "off" and on_progress is not None:
+            on_progress(postprocessing_progress_frame(request_id))
+        enhancement_started = time.monotonic()
+        enhanced = process_transcript(
+            text.strip(),
+            profile,
+            postprocessor,
+            selected_language,
+            on_process_started=self._register_enhancement_process,
+            on_process_finished=self._finish_enhancement_process,
+        )
+        enhancement_elapsed = time.monotonic() - enhancement_started
+        enhancement_metadata = enhanced.response_metadata()
+        enhancement_metadata["elapsed_sec"] = round(enhancement_elapsed, 3)
+        postprocessor_id = (
+            postprocessor.preset.preset_id
+            if postprocessor.preset is not None
+            else postprocessor.mode
+        )
+        logger.info(
+            "Postprocessor completed: id=%s outcome=%s succeeded=%s "
+            "applied=%s elapsed_sec=%.3f",
+            postprocessor_id,
+            enhanced.outcome,
+            enhanced.succeeded,
+            enhanced.applied,
+            enhancement_elapsed,
+        )
         return {
             "type": "result",
             "request_id": request_id,
-            "text": text.strip(),
+            "text": enhanced.text,
             "duration_sec": _duration_sec(audio_path),
             "elapsed_sec": round(elapsed, 3),
             "engine": engine_id,
             "model": model_id,
+            "hints_applied": hints_applied,
+            "enhancement": enhancement_metadata,
         }
+
+    def _register_enhancement_process(
+        self,
+        process: subprocess.Popen[Any],
+    ) -> bool:
+        with self._lifecycle:
+            if (
+                self._closed
+                or self._should_shutdown
+                or self._active_enhancement_process is not None
+            ):
+                return False
+            self._active_enhancement_process = process
+            return True
+
+    def _finish_enhancement_process(
+        self,
+        process: subprocess.Popen[Any],
+    ) -> None:
+        with self._lifecycle:
+            if self._active_enhancement_process is process:
+                self._active_enhancement_process = None
 
     def _adapter(self, engine_id: str) -> ASRAdapter:
         adapter = self._adapters.get(engine_id)

@@ -17,13 +17,18 @@ struct HotkeyShortcut: Codable, Equatable {
         modifiers: UInt32(controlKey | optionKey | cmdKey),
         keyLabel: "Space"
     )
+    static let shiftCommandSpace = HotkeyShortcut(
+        keyCode: UInt32(kVK_Space),
+        modifiers: UInt32(shiftKey | cmdKey),
+        keyLabel: "Space"
+    )
     static let controlOptionCommandReturn = HotkeyShortcut(
         keyCode: UInt32(kVK_Return),
         modifiers: UInt32(controlKey | optionKey | cmdKey),
         keyLabel: "Return"
     )
     static let presets = [shiftSpace, controlOptionCommandSpace]
-    static let submitPresets = [controlOptionCommandReturn]
+    static let submitPresets = [shiftCommandSpace, controlOptionCommandReturn]
 
     private static let modifierMask = UInt32(shiftKey | controlKey | optionKey | cmdKey)
     private static let strongModifierMask = UInt32(controlKey | optionKey | cmdKey)
@@ -34,6 +39,9 @@ struct HotkeyShortcut: Codable, Equatable {
         }
         if self == Self.controlOptionCommandSpace {
             return "ctrl+option+cmd+space"
+        }
+        if self == Self.shiftCommandSpace {
+            return "shift+cmd+space"
         }
         if self == Self.controlOptionCommandReturn {
             return "ctrl+option+cmd+return"

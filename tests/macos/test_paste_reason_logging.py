@@ -214,7 +214,11 @@ def test_app_delegate_polls_paste_targets_for_recording_start_stop_but_requires_
     assert "private func updatePasteTargetCacheTimer(for state: AppState)" in app_delegate
     assert 'refreshPasteTargetCache(stage: "idle target poll")' in app_delegate
     assert "pasteController.snapshotFocusedTargetProbe().snapshot" in app_delegate
-    assert "case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed:" in app_delegate
+    assert (
+        "case .inputWaiting, .pasteUnavailable, .copied, .copySkipped, .copyFailed,"
+        in app_delegate
+    )
+    assert ".enhancementWarning:" in app_delegate
     assert "cachePasteTargetIfEligible(snapshot, stage: stage, log: true)" in app_delegate
 
 

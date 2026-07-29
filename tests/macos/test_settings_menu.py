@@ -9,6 +9,7 @@ SWIFT_SRC = REPO_ROOT / "macos/ZenWhisper/ZenWhisper"
 
 def test_settings_menu_shows_selected_values_and_disables_while_busy() -> None:
     status_controller = (SWIFT_SRC / "StatusController.swift").read_text(encoding="utf-8")
+    app_state = (SWIFT_SRC / "AppState.swift").read_text(encoding="utf-8")
 
     assert 'languageMenuItem.title = "Language: \\(selectedLanguageLabel)"' in status_controller
     assert "items: registry.supportedLanguages(for: engine.id)" in status_controller
@@ -35,12 +36,26 @@ def test_settings_menu_shows_selected_values_and_disables_while_busy() -> None:
     assert "settings.allowUnverifiedPasteFallback ? .on : .off" in status_controller
     assert "onToggleUnverifiedPasteFallback?(enabled)" in status_controller
     assert 'NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin)' in status_controller
-    assert "func updateLaunchAtLogin(enabled: Bool)" in status_controller
+    assert "func updateLaunchAtLogin(status: LoginItemStatus)" in status_controller
     assert "launchAtLoginMenuItem.isEnabled = true" in status_controller
+    assert "private func renderLaunchAtLoginState()" in status_controller
+    assert 'launchAtLoginMenuItem.title = "Launch at Login: Needs Attention"' in status_controller
+    assert "launchAtLoginMenuItem.state = .mixed" in status_controller
     assert "private func applySettingsEnabledState()" in status_controller
-    assert "let enabled = registry != nil && settings != nil && !isBusy(currentState)" in status_controller
-    assert "case .recording, .preloading, .transcribing, .repairingBackend:" in status_controller
-    assert "microphoneMenuItem.isEnabled = settings != nil" in status_controller
+    assert "var blocksSettingsChanges: Bool" in app_state
+    assert (
+        "case .recording, .preloading, .transcribing, .postprocessing, "
+        ".repairingBackend:"
+    ) in app_state
+    assert "state.blocksSettingsChanges" in status_controller
+    assert "microphoneMenuItem.isEnabled = enabled" in status_controller
+    assert (
+        'private let settingsMenuItem = NSMenuItem(title: "Settings…", '
+        'action: #selector(openSettings), keyEquivalent: ",")'
+    ) in status_controller
+    assert "settingsMenuItem.isEnabled = registry != nil && settings != nil" in status_controller
+    assert "var onOpenSettings: (() -> Void)?" in status_controller
+    assert "@objc private func openSettings() { onOpenSettings?() }" in status_controller
     assert "engineMenuItem" not in status_controller
     assert "modelMenuItem" not in status_controller
 

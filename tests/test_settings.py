@@ -142,6 +142,7 @@ def _stateful_settings_window(
     window._profile_terms = []
     window._command_text = _Text("old-cli")
     window._environment_text = _Text("")
+    window._system_prompt_text = _Text("")
     window._prompt_text = _Text("{{transcript}}")
     window._loaded_profile_id = "profile"
     window._loaded_postprocessor_id = "cli"
@@ -208,6 +209,8 @@ def test_postprocessor_placeholder_help_covers_renderer_contract():
     assert "必須" in help_by_name["transcript"][1]
     assert help_by_name["prompt"][0] == "command"
     assert "argument" in help_by_name["prompt"][1]
+    assert help_by_name["system_prompt_file"][0] == "command"
+    assert "system prompt" in help_by_name["system_prompt_file"][1]
 
 
 def test_postprocessor_placeholder_button_inserts_into_target_editor():
@@ -770,7 +773,11 @@ def test_settings_form_loads_snapshot_and_tracks_only_real_edits():
         )
         assert window._vars["output.paste_delay_ms"].get() == "175"
         assert window._recognition_summary_var.get() == (
-            "現在の選択: Whisper / 日本語 (ja) / GPU (CUDA)"
+            recognition_selection_text(
+                cfg.recognition.engine,
+                cfg.recognition.language,
+                cfg.recognition.device,
+            )
         )
         assert "project" in window._vars[
             "enhancement.profile_label"
@@ -1092,6 +1099,7 @@ def test_definition_switches_refuse_to_discard_unsaved_edits(monkeypatch):
     window._profile_context = Text("context")
     window._command_text = Text("old-cli")
     window._environment_text = Text("")
+    window._system_prompt_text = Text("")
     window._prompt_text = Text("{{transcript}}")
     window._profile_editor_baseline = window._capture_profile_editor_state()
     window._postprocessor_editor_baseline = (
