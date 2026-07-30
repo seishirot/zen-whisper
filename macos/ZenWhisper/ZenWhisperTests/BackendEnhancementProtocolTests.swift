@@ -2,6 +2,23 @@ import Foundation
 import XCTest
 @testable import ZenWhisper
 
+private final class CallbackOrderRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: [String] = []
+
+    func append(_ value: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        values.append(value)
+    }
+
+    func snapshot() -> [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return values
+    }
+}
+
 final class BackendEnhancementProtocolTests: XCTestCase {
     func testLegacyTranscribeRequestOmitsEnhancementPayloads() {
         let request = BackendRequest.transcribe(
@@ -582,7 +599,7 @@ final class BackendEnhancementProtocolTests: XCTestCase {
                 isDirectory: true
             )
         )
-        var callbackOrder: [String] = []
+        let callbackOrder = CallbackOrderRecorder()
         var currentState: AppState = .transcribing
         let client = BackendClient(
             paths: paths,
@@ -628,7 +645,7 @@ final class BackendEnhancementProtocolTests: XCTestCase {
             }
         )
 
-        XCTAssertEqual(callbackOrder, ["progress", "result"])
+        XCTAssertEqual(callbackOrder.snapshot(), ["progress", "result"])
         XCTAssertEqual(result.text, "corrected")
         XCTAssertEqual(result.enhancement.elapsedSeconds, 0.125)
         XCTAssertEqual(currentState, .postprocessing)

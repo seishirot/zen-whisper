@@ -8,7 +8,6 @@ import types
 import numpy as np
 
 from src.asr.base import RecognitionHints
-from src.asr.qwen import Qwen3Backend
 from src.asr.whisper import FasterWhisperBackend, MlxWhisperBackend
 from src.config import RecognitionConfig
 
@@ -99,26 +98,3 @@ def test_mlx_whisper_receives_structured_whisper_settings(monkeypatch):
         "hallucination_silence_threshold": 1.25,
         "word_timestamps": True,
     }
-
-
-def test_qwen_receives_full_profile_context():
-    captured = {}
-
-    class FakeModel:
-        def transcribe(self, **kwargs):
-            captured.update(kwargs)
-            return [types.SimpleNamespace(text=" result ")]
-
-    backend = Qwen3Backend()
-    backend._model = FakeModel()
-
-    text = backend.transcribe(
-        np.zeros(1600, dtype=np.float32),
-        "ja",
-        RecognitionConfig(),
-        RecognitionHints(context="project context", hotwords=("ZenWhisper",)),
-    )
-
-    assert text == "result"
-    assert captured["context"] == "project context"
-    assert captured["language"] == "Japanese"

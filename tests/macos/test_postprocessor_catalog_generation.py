@@ -278,6 +278,15 @@ display_name = "Invalid"
             "テンプレート",
         ),
     ],
+    ids=[
+        "command-argument-count",
+        "environment-count",
+        "prompt-template-bytes",
+        "invalid-preflight-template",
+        "command-payload-bytes",
+        "command-path-payload-bytes",
+        "invalid-command-template",
+    ],
 )
 def test_generator_enforces_native_acceptance_limits(
     tmp_path,

@@ -1,70 +1,84 @@
-"""Qwen3-ASR 診断: モデルが GPU/bf16 に正しく載っているか、どこが遅いかを切り分ける。
+"""Diagnose Qwen3-ASR native model placement and inference timing.
 
-使い方（リポジトリルートから）:
-    .venv\\Scripts\\python.exe tools\\diag_qwen.py
+Run from the repository root:
+    mise exec -- uv run --extra qwen3-cuda python tools\\diag_qwen.py
 """
 
 from __future__ import annotations
 
+import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import soundfile as sf
 import torch
 
 _HERE = Path(__file__).resolve().parent
+_ROOT = _HERE.parent
+sys.path.insert(0, str(_ROOT))
 
-MODEL = "Qwen/Qwen3-ASR-1.7B"
+from src.asr.qwen import Qwen3Backend  # noqa: E402
+from src.config import (  # noqa: E402
+    ENGINE_QWEN3_ASR,
+    QWEN3_MODEL_LARGE,
+    RecognitionConfig,
+)
+
 WAV = _HERE / "samples" / "bench_sample_ja.wav"
 
 
-def load_audio(path: Path) -> np.ndarray:
-    a, sr = sf.read(path, dtype="float32")
-    if a.ndim > 1:
-        a = a.mean(axis=1)
-    assert sr == 16000, sr
-    return a
-
-
 def main() -> None:
-    print(f"torch {torch.__version__} cuda={torch.cuda.is_available()} {torch.cuda.get_device_name(0)}")
-    # 5秒に切り詰めて高速に回す
-    audio = load_audio(WAV)[: 16000 * 5]
-    dur = len(audio) / 16000
-    print(f"audio (clipped): {dur:.1f}s")
-
-    from qwen_asr import Qwen3ASRModel
-
-    t0 = time.perf_counter()
-    m = Qwen3ASRModel.from_pretrained(
-        MODEL, dtype=torch.bfloat16, device_map="cuda",
-        attn_implementation="sdpa", max_new_tokens=64,
+    if not torch.cuda.is_available():
+        raise SystemExit("CUDA is not available")
+    print(
+        f"torch {torch.__version__} cuda=True "
+        f"device={torch.cuda.get_device_name(0)}"
     )
-    print(f"load {time.perf_counter()-t0:.1f}s")
 
-    # モデルが本当に GPU/bf16 か
-    inner = m.model
-    p = next(inner.parameters())
-    print(f"model param device={p.device} dtype={p.dtype}")
-    print(f"wrapper backend={m.backend} device={m.device} dtype={m.dtype}")
+    audio, sample_rate = sf.read(WAV, dtype="float32")
+    if audio.ndim > 1:
+        audio = audio.mean(axis=1)
+    if sample_rate != 16000:
+        raise SystemExit(f"expected 16k, got {sample_rate}")
+    audio = audio[: 16000 * 5]
+    print(f"audio (clipped): {len(audio) / 16000:.1f}s")
 
-    # 1回目（warmup）
-    torch.cuda.synchronize()
-    t0 = time.perf_counter()
-    r = m.transcribe(audio=(audio, 16000), language="Japanese")
-    torch.cuda.synchronize()
-    print(f"\n[run1] {time.perf_counter()-t0:.2f}s  chars={len(r[0].text)}")
+    cfg = RecognitionConfig(
+        engine=ENGINE_QWEN3_ASR,
+        device="cuda",
+        qwen3_model=QWEN3_MODEL_LARGE,
+        qwen3_max_new_tokens=64,
+        qwen3_attn_implementation="sdpa",
+    )
+    backend = Qwen3Backend()
 
-    # 2回目以降
-    for i in range(3):
+    started = time.perf_counter()
+    backend.load(cfg)
+    print(f"load {time.perf_counter() - started:.1f}s")
+
+    model = backend._model
+    processor = backend._processor
+    if model is None or processor is None:
+        raise SystemExit("backend did not finish loading")
+    parameter = next(model.parameters())
+    print(f"model param device={parameter.device} dtype={parameter.dtype}")
+    print(f"processor={type(processor).__name__}")
+
+    for run in range(1, 5):
         torch.cuda.synchronize()
-        t0 = time.perf_counter()
-        r = m.transcribe(audio=(audio, 16000), language="Japanese")
+        started = time.perf_counter()
+        text = backend.transcribe(audio, "ja", cfg)
         torch.cuda.synchronize()
-        print(f"[run{i+2}] {time.perf_counter()-t0:.2f}s  chars={len(r[0].text)}")
+        print(
+            f"[run{run}] {time.perf_counter() - started:.2f}s "
+            f"chars={len(text)}"
+        )
 
-    print(f"\nGPU mem allocated: {torch.cuda.memory_allocated()/1e9:.2f} GB")
+    print(
+        f"GPU mem allocated: "
+        f"{torch.cuda.memory_allocated() / (1024**3):.2f} GiB"
+    )
+    backend.unload()
 
 
 if __name__ == "__main__":

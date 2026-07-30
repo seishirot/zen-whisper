@@ -579,6 +579,11 @@ def test_settings_save_applies_live_and_marks_restart_fields(monkeypatch):
     )
     monkeypatch.setattr(
         main_module,
+        "recognition_configuration_error",
+        lambda cfg: "",
+    )
+    monkeypatch.setattr(
+        main_module,
         "SoundPlayer",
         lambda cfg: ("sound", cfg),
     )

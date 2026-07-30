@@ -40,13 +40,12 @@ dependencies = [
 
 [project.optional-dependencies]
 qwen3 = [
-    "qwen-asr>=0.0.6",
+    "transformers>=5.14.1,<5.15",
     "torch>=2.10,<2.11",
 ]
 qwen3-cuda = [
-    "qwen-asr>=0.0.6",
+    "transformers>=5.14.1,<5.15",
     "torch>=2.10,<2.11",
-    "torchaudio>=2.10,<2.11",
 ]
 cuda = [
     # Optional faster-whisper CUDA DLLs for Windows GPU installs.
@@ -98,9 +97,6 @@ explicit = true
 
 [tool.uv.sources]
 torch = [
-    { index = "pytorch-cu126", extra = "qwen3-cuda", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
-]
-torchaudio = [
     { index = "pytorch-cu126", extra = "qwen3-cuda", marker = "sys_platform == 'win32' or sys_platform == 'linux'" },
 ]
 reazonspeech-k2-asr = { git = "https://github.com/reazon-research/ReazonSpeech", rev = "2d4d4762e7ee294ac8e47a177ac2e9b0e8d0d43f", subdirectory = "pkg/k2-asr" }

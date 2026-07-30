@@ -49,6 +49,7 @@ from src.config import (
     AppConfig,
     config_file_fingerprint,
     load_config,
+    qwen3_model_label,
     save_config,
 )
 from src.hotkey import start_hotkey_listener, validate_hotkey_config
@@ -1173,8 +1174,7 @@ class App:
             if engine == ENGINE_WHISPER and device:
                 label = f"{engine} ({device})"
             if engine == ENGINE_QWEN3_ASR and qwen3_model:
-                # "Qwen/Qwen3-ASR-0.6B" → "0.6B"
-                label = f"{engine} ({qwen3_model.rsplit('-', 1)[-1]})"
+                label = f"{engine} ({qwen3_model_label(qwen3_model)})"
             self._load_model_async(
                 notify_message=f"エンジン切替中: {label}"
             )
