@@ -22,7 +22,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
               let cancelButton = findView(
                   identifier: SettingsWindowController.AccessibilityIdentifier.cancel,
                   in: contentView
-              ) else {
+              ),
+              let footer = directChild(containing: cancelButton, in: contentView) else {
             return XCTFail("Expected Settings window views")
         }
 
@@ -35,8 +36,13 @@ final class SettingsWindowLayoutTests: XCTestCase {
         )
 
         let cancelFrame = cancelButton.convert(cancelButton.bounds, to: contentView)
+        XCTAssertTrue(
+            contentView.bounds.contains(cancelFrame),
+            "The Settings footer button must remain fully visible"
+        )
+        let footerFrame = footer.convert(footer.bounds, to: contentView)
         XCTAssertEqual(
-            cancelFrame.minY,
+            footerFrame.minY,
             18,
             accuracy: 1,
             "Settings footer should stay at the bottom instead of leaving unused space"
@@ -99,7 +105,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
               let cancelButton = findView(
                   identifier: SettingsWindowController.AccessibilityIdentifier.cancel,
                   in: contentView
-              ) else {
+              ),
+              let footer = directChild(containing: cancelButton, in: contentView) else {
             return XCTFail("Expected Settings warning views")
         }
 
@@ -111,9 +118,14 @@ final class SettingsWindowLayoutTests: XCTestCase {
         XCTAssertGreaterThan(window.contentMinSize.height, baselineMinimumHeight)
 
         let cancelFrame = cancelButton.convert(cancelButton.bounds, to: contentView)
+        XCTAssertTrue(
+            contentView.bounds.contains(cancelFrame),
+            "The Settings footer button must remain fully visible"
+        )
+        let footerFrame = footer.convert(footer.bounds, to: contentView)
         let generalFrame = generalSection.convert(generalSection.bounds, to: contentView)
-        XCTAssertEqual(cancelFrame.minY, 18, accuracy: 1)
-        XCTAssertGreaterThanOrEqual(generalFrame.minY, cancelFrame.maxY + 16)
+        XCTAssertEqual(footerFrame.minY, 18, accuracy: 1)
+        XCTAssertGreaterThanOrEqual(generalFrame.minY, footerFrame.maxY + 16)
 
         window.setContentSize(
             NSSize(width: 620, height: window.contentLayoutRect.height)
@@ -215,6 +227,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
                       .AccessibilityIdentifier.securityHelp,
                   in: contentView
               ),
+              let footer = directChild(containing: saveButton, in: contentView),
               let promptScrollView = ancestors(of: promptView)
                   .compactMap({ $0 as? NSScrollView })
                   .first,
@@ -236,7 +249,8 @@ final class SettingsWindowLayoutTests: XCTestCase {
             contentView.bounds.contains(saveFrame),
             "The fixed editor footer must remain visible at the minimum size"
         )
-        XCTAssertGreaterThanOrEqual(saveFrame.minY, 19)
+        let footerFrame = footer.convert(footer.bounds, to: contentView)
+        XCTAssertGreaterThanOrEqual(footerFrame.minY, 19)
         XCTAssertGreaterThan(
             documentView.bounds.height,
             outerScrollView.contentView.bounds.height,
@@ -388,6 +402,14 @@ final class SettingsWindowLayoutTests: XCTestCase {
             current = view.superview
         }
         return result
+    }
+
+    private func directChild(containing view: NSView, in root: NSView) -> NSView? {
+        var current = view
+        while let superview = current.superview, superview !== root {
+            current = superview
+        }
+        return current.superview === root ? current : nil
     }
 
     private func makeSettings() -> SettingsSnapshot {
