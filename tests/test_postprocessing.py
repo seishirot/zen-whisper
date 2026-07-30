@@ -607,7 +607,8 @@ def test_runner_uses_private_per_run_system_prompt_file(monkeypatch):
             ]
             assert captured_path.parent == Path(kwargs["cwd"])
             assert captured_path.read_text(encoding="utf-8") == "Dedicated"
-            assert captured_path.stat().st_mode & 0o777 == 0o600
+            if not is_windows():
+                assert captured_path.stat().st_mode & 0o777 == 0o600
 
         def communicate(self, input=None, timeout=None):
             assert input == "secret transcript"
