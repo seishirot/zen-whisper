@@ -10,8 +10,8 @@ Windows / macOS 対応の完全ローカル音声入力ツール。ホットキ�
 uv sync                    # 依存インストール（WindowsはTorchなし / Python 3.11-3.13）
 uv sync --extra cuda       # Windows CUDA DLL（faster-whisper CUDA用）
 uv sync --extra reazon     # Windows CPU高速モード（Reazon K2）を有効化
-uv sync --extra qwen3      # Qwen3-ASR CPU PyTorch（設定画面/config実験用）
-uv sync --extra qwen3-cuda # Qwen3-ASR CUDA PyTorch
+uv sync --extra qwen3      # Qwen3-ASR Transformers 5.14 + CPU PyTorch（実験用）
+uv sync --extra qwen3-cuda # Qwen3-ASR Transformers 5.14 + CUDA PyTorch
 uv run zen-whisper         # 起動（コンソール非表示）
 uv run python src/main.py  # 起動（開発用・コンソール付き）
 uv run pytest tests/       # テスト
@@ -39,7 +39,7 @@ src/
     windows.py     # Win32 固有実装
     darwin.py      # macOS 固有実装
 tests/             # pytest テスト
-tools/             # 検証・ベンチ用スクリプト（本体非依存）。詳細は tools/README.md
+tools/             # 検証・ベンチ用スクリプト（本体からは呼び出されず、一部は src/ を利用）。詳細は tools/README.md
 config.example.toml # 設定テンプレート（config.toml にコピーして使用）
 ```
 
@@ -55,7 +55,7 @@ hotkey.py → sounds.py(開始音) → recorder.py(録音+VAD) → sounds.py(停
 - **プラットフォーム分岐**: `sys.platform` 直接分岐は禁止。必ず `src/platform/` パッケージ経由で OS 固有コードを呼ぶ
 - **main.py**: `pythonw.exe` で `sys.stdout/stderr` が `None` になる問題を冒頭で対処済み。壊さないこと
 
-## ASR エンジンと性能（調査メモ 2026-05 / CPU拡張 2026-06）
+## ASR エンジンと性能（調査メモ 2026-05 / CPU拡張 2026-06 / Qwen native移行 2026-07）
 
 エンジンは `whisper`（既定）, `reazon-k2`, `qwen3-asr`。トレイメニューは
 Whisper (GPU, CPU, MLX) / Reazon K2 / Qwen3-ASR (1.7B, 0.6B) の階層。
@@ -66,10 +66,13 @@ Whisper (GPU, CPU, MLX) / Reazon K2 / Qwen3-ASR (1.7B, 0.6B) の階層。
   長音声は `reazon_chunk_sec` ごとに分割し、末尾に
   `reazon_trailing_silence_sec` の無音を足す。
 - `whisper`: Windows は faster-whisper、macOS は MLX。CPU解決時は `compute_type="int8"` と `cpu_threads` を明示する。
-- `qwen3-asr`: 精度・文脈プロンプト実験用。Windows では Transformers バックエンドで頭打ち。
+- `qwen3-asr`: Windowsネイティブの非ストリーミング経路。
+  Transformers 5.14の `AutoProcessor` + `AutoModelForMultimodalLM` と
+  末尾が `-hf` の公式checkpointを使う。
 - Windows の通常 `uv sync` は PyTorch を入れない。録音VADは同梱 Silero ONNX + `sherpa-onnx` を使う。macOS は MLX 経路の依存が PyTorch を持つ可能性がある。
 - Torch が壊れている環境では、PyTorch が存在するだけで CTranslate2/faster-whisper CPU も巻き添えで失敗し得る。通常環境では Torch を入れず、Qwen3 extra のみに閉じ込める。
-- CUDA 依存は `cuda` / `qwen3-cuda` extra で明示する。
+- `cuda` は faster-whisper CUDA DLL、`qwen3-cuda` はCUDA PyTorch +
+  native Transformers、`qwen3` はCPU PyTorch実験用として分離する。
 - トレイの Qwen3-ASR 項目は CUDA 向け。CPU で Qwen3 を試す場合は
   `uv sync --extra qwen3` を導入し、設定画面または `config.toml` で
   `device="cpu"` を選ぶ実験経路として扱う。
@@ -115,21 +118,29 @@ local扱いのCLIでcommand/environmentを変えた場合は送信先をunknown�
 モデル読込の閾値超過は警告であり、停止不能な
 ネイティブロードを裏に残して次の重量モデルを並行ロードしてはならない。
 
-Windows CUDA GPU 環境・19.6秒の合成音声での参考実測:
+Windows RTX 3090、PyTorch 2.10.0+cu126、Transformers 5.14.1、bf16、
+sdpa、19.6秒の合成音声でのnative `-hf`参考実測
+（warm-up除外、steady 3回）:
 
-| エンジン | RTF(min) | 備考 |
-|---|---|---|
-| faster-whisper large-v3-turbo | ~0.035 | **速度最良（Qwen の約9倍速）。速度重視はこれ** |
-| Qwen3-ASR 1.7B | ~0.30 | 精度特化用途（文脈プロンプト等）向け。既定 |
-| Qwen3-ASR 0.6B | ~0.28 | 1.7B とほぼ同速（差は数%）。期待した高速化は得られない |
+| エンジン | median RTF | P95 RTF | peak VRAM |
+|---|---:|---:|---:|
+| Qwen3-ASR 1.7B-hf | 0.449 | 0.459 | 4051 MiB |
+| Qwen3-ASR 0.6B-hf | 0.571 | 0.628 | 1657 MiB |
 
-- **精度はこの合成音声では3者とも CER 0.9% で差が出なかった**（クリーンすぎて判別不能。実音声での精度比較は別途必要）。
+- 合成音声では旧`qwen-asr 0.0.6`経路とnative経路のtranscript hashが両モデルで一致した。
+- 72.5秒の実音声は`max_new_tokens=128`で打ち切られたため既定を256へ変更。
+  256では両モデルとも末尾まで到達したが、1サンプルの文字列差から一般的な精度優位は判断しない。
+- 同じ実音声のnative単発参考値は1.7BがRTF 0.274 / 4442 MiB、
+  0.6BがRTF 0.362 / 2048 MiB。
+- 既存のfaster-whisper large-v3-turbo参考値はRTF約0.035で、速度重視では引き続きこちらを使う。
 - **実音声（約72.5秒）で Reazon K2 の本体経路は確認済み**（`engine_label == "reazon-k2"`、チャンク処理、339文字）。
-- **0.6B が 1.7B とほぼ同速なのは、音声エンコーダ＋prefill が支配的で LLM 縮小の効きが小さいため**。「0.6B なら数倍速」は今回の尺では当てはまらない。
-- **Qwen が遅い真因は LLM の自己回帰デコード（メモリ帯域律速）＋音声エンコード**。FlashAttention2 を入れても効果は限定的（prefill 側にしか効かない）。
-- `qwen3_attn_implementation="auto"` は FA2 があれば使用、無ければ sdpa。Windows は sdpa（内部で flash カーネル使用）。
-- `qwen3_torch_compile` は triton 必須のため **Windows では自動無効化**（`_is_triton_available()` ガード）。
-- **劇的な高速化には vLLM バックエンドが必要だが Linux/WSL2/Docker のみ**（`qwen_asr` に `Qwen3ASRModel.LLM` / `qwen-asr-serve` あり）。Windows では Transformers バックエンドで頭打ち。
+- `qwen3_attn_implementation="auto"` は FA2 が利用可能なら使用し、無ければ sdpa。
+  Windows の検証環境では FA2 なしの sdpa を使用した。実際の SDPA カーネルは
+  PyTorch / CUDA の実行時条件に依存する。
+- `qwen3_torch_compile` はCUDAでのTransformers生成時に`CompileConfig`を使い、
+  CPU実行またはtritonが無い環境では自動無効化する。
+- ZenWhisperが対応するのはWindows nativeの録音完了後一括認識。上流のstreamingは
+  vLLM/Linux系の別経路であり、fallbackや配布要件にはしない。
 
 ## Config
 

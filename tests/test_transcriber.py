@@ -16,6 +16,7 @@ from src.config import (
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
+    QWEN3_MODEL_LARGE,
     RecognitionConfig,
 )
 from src.transcriber import (
@@ -111,7 +112,7 @@ def test_broken_optional_qwen_import_is_treated_as_unavailable(
     real_import = builtins.__import__
 
     def broken_import(name, *args, **kwargs):
-        if name == "qwen_asr":
+        if name == "transformers":
             raise OSError("broken optional DLL")
         return real_import(name, *args, **kwargs)
 
@@ -119,6 +120,58 @@ def test_broken_optional_qwen_import_is_treated_as_unavailable(
     monkeypatch.setattr(builtins, "__import__", broken_import)
 
     assert qwen_module.is_qwen3_available() is False
+
+
+def test_recognition_configuration_rejects_legacy_qwen_model(
+    monkeypatch,
+):
+    monkeypatch.setattr(transcriber_module, "is_mac", lambda: False)
+    monkeypatch.setattr(
+        transcriber_module,
+        "is_qwen3_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        transcriber_module,
+        "is_qwen3_cuda_available",
+        lambda: True,
+    )
+
+    error = recognition_configuration_error(
+        RecognitionConfig(
+            engine=ENGINE_QWEN3_ASR,
+            device="cuda",
+            qwen3_model="Qwen/Qwen3-ASR-1.7B",
+        )
+    )
+
+    assert "-hf" in error
+
+
+def test_recognition_configuration_accepts_native_qwen_model(
+    monkeypatch,
+):
+    monkeypatch.setattr(transcriber_module, "is_mac", lambda: False)
+    monkeypatch.setattr(
+        transcriber_module,
+        "is_qwen3_available",
+        lambda: True,
+    )
+    monkeypatch.setattr(
+        transcriber_module,
+        "is_qwen3_cuda_available",
+        lambda: True,
+    )
+
+    error = recognition_configuration_error(
+        RecognitionConfig(
+            engine=ENGINE_QWEN3_ASR,
+            device="cuda",
+            qwen3_model=QWEN3_MODEL_LARGE,
+        )
+    )
+
+    assert error == ""
 
 
 class TestResolveDevice:

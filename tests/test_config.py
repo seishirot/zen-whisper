@@ -11,10 +11,13 @@ from src.config import (
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
+    QWEN3_MODEL_LARGE,
+    QWEN3_MODEL_SMALL,
     AppConfig,
     HotkeyConfig,
     RecognitionConfig,
     load_config,
+    qwen3_model_label,
     save_config,
 )
 from src.toml_storage import file_fingerprint
@@ -61,6 +64,17 @@ class TestRecognitionConfig:
         cfg = RecognitionConfig()
         assert cfg.language == "ja"
 
+    def test_qwen_defaults_use_native_hf_checkpoint(self):
+        cfg = RecognitionConfig()
+        assert cfg.qwen3_model == QWEN3_MODEL_LARGE
+        assert cfg.qwen3_max_new_tokens == 256
+        assert QWEN3_MODEL_LARGE.endswith("-hf")
+        assert QWEN3_MODEL_SMALL.endswith("-hf")
+
+    def test_qwen_model_labels_do_not_show_hf_suffix(self):
+        assert qwen3_model_label(QWEN3_MODEL_LARGE) == "1.7B"
+        assert qwen3_model_label(QWEN3_MODEL_SMALL) == "0.6B"
+
 
 class TestHotkeyConfig:
     """HotkeyConfig のテスト。"""
@@ -103,6 +117,15 @@ class TestAppConfig:
         assert any("max_recording_sec" in warning for warning in warnings)
         assert any("volume" in warning for warning in warnings)
         assert any("logging.level" in warning for warning in warnings)
+
+    @pytest.mark.parametrize("value", [0.5, True, 0, -1, "256"])
+    def test_validate_rejects_non_positive_integer_qwen_token_limit(self, value):
+        cfg = AppConfig()
+        cfg.recognition.qwen3_max_new_tokens = value
+
+        warnings = cfg.validate()
+
+        assert any("qwen3_max_new_tokens" in warning for warning in warnings)
 
     @pytest.mark.parametrize(
         "value",

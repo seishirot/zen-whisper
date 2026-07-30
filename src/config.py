@@ -32,8 +32,25 @@ POSTPROCESSOR_OFF = "off"
 POSTPROCESSOR_DICTIONARY = "dictionary"
 
 # Qwen3-ASR モデル名定数（トレイメニューでのサイズ切替に使用）
-QWEN3_MODEL_LARGE = "Qwen/Qwen3-ASR-1.7B"  # 高精度・既定
-QWEN3_MODEL_SMALL = "Qwen/Qwen3-ASR-0.6B"  # 高速・やや低精度
+QWEN3_MODEL_LARGE = "Qwen/Qwen3-ASR-1.7B-hf"  # 大規模・既定
+QWEN3_MODEL_SMALL = "Qwen/Qwen3-ASR-0.6B-hf"  # 軽量
+QWEN3_LEGACY_MODELS = frozenset(
+    {
+        "Qwen/Qwen3-ASR-1.7B",
+        "Qwen/Qwen3-ASR-0.6B",
+    }
+)
+_QWEN3_MODEL_LABELS = {
+    QWEN3_MODEL_LARGE: "1.7B",
+    QWEN3_MODEL_SMALL: "0.6B",
+    "Qwen/Qwen3-ASR-1.7B": "1.7B",
+    "Qwen/Qwen3-ASR-0.6B": "0.6B",
+}
+
+
+def qwen3_model_label(model_id: str) -> str:
+    """Return a stable display label for known Qwen3-ASR checkpoints."""
+    return _QWEN3_MODEL_LABELS.get(model_id, model_id)
 
 
 def _default_recognition_device() -> str:
@@ -61,11 +78,11 @@ class RecognitionConfig:
     reazon_precision: str = "int8-fp32"
     reazon_chunk_sec: float = 25.0
     reazon_trailing_silence_sec: float = 0.5
-    qwen3_model: str = QWEN3_MODEL_LARGE  # Qwen3-ASR 使用時のモデル名（既定: 1.7B 高精度）
-    qwen3_max_new_tokens: int = 128  # Qwen3-ASR 生成トークン上限（短文入力なら 128 で十分）
+    qwen3_model: str = QWEN3_MODEL_LARGE  # Qwen3-ASR 使用時のモデル名（既定: 1.7B）
+    qwen3_max_new_tokens: int = 256  # Qwen3-ASR 生成トークン上限
     # アテンション実装: "auto"（FA2 があれば使用、無ければ sdpa）/ "sdpa" / "flash_attention_2" / "eager"
     qwen3_attn_implementation: str = "auto"
-    # torch.compile() による高速化。triton 必須（Windows 非対応）のため既定では無効。
+    # Transformers generation compile。CUDA のみで、CPU または triton 未導入時は無効。
     qwen3_torch_compile: bool = False
     # ハルシネーション抑制パラメータ
     no_speech_threshold: float = 0.6
@@ -232,11 +249,12 @@ class AppConfig:
         ):
             warnings.append("reazon_trailing_silence_sec は 0 以上である必要があります")
         if (
-            not is_number(self.recognition.qwen3_max_new_tokens)
+            not isinstance(self.recognition.qwen3_max_new_tokens, int)
+            or isinstance(self.recognition.qwen3_max_new_tokens, bool)
             or self.recognition.qwen3_max_new_tokens <= 0
         ):
             warnings.append(
-                "qwen3_max_new_tokens は正の値である必要があります"
+                "qwen3_max_new_tokens は正の整数である必要があります"
             )
         if self.recognition.qwen3_attn_implementation not in (
             "auto",

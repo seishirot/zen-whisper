@@ -1,11 +1,12 @@
-"""Qwen3-ASR 推論速度ベンチマーク（Transformers バックエンド・複数設定比較）。
+"""Qwen3-ASR native Transformers backend benchmark.
 
-使い方（リポジトリルートから）:
-    .venv\\Scripts\\python.exe tools\\bench_qwen.py [sdpa|eager|compile|fa2|all]
+Run from the repository root:
+    mise exec -- uv run --extra qwen3-cuda python tools\\bench_qwen.py [sdpa|eager|compile|fa2|all]
 """
 
 from __future__ import annotations
 
+import gc
 import sys
 import time
 import traceback
@@ -16,118 +17,125 @@ import soundfile as sf
 import torch
 
 _HERE = Path(__file__).resolve().parent
+_ROOT = _HERE.parent
+sys.path.insert(0, str(_ROOT))
 
-MODEL = "Qwen/Qwen3-ASR-1.7B"
+from src.asr.qwen import Qwen3Backend  # noqa: E402
+from src.config import (  # noqa: E402
+    ENGINE_QWEN3_ASR,
+    QWEN3_MODEL_LARGE,
+    RecognitionConfig,
+)
+
 WAV = _HERE / "samples" / "bench_sample_ja.wav"
-LANG = "Japanese"
 N_RUNS = 5
 
 
 def load_audio(path: Path) -> np.ndarray:
-    audio, sr = sf.read(path, dtype="float32")
+    audio, sample_rate = sf.read(path, dtype="float32")
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
-    if sr != 16000:
-        raise SystemExit(f"expected 16k, got {sr}")
+    if sample_rate != 16000:
+        raise SystemExit(f"expected 16k, got {sample_rate}")
     return audio
 
 
-def bench(label: str, build_fn, audio: np.ndarray) -> None:
-    print(f"\n{'='*70}\n[{label}]\n{'='*70}")
-    dur = len(audio) / 16000
-    model = None
+def build_backend(attn: str, compile_enabled: bool) -> tuple[Qwen3Backend, RecognitionConfig]:
+    cfg = RecognitionConfig(
+        engine=ENGINE_QWEN3_ASR,
+        device="cuda",
+        qwen3_model=QWEN3_MODEL_LARGE,
+        qwen3_max_new_tokens=256,
+        qwen3_attn_implementation=attn,
+        qwen3_torch_compile=compile_enabled,
+    )
+    backend = Qwen3Backend()
+    backend.load(cfg)
+    return backend, cfg
+
+
+def bench(
+    label: str,
+    attn: str,
+    compile_enabled: bool,
+    audio: np.ndarray,
+) -> None:
+    print(f"\n{'=' * 70}\n[{label}]\n{'=' * 70}")
+    duration = len(audio) / 16000
+    backend = None
     try:
-        t_load0 = time.perf_counter()
-        model = build_fn()
-        print(f"  load: {time.perf_counter() - t_load0:.1f}s")
+        torch.cuda.empty_cache()
+        torch.cuda.reset_peak_memory_stats()
+        torch.cuda.synchronize()
+        load_started = time.perf_counter()
+        backend, cfg = build_backend(attn, compile_enabled)
+        torch.cuda.synchronize()
+        print(f"  load: {time.perf_counter() - load_started:.1f}s")
 
-        # warmup（コンパイル/カーネル初回コストを除外）
-        t_w0 = time.perf_counter()
-        _ = model.transcribe(audio=(audio, 16000), language=LANG)
-        warm_s = time.perf_counter() - t_w0
-        print(f"  warmup(1st call): {warm_s:.2f}s  RTF={warm_s/dur:.3f}")
+        torch.cuda.synchronize()
+        warmup_started = time.perf_counter()
+        backend.transcribe(audio, "ja", cfg)
+        torch.cuda.synchronize()
+        warmup_sec = time.perf_counter() - warmup_started
+        print(f"  warmup: {warmup_sec:.2f}s  RTF={warmup_sec / duration:.3f}")
 
-        times = []
+        times: list[float] = []
         text = ""
         for _ in range(N_RUNS):
-            t0 = time.perf_counter()
-            res = model.transcribe(audio=(audio, 16000), language=LANG)
-            times.append(time.perf_counter() - t0)
-            text = res[0].text
-        arr = np.array(times)
-        print(f"  steady ({N_RUNS} runs): mean={arr.mean():.2f}s  min={arr.min():.2f}s  "
-              f"RTF(mean)={arr.mean()/dur:.3f}  RTF(min)={arr.min()/dur:.3f}")
-        print(f"  audio={dur:.1f}s  chars={len(text)}")
-        print(f"  text: {text[:80]}")
+            torch.cuda.synchronize()
+            started = time.perf_counter()
+            text = backend.transcribe(audio, "ja", cfg)
+            torch.cuda.synchronize()
+            times.append(time.perf_counter() - started)
+
+        values = np.asarray(times)
+        print(
+            f"  steady ({N_RUNS} runs): median={np.median(values):.2f}s  "
+            f"P95={np.percentile(values, 95):.2f}s  "
+            f"RTF(median)={np.median(values) / duration:.3f}"
+        )
+        print(
+            f"  audio={duration:.1f}s  chars={len(text)}  "
+            f"peak_vram={torch.cuda.max_memory_allocated() / (1024**2):.0f} MiB"
+        )
     except Exception:
         print("  !!! FAILED:")
         traceback.print_exc()
     finally:
-        try:
-            del model
-        except Exception:
-            pass
-        import gc
-
+        if backend is not None:
+            backend.unload()
+        del backend
         gc.collect()
         torch.cuda.empty_cache()
 
 
-def build_sdpa_nocompile():
-    from qwen_asr import Qwen3ASRModel
-
-    return Qwen3ASRModel.from_pretrained(
-        MODEL, dtype=torch.bfloat16, device_map="cuda",
-        attn_implementation="sdpa", max_new_tokens=128,
-    )
-
-
-def build_eager_nocompile():
-    from qwen_asr import Qwen3ASRModel
-
-    return Qwen3ASRModel.from_pretrained(
-        MODEL, dtype=torch.bfloat16, device_map="cuda",
-        attn_implementation="eager", max_new_tokens=128,
-    )
-
-
-def build_current_compile():
-    """SDPA + torch.compile(reduce-overhead)。triton 必須（Windows 非対応）。"""
-    from qwen_asr import Qwen3ASRModel
-
-    m = Qwen3ASRModel.from_pretrained(
-        MODEL, dtype=torch.bfloat16, device_map="cuda", max_new_tokens=128,
-    )
-    m.model = torch.compile(m.model, mode="reduce-overhead")
-    return m
-
-
-def build_fa2():
-    from qwen_asr import Qwen3ASRModel
-
-    return Qwen3ASRModel.from_pretrained(
-        MODEL, dtype=torch.bfloat16, device_map="cuda",
-        attn_implementation="flash_attention_2", max_new_tokens=128,
-    )
-
-
 def main() -> None:
-    print(f"torch {torch.__version__}  cuda={torch.cuda.is_available()}  "
-          f"dev={torch.cuda.get_device_name(0)}")
+    if not torch.cuda.is_available():
+        raise SystemExit("CUDA is not available")
+    print(
+        f"torch {torch.__version__}  cuda=True  "
+        f"device={torch.cuda.get_device_name(0)}"
+    )
     audio = load_audio(WAV)
-    print(f"audio: {WAV.name}  {len(audio)/16000:.1f}s")
+    print(f"audio: {WAV.name}  {len(audio) / 16000:.1f}s")
 
-    which = sys.argv[1] if len(sys.argv) > 1 else "all"
+    selected = sys.argv[1] if len(sys.argv) > 1 else "all"
     builders = {
-        "sdpa": ("Transformers / SDPA / no-compile", build_sdpa_nocompile),
-        "eager": ("Transformers / eager / no-compile", build_eager_nocompile),
-        "compile": ("SDPA + torch.compile(reduce-overhead)", build_current_compile),
-        "fa2": ("Transformers / FlashAttention2", build_fa2),
+        "sdpa": ("Transformers native / SDPA", "sdpa", False),
+        "eager": ("Transformers native / eager", "eager", False),
+        "compile": ("Transformers native / SDPA + compile", "sdpa", True),
+        "fa2": (
+            "Transformers native / FlashAttention2",
+            "flash_attention_2",
+            False,
+        ),
     }
-    order = ["sdpa", "compile"] if which == "all" else which.split(",")
+    order = ["sdpa", "compile"] if selected == "all" else selected.split(",")
     for key in order:
-        label, fn = builders[key]
-        bench(label, fn, audio)
+        if key not in builders:
+            raise SystemExit(f"unknown mode: {key}")
+        label, attn, compile_enabled = builders[key]
+        bench(label, attn, compile_enabled, audio)
 
 
 if __name__ == "__main__":

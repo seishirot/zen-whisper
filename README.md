@@ -8,7 +8,7 @@ Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe
 
 - **Hotkey toggle recording** — press to start, press again to stop (or auto-stop on silence via VAD)
 - **Local ASR transcription** — no data leaves your machine after models are installed
-- **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
+- **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper or Transformers-native Qwen3-ASR) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
 - **Domain profiles** — reusable project context, preferred spellings, pronunciations, and exact error mappings
 - **Optional CLI cleanup** — generic shell-free presets, including Codex and Claude Code (remote) plus Ollama (loopback local)
 - **Tray / menu bar** — runs in the background with a Windows tray icon or macOS menu bar item showing recording state
@@ -19,7 +19,7 @@ Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe
 
 ## Requirements
 
-- **Windows / Python CLI**: Python 3.11-3.13; CPU supported; NVIDIA GPU optional for faster-whisper CUDA
+- **Windows / Python CLI**: Python 3.11-3.13; CPU supported; NVIDIA GPU optional for faster-whisper CUDA and Qwen3-ASR CUDA
 - **macOS native app**: Apple Silicon M1+, `mise`-managed Python 3.12 from `.mise.toml`, Xcode Command Line Tools or Xcode, and a local code signing identity
 
 ## Installation
@@ -87,12 +87,16 @@ This extra pins the tested ReazonSpeech K2 commit and a Windows-compatible
 Sherpa ONNX ASR path. The first Reazon run downloads the ASR model from Hugging
 Face.
 
-For Qwen3-ASR experiments:
+For Windows-native, non-streaming Qwen3-ASR:
 
 ```bash
 uv sync --extra qwen3       # CPU PyTorch for settings/config experiments
-uv sync --extra qwen3-cuda  # CUDA 12.6 PyTorch on Windows/Linux
+uv sync --extra qwen3-cuda  # CUDA 12.6 PyTorch for the Windows tray path
 ```
+
+This installs Transformers 5.14 and uses the official `-hf` checkpoints.
+Recording is transcribed after it stops; WSL, Docker, and vLLM are not required.
+The first run downloads the selected model from Hugging Face.
 
 ### Python CLI Config File
 
@@ -228,11 +232,13 @@ backend.
   Its default precision is `int8-fp32`; `int8` and `fp32` remain available for
   explicit comparison. Long audio is split into `reazon_chunk_sec` chunks with
   `reazon_trailing_silence_sec` silence appended to each chunk.
-- `engine = "qwen3-asr"` keeps the existing Python Qwen3-ASR path for
-  quality-focused experiments. The Windows/Python tray Qwen3-ASR entries
-  target CUDA; use `--extra qwen3-cuda` for that path. `--extra qwen3`
-  installs the CPU PyTorch variant, which can be selected as `device = "cpu"`
-  in the structured settings window or `config.toml`.
+- `engine = "qwen3-asr"` uses Transformers `AutoProcessor` and
+  `AutoModelForMultimodalLM` with `Qwen/Qwen3-ASR-1.7B-hf` or
+  `Qwen/Qwen3-ASR-0.6B-hf`. It performs Windows-native, non-streaming
+  transcription after recording stops. The Windows tray entries target CUDA;
+  use `--extra qwen3-cuda` for that path. `--extra qwen3` installs the CPU
+  PyTorch variant, which can be selected as `device = "cpu"` in the structured
+  settings window or `config.toml`.
 
 The Windows tray intentionally does not include an automatic ASR fallback mode.
 Unavailable backends such as Reazon K2 without the optional extra or CUDA
@@ -290,7 +296,8 @@ profile can supply recognition hints while the raw ASR result is still pasted:
 
 - faster-whisper receives the profile's canonical/spoken terms as `hotwords`
 - MLX Whisper receives the compact term list as an initial prompt
-- Qwen3-ASR receives the profile context and terms through its `context`
+- Qwen3-ASR receives the profile context and terms through its Transformers
+  chat-template system context
 - Reazon K2 does not consume recognition hints; use dictionary-only or CLI
   postprocessing when correcting its output
 
@@ -524,9 +531,9 @@ To use custom start/stop sounds instead of generated tones:
 
 ### Windows
 
-- **CPU-only install**: plain `uv sync` does not install PyTorch or CUDA DLL packages. Select `Whisper > CPU (int8)` or set `device = "cpu"` for faster-whisper CPU, or install `uv sync --extra reazon` for the Torch-free Reazon K2 backend.
+- **CPU-only install**: plain `uv sync` does not install PyTorch, Transformers, or CUDA DLL packages. Select `Whisper > CPU (int8)` or set `device = "cpu"` for faster-whisper CPU, or install `uv sync --extra reazon` for the Torch-free Reazon K2 backend. Qwen dependencies stay inside the `qwen3` extras.
 - **Torch DLL errors (`WinError 1114`)**: plain `uv sync --locked` should remove PyTorch from the base environment. If you install `--extra qwen3` or `--extra qwen3-cuda`, a broken PyTorch install can also break faster-whisper because CTranslate2 imports PyTorch when it is present.
-- **CUDA errors**: install the CUDA extra with `uv sync --extra cuda` for faster-whisper CUDA, and ensure your NVIDIA GPU drivers are up to date.
+- **CUDA errors**: use `uv sync --extra cuda` for faster-whisper CUDA or `uv sync --extra qwen3-cuda` for Qwen3-ASR CUDA. Ensure the NVIDIA driver is current and confirm `torch.cuda.is_available()` for the Qwen path.
 - **Reazon K2 is disabled**: run `uv sync --extra reazon`, then restart ZenWhisper. The Windows/Python tray menu disables Reazon when the optional extra is unavailable.
 - **ONNX Runtime API mismatch with Reazon**: use the locked dependencies from this repo. In particular, do not upgrade `sherpa-onnx` independently unless the Reazon path is re-tested on Windows.
 - **No audio input**: Check that your microphone is set as the default recording device, or select it from the tray `マイク` menu.

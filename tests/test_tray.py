@@ -132,6 +132,57 @@ def test_tray_labels_make_current_language_and_engine_visible():
     assert app._engine_label() == "Whisper / GPU (CUDA)"
 
 
+def test_qwen_label_keeps_model_size_visible_for_hf_checkpoint():
+    import src.tray as tray_module
+    from src.config import QWEN3_MODEL_SMALL
+
+    app = object.__new__(tray_module.TrayApp)
+    app._engine = "qwen3-asr"
+    app._device = "cuda"
+    app._qwen3_model = QWEN3_MODEL_SMALL
+
+    assert app._engine_label() == "Qwen3-ASR 0.6B / GPU (CUDA)"
+
+
+def test_qwen_cuda_menu_check_requires_matching_device():
+    import src.tray as tray_module
+    from src.config import QWEN3_MODEL_LARGE
+
+    app = object.__new__(tray_module.TrayApp)
+    app._engine = "qwen3-asr"
+    app._device = "cpu"
+    app._qwen3_model = QWEN3_MODEL_LARGE
+
+    checked = app._is_engine(
+        "qwen3-asr",
+        QWEN3_MODEL_LARGE,
+        device="cuda",
+    )
+
+    assert checked(None) is False
+
+
+def test_qwen_tray_menu_requires_cuda_runtime(monkeypatch):
+    import src.tray as tray_module
+
+    app = object.__new__(tray_module.TrayApp)
+    monkeypatch.setattr(tray_module, "is_mac", lambda: False)
+    monkeypatch.setattr(
+        tray_module,
+        "is_qwen3_cuda_available",
+        lambda: False,
+    )
+
+    assert app._is_qwen3_enabled(None) is False
+
+    monkeypatch.setattr(
+        tray_module,
+        "is_qwen3_cuda_available",
+        lambda: True,
+    )
+    assert app._is_qwen3_enabled(None) is True
+
+
 def test_tray_parent_menu_text_contains_current_language_and_engine(
     monkeypatch,
 ):

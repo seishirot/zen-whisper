@@ -4,7 +4,7 @@
 精度は SAPI 合成音声の入力テキストを正解 (reference) として計測する。
 
 使い方（リポジトリルートから）:
-    .venv\\Scripts\\python.exe tools\\bench_compare.py
+    mise exec -- uv run --extra qwen3-cuda python tools\\bench_compare.py
 """
 
 from __future__ import annotations
@@ -21,6 +21,14 @@ import torch
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
 sys.path.insert(0, str(_ROOT))
+
+from src.asr.qwen import Qwen3Backend  # noqa: E402
+from src.config import (  # noqa: E402
+    ENGINE_QWEN3_ASR,
+    QWEN3_MODEL_LARGE,
+    QWEN3_MODEL_SMALL,
+    RecognitionConfig,
+)
 
 WAV = _HERE / "samples" / "bench_sample_ja.wav"
 # bench_sample_ja.wav を合成した際の入力テキスト（精度計測の正解）
@@ -78,34 +86,45 @@ def _cleanup(model) -> None:
 def bench_qwen(label: str, model_name: str, audio: np.ndarray) -> None:
     print(f"\n{'='*70}\n[{label}]  ({model_name})\n{'='*70}")
     dur = len(audio) / 16000
-    model = None
+    backend = None
     try:
-        from qwen_asr import Qwen3ASRModel
-
-        t0 = time.perf_counter()
-        model = Qwen3ASRModel.from_pretrained(
-            model_name, dtype=torch.bfloat16, device_map="cuda",
-            attn_implementation="sdpa", max_new_tokens=128,
+        cfg = RecognitionConfig(
+            engine=ENGINE_QWEN3_ASR,
+            device="cuda",
+            qwen3_model=model_name,
+            qwen3_max_new_tokens=256,
+            qwen3_attn_implementation="sdpa",
         )
+        backend = Qwen3Backend()
+        torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        backend.load(cfg)
+        torch.cuda.synchronize()
         print(f"  load: {time.perf_counter()-t0:.1f}s")
 
-        _ = model.transcribe(audio=(audio, 16000), language="Japanese")  # warmup
+        _ = backend.transcribe(audio, "ja", cfg)
         times, text = [], ""
         for _ in range(N_RUNS):
+            torch.cuda.synchronize()
             t0 = time.perf_counter()
-            res = model.transcribe(audio=(audio, 16000), language="Japanese")
+            text = backend.transcribe(audio, "ja", cfg)
+            torch.cuda.synchronize()
             times.append(time.perf_counter() - t0)
-            text = res[0].text
         arr = np.array(times)
-        print(f"  RTF(mean)={arr.mean()/dur:.3f}  RTF(min)={arr.min()/dur:.3f}  "
-              f"proc(min)={arr.min():.2f}s  audio={dur:.1f}s")
+        print(
+            f"  RTF(median)={np.median(arr)/dur:.3f}  "
+            f"RTF(P95)={np.percentile(arr, 95)/dur:.3f}  "
+            f"proc(median)={np.median(arr):.2f}s  audio={dur:.1f}s"
+        )
         print(f"  CER={cer(text, REFERENCE):.1%}  chars={len(text)}")
         print(f"  text: {text}")
     except Exception:
         print("  !!! FAILED:")
         traceback.print_exc()
     finally:
-        _cleanup(model)
+        if backend is not None:
+            backend.unload()
+        _cleanup(backend)
 
 
 def bench_faster_whisper(audio: np.ndarray) -> None:
@@ -152,8 +171,8 @@ def main() -> None:
     print(f"reference ({len(_normalize(REFERENCE))} chars): {REFERENCE}")
 
     bench_faster_whisper(audio)
-    bench_qwen("Qwen3-ASR 1.7B", "Qwen/Qwen3-ASR-1.7B", audio)
-    bench_qwen("Qwen3-ASR 0.6B", "Qwen/Qwen3-ASR-0.6B", audio)
+    bench_qwen("Qwen3-ASR 1.7B", QWEN3_MODEL_LARGE, audio)
+    bench_qwen("Qwen3-ASR 0.6B", QWEN3_MODEL_SMALL, audio)
 
 
 if __name__ == "__main__":

@@ -1,22 +1,26 @@
 # tools/ — 検証・ベンチ用スクリプト
 
 Qwen3-ASR や CPU 向け ASR の推論速度・精度を調査するための使い捨てツール群。
-本体（`src/`）からは独立していて、アプリの動作には不要。リポジトリルートから実行する。
+本体からは呼び出されず、アプリの動作には不要。一部は`src/`の実装を直接利用する。
+リポジトリルートから実行する。
 
 | ファイル | 用途 |
 |---|---|
 | `bench_cpu_asr.py` | CPU 向け候補（faster-whisper int8 / Kotoba faster / whisper.cpp / ReazonSpeech K2）を同一音声で比較 |
 | `bench_reazon_hotwords.py` | Reazon K2 の greedy / modified beam / 動的ホットワードを正例・負例で比較 |
-| `bench_compare.py` | faster-whisper large-v3-turbo vs Qwen3-ASR 1.7B/0.6B を速度(RTF)＋精度(CER)で横断比較 |
-| `bench_qwen.py` | Qwen3-ASR の attn 実装別ベンチ（sdpa / eager / flash_attention_2 / torch.compile） |
-| `diag_qwen.py` | Qwen が GPU/bf16 に正しく載っているか・どこが遅いかの切り分け |
-| `verify_qwen_integration.py` | `Transcriber` 経由のロード／推論が通るか、torch.compile が triton 不在でも安全に無効化されるかの確認 |
+| `bench_compare.py` | faster-whisper large-v3-turbo vs native `-hf` Qwen3-ASR 1.7B/0.6B を速度(RTF)＋精度(CER)で横断比較 |
+| `bench_qwen.py` | native `-hf` Qwen3-ASR の attn 実装別ベンチ（sdpa / eager / flash_attention_2 / generation compile） |
+| `bench_qwen_backend.py` | 旧`qwen-asr`とnative Transformersを隔離venvで比較し、median/P95/VRAM/出力hashをJSON化 |
+| `diag_qwen.py` | native QwenがGPU/bf16へ正しく載っているか・どこが遅いかの切り分け |
+| `verify_qwen_integration.py` | `Transcriber` 経由のnativeロード／推論と、triton不在時のcompile自動無効化を確認 |
 | `samples/*.wav` | 計測用の 16kHz mono 合成音声（Windows SAPI 生成） |
 
 ```bash
 # 例（リポジトリルートで）
-mise exec -- uv run python tools\bench_compare.py
-mise exec -- uv run python tools\bench_qwen.py sdpa
+mise exec -- uv run --extra qwen3-cuda python tools\bench_compare.py
+mise exec -- uv run --extra qwen3-cuda python tools\bench_qwen.py sdpa
+mise exec -- uv run --extra qwen3-cuda python tools\diag_qwen.py
+mise exec -- uv run --extra qwen3-cuda python tools\verify_qwen_integration.py
 mise exec -- uv run python tools\bench_cpu_asr.py --audio tools\samples\bench_sample_ja.wav
 mise exec -- uv run --no-sync python tools\bench_reazon_hotwords.py --term mise --term uv --term Python
 mise exec -- uv run python tools\bench_cpu_asr.py --targets faster-whisper,kotoba
@@ -65,6 +69,15 @@ mise exec -- uv run ^
 `src.asr.reazon.ReazonK2Backend` は `reazon_chunk_sec` ごとに分割し、各チャンク末尾に
 `reazon_trailing_silence_sec` の無音を足して処理する。
 
-既存の Qwen 系実行結果は `tools/bench_result.txt`（gitignore 対象）に出力される運用。
+Qwen系の実行結果を保存する場合は、gitignore対象の
+`tools/bench_outputs/qwen-native-compare/<run-id>/`をrun別の保存先として
+`bench_qwen_backend.py --output <path>`に明示する。`--output`省略時は標準出力のみ。
+実音声、transcript、モデルcacheはcommitしない。
 
-> メモ: vLLM バックエンドの計測は Linux/WSL2 環境が必要（Windows では `vllm` が動かない）。
+`bench_qwen_backend.py`のlegacy/nativeは同じ環境へ入れない。
+`qwen-asr==0.0.6`がTransformers 4.57.6を固定する一方、native側は5.14.1を
+使うため、mise管理Pythonから作った別venvでそれぞれ実行する。通常のJSONには
+transcript本文を含めず、必要時だけ`--include-transcript`を指定する。
+
+> メモ: vLLMは上流streaming検証用のLinux系別経路であり、ZenWhisperの
+> Windows native非ストリーミング経路には不要。

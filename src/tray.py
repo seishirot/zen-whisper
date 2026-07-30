@@ -19,6 +19,7 @@ from src.config import (
     QWEN3_MODEL_SMALL,
     AppConfig,
     FeedbackConfig,
+    qwen3_model_label,
 )
 from src.postprocessing import (
     DATA_DESTINATION_LOCAL,
@@ -29,7 +30,7 @@ from src.platform import is_mac
 from src.profiles import Profile
 from src.startup import is_registered, toggle as toggle_startup
 from src.transcriber import (
-    is_qwen3_available,
+    is_qwen3_cuda_available,
     is_reazon_k2_available,
     is_whisper_cuda_available,
 )
@@ -191,10 +192,7 @@ class TrayApp:
         elif self._engine == ENGINE_REAZON_K2:
             engine = "Reazon K2"
         elif self._engine == ENGINE_QWEN3_ASR:
-            model = {
-                QWEN3_MODEL_LARGE: "1.7B",
-                QWEN3_MODEL_SMALL: "0.6B",
-            }.get(self._qwen3_model, self._qwen3_model)
+            model = qwen3_model_label(self._qwen3_model)
             engine = f"Qwen3-ASR {model}"
         else:
             engine = self._engine or "未選択"
@@ -300,11 +298,10 @@ class TrayApp:
         def checked(item: MenuItem) -> bool:
             if self._engine != engine:
                 return False
-            if qwen3_model is not None:
-                return self._qwen3_model == qwen3_model
-            if device is not None:
-                return self._device == device
-            return True
+            return (
+                (qwen3_model is None or self._qwen3_model == qwen3_model)
+                and (device is None or self._device == device)
+            )
         return checked
 
     def _set_engine(
@@ -337,7 +334,7 @@ class TrayApp:
 
     def _is_qwen3_enabled(self, item: MenuItem) -> bool:
         """Qwen3-ASR メニュー項目が有効かどうかを返す。"""
-        return is_qwen3_available() and not is_mac()
+        return is_qwen3_cuda_available() and not is_mac()
 
     def _is_reazon_enabled(self, item: MenuItem) -> bool:
         """ReazonSpeech K2 メニュー項目が有効かどうかを返す。"""
@@ -605,6 +602,7 @@ class TrayApp:
                                 checked=self._is_engine(
                                     ENGINE_QWEN3_ASR,
                                     QWEN3_MODEL_LARGE,
+                                    device="cuda",
                                 ),
                                 radio=True,
                                 enabled=self._is_qwen3_enabled,
@@ -619,6 +617,7 @@ class TrayApp:
                                 checked=self._is_engine(
                                     ENGINE_QWEN3_ASR,
                                     QWEN3_MODEL_SMALL,
+                                    device="cuda",
                                 ),
                                 radio=True,
                                 enabled=self._is_qwen3_enabled,

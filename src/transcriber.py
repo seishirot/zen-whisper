@@ -31,6 +31,7 @@ from src.config import (
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
+    QWEN3_LEGACY_MODELS,
     RecognitionConfig,
 )
 from src.platform import is_mac
@@ -87,6 +88,15 @@ def recognition_configuration_error(cfg: RecognitionConfig) -> str:
                 "導入してZenWhisperを再起動してください"
             )
         return f"認識エンジン {cfg.engine} はこの環境で使用できません"
+
+    if (
+        cfg.engine == ENGINE_QWEN3_ASR
+        and cfg.qwen3_model in QWEN3_LEGACY_MODELS
+    ):
+        return (
+            "選択中のQwen3-ASRモデルは旧qwen-asr形式です。"
+            "末尾が -hf のモデルを選び直してください"
+        )
 
     devices = available_recognition_devices(cfg.engine)
     if cfg.device not in devices:
