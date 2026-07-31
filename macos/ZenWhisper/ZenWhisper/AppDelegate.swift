@@ -2,6 +2,190 @@ import AppKit
 import AVFoundation
 import Foundation
 
+enum RecoveryTranscriptCopyResult: Equatable {
+    case empty
+    case copied
+    case copyFailed
+}
+
+struct UnconfirmedTranscriptRecoveryStore {
+    private var transcripts: [String] = []
+
+    var count: Int {
+        transcripts.count
+    }
+
+    mutating func append(_ transcript: String) {
+        transcripts.append(transcript)
+    }
+
+    mutating func copyNext(
+        using copy: (String) -> Bool
+    ) -> RecoveryTranscriptCopyResult {
+        guard let transcript = transcripts.first else {
+            return .empty
+        }
+        guard copy(transcript) else {
+            return .copyFailed
+        }
+        transcripts.removeFirst()
+        return .copied
+    }
+}
+
+enum UnconfirmedTranscriptRecoveryPolicy {
+    static func shouldRetain(for result: PasteAttemptResult) -> Bool {
+        switch result {
+        case .manualPasteFallback(let reason, _):
+            return reason != .copyOnlyMode
+        case .blocked(_, transcript: .recoveryMenu):
+            return true
+        case .failed(reason: .pasteboardWriteFailed),
+             .failed(reason: .pasteboardRestoreFailed):
+            return true
+        case .pastedVerified, .blocked, .failed:
+            return false
+        }
+    }
+}
+
+enum PasteAttemptPresentation {
+    static func state(for result: PasteAttemptResult) -> AppState? {
+        switch result {
+        case .pastedVerified(let clipboard, let submit):
+            let reason = [
+                clipboardStatusReason(clipboard),
+                submitStatusReason(submit)
+            ]
+            .compactMap { $0 }
+            .joined(separator: "; ")
+            return .copied(pasteDispatched: true, reason: reason)
+        case .manualPasteFallback(let reason, let availability):
+            return .copied(
+                pasteDispatched: false,
+                reason: manualPasteReason(
+                    reason,
+                    availability: availability
+                )
+            )
+        case .blocked(let reason, let transcript):
+            return .copySkipped(
+                blockedPasteReason(
+                    reason,
+                    transcript: transcript
+                )
+            )
+        case .failed(let reason):
+            switch reason {
+            case .pasteboardWriteFailed(let disposition):
+                return .copyFailed(
+                    pasteboardWriteFailureReason(disposition)
+                )
+            case .pasteboardRestoreFailed:
+                return .copyFailed(
+                    "clipboard restore failed; transcript available from menu"
+                )
+            case .superseded:
+                return nil
+            default:
+                return .copyFailed(
+                    manualPasteReason(
+                        reason,
+                        availability: .clipboard
+                    )
+                )
+            }
+        }
+    }
+
+    private static func clipboardStatusReason(
+        _ disposition: PasteClipboardDisposition
+    ) -> String {
+        switch disposition {
+        case .restored:
+            return "clipboard restored"
+        case .kept:
+            return "clipboard kept"
+        case .externalChangePreserved:
+            return "external clipboard preserved"
+        case .restoreFailed:
+            return "clipboard restore failed"
+        }
+    }
+
+    private static func submitStatusReason(
+        _ result: PasteSubmitResult
+    ) -> String? {
+        switch result {
+        case .notRequested:
+            return nil
+        case .sent:
+            return "enter sent"
+        case .skippedTargetChanged:
+            return "enter skipped"
+        case .eventUnavailable:
+            return "enter unavailable"
+        }
+    }
+
+    private static func manualPasteReason(
+        _ reason: PasteFailureReason,
+        availability: PasteManualPasteAvailability
+    ) -> String {
+        if availability == .recoveryMenu {
+            return "paste not confirmed; newer clipboard preserved; transcript available from menu"
+        }
+        switch reason {
+        case .copyOnlyMode:
+            return "output mode copy only"
+        case .accessibilityUnavailable:
+            return "Accessibility not allowed"
+        case .eventPermissionUnavailable:
+            return "paste event unavailable"
+        case .noEditableTarget:
+            return "no editable target"
+        case .verificationUnavailable, .verificationTimedOut:
+            return "paste not confirmed; clipboard kept"
+        case .pasteboardWriteFailed(let disposition):
+            return pasteboardWriteFailureReason(disposition)
+        case .pasteboardRestoreFailed:
+            return "clipboard restore failed"
+        case .superseded:
+            return "paste not confirmed; attempt superseded; clipboard kept"
+        }
+    }
+
+    static func pasteboardWriteFailureReason(
+        _ disposition: PasteboardWriteFailureDisposition
+    ) -> String {
+        switch disposition {
+        case .originalUntouched:
+            return "pasteboard write failed; clipboard unchanged; transcript available from menu"
+        case .restored:
+            return "pasteboard write failed; clipboard restored; transcript available from menu"
+        case .externalChangePreserved:
+            return "pasteboard write failed; external clipboard preserved; transcript available from menu"
+        case .restoreFailed:
+            return "pasteboard write failed; clipboard restore failed; transcript available from menu"
+        }
+    }
+
+    private static func blockedPasteReason(
+        _ reason: PasteBlockReason,
+        transcript: PasteBlockedTranscriptDisposition
+    ) -> String {
+        let recoverySuffix = transcript == .recoveryMenu
+            ? "; transcript available from menu"
+            : ""
+        switch reason {
+        case .unsafeTarget:
+            return "target is unsafe\(recoverySuffix)"
+        case .targetSafetyIndeterminate:
+            return "target safety could not be verified\(recoverySuffix)"
+        }
+    }
+}
+
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let paths = AppPaths.live
@@ -37,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var lastKnownPasteTarget: PasteTargetSnapshot?
     private var lastKnownPasteTargetDate: Date?
     private var pasteAttemptsInProgress = 0
+    private var unconfirmedTranscriptRecovery = UnconfirmedTranscriptRecoveryStore()
     private var enhancementCatalogForCurrentRecording: EnhancementCatalogSnapshot?
     private var startupDiagnostics: [String] = []
 
@@ -111,6 +296,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func wireMenu() {
         statusController.onToggleRecording = { [weak self] in self?.toggleRecording() }
+        statusController.onCopyUnconfirmedTranscript = { [weak self] in
+            self?.copyUnconfirmedTranscript()
+        }
         statusController.onRetryPreload = { [weak self] in self?.preloadSelectedModel() }
         statusController.onRepairBackend = { [weak self] in self?.repairBackend() }
         statusController.onAcceptSignatureChange = { [weak self] in self?.acceptSignatureChange() }
@@ -492,7 +680,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 )
                 return
             }
-            self.applyPasteAttemptReport(report)
+            self.applyPasteAttemptReport(
+                report,
+                transcript: request.text
+            )
         }
     }
 
@@ -515,110 +706,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 #endif
 
     private func copyToPasteboardOrFail(_ text: String) -> Bool {
-        switch pasteController.prepareAutoPaste(text) {
-        case .success:
+        switch pasteController.copyPlainText(text) {
+        case .copied:
             return true
-        case .writeFailed(let restoreSucceeded):
-            if restoreSucceeded {
-                setCopyFailedTransient("pasteboard write failed")
-            } else {
-                setCopyFailedTransient("pasteboard write failed; clipboard restore failed")
-            }
+        case .writeFailed(let disposition):
+            setCopyFailedTransient(
+                PasteAttemptPresentation.pasteboardWriteFailureReason(
+                    disposition
+                )
+            )
             return false
         }
     }
 
-    private func applyPasteAttemptReport(_ report: PasteAttemptReport) {
-        switch report.result {
-        case .pastedVerified(let clipboard, let submit):
-            let reason = [
-                Self.clipboardStatusReason(clipboard),
-                Self.submitStatusReason(submit)
-            ]
-            .compactMap { $0 }
-            .joined(separator: "; ")
-            setCopiedTransient(pasteDispatched: true, reason: reason)
-        case .copiedForManualPaste(let reason):
+    private func copyUnconfirmedTranscript() {
+        let result = unconfirmedTranscriptRecovery.copyNext { [weak self] text in
+            self?.copyToPasteboardOrFail(text) ?? false
+        }
+        statusController.setUnconfirmedTranscriptCount(
+            unconfirmedTranscriptRecovery.count
+        )
+        guard result == .copied else {
+            return
+        }
+        setCopiedTransient(
+            pasteDispatched: false,
+            reason: "unconfirmed transcript copied"
+        )
+    }
+
+    private func applyPasteAttemptReport(
+        _ report: PasteAttemptReport,
+        transcript: String
+    ) {
+        if UnconfirmedTranscriptRecoveryPolicy.shouldRetain(for: report.result) {
+            retainUnconfirmedTranscript(transcript)
+        }
+        guard let state = PasteAttemptPresentation.state(
+            for: report.result
+        ) else {
+            return
+        }
+        switch state {
+        case .copied(let pasteDispatched, let reason):
             setCopiedTransient(
-                pasteDispatched: false,
-                reason: Self.manualPasteReason(reason)
+                pasteDispatched: pasteDispatched,
+                reason: reason
             )
-        case .blocked:
-            setCopySkippedTransient("target is unsafe")
-        case .failed(let reason):
-            switch reason {
-            case .pasteboardWriteFailed(let restoreSucceeded):
-                setCopyFailedTransient(
-                    restoreSucceeded
-                        ? "pasteboard write failed"
-                        : "pasteboard write failed; clipboard restore failed"
-                )
-            case .superseded:
-                break
-            default:
-                setCopyFailedTransient(Self.manualPasteReason(reason))
-            }
+        case .copySkipped(let reason):
+            setCopySkippedTransient(reason)
+        case .copyFailed(let reason):
+            setCopyFailedTransient(reason)
+        default:
+            assertionFailure(
+                "PasteAttemptPresentation returned an unsupported state"
+            )
         }
     }
 
-    nonisolated private static func clipboardStatusReason(
-        _ disposition: PasteClipboardDisposition
-    ) -> String {
-        switch disposition {
-        case .restored:
-            return "clipboard restored"
-        case .kept:
-            return "clipboard kept"
-        case .externalChangePreserved:
-            return "external clipboard preserved"
-        case .restoreFailed:
-            return "clipboard restore failed"
-        }
-    }
-
-    nonisolated private static func submitStatusReason(
-        _ result: PasteSubmitResult
-    ) -> String? {
-        switch result {
-        case .notRequested:
-            return nil
-        case .sent:
-            return "enter sent"
-        case .skippedTargetChanged:
-            return "enter skipped"
-        case .eventUnavailable:
-            return "enter unavailable"
-        }
-    }
-
-    nonisolated private static func manualPasteReason(
-        _ reason: PasteFailureReason
-    ) -> String {
-        switch reason {
-        case .copyOnlyMode:
-            return "output mode copy only"
-        case .accessibilityUnavailable:
-            return "Accessibility not allowed"
-        case .eventPermissionUnavailable:
-            return "paste event unavailable"
-        case .noEditableTarget:
-            return "no editable target"
-        case .verificationUnavailable, .verificationTimedOut:
-            return "paste not confirmed; clipboard kept"
-        case .pasteboardWriteFailed(let restoreSucceeded):
-            return restoreSucceeded
-                ? "pasteboard write failed"
-                : "pasteboard write failed; clipboard restore failed"
-        case .superseded:
-            return "paste superseded"
-        }
+    private func retainUnconfirmedTranscript(_ transcript: String) {
+        unconfirmedTranscriptRecovery.append(transcript)
+        statusController.setUnconfirmedTranscriptCount(
+            unconfirmedTranscriptRecovery.count
+        )
     }
 
     private func setCopiedTransient(pasteDispatched: Bool, reason: String?) {
         if pasteDispatched {
             logInfo("transcript copied; paste verified: \(reason ?? "unknown")")
         } else {
-            logInfo("transcript copied; paste not verified: \(reason ?? "unknown")")
+            logInfo("paste not verified: \(reason ?? "unknown")")
         }
         setState(.copied(pasteDispatched: pasteDispatched, reason: reason))
         statusResetTimer?.invalidate()

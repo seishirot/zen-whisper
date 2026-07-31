@@ -13,7 +13,7 @@ def test_copied_status_is_transient_and_returns_ready() -> None:
     assert "private var statusResetTimer: Timer?" in text
     assert "private func setCopiedTransient(pasteDispatched: Bool, reason: String?)" in text
     assert "setState(.copied(pasteDispatched: pasteDispatched, reason: reason))" in text
-    assert 'logInfo("transcript copied; paste not verified: \\(reason ?? "unknown")")' in text
+    assert 'logInfo("paste not verified: \\(reason ?? "unknown")")' in text
     assert 'logInfo("transcript copied; paste verified: \\(reason ?? "unknown")")' in text
     assert "selector: #selector(resetCopiedState(_:))" in text
     assert "@objc private func resetCopiedState(_ timer: Timer)" in text

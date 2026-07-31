@@ -19,16 +19,22 @@ def test_paste_results_distinguish_verified_unconfirmed_and_blocked() -> None:
 
     assert "enum PasteAttemptResult: Equatable" in coordinator
     assert "case pastedVerified(" in coordinator
-    assert "case copiedForManualPaste(reason: PasteFailureReason)" in coordinator
-    assert "case blocked(reason: PasteBlockReason)" in coordinator
+    assert "case manualPasteFallback(" in coordinator
+    assert "availability: PasteManualPasteAvailability" in coordinator
+    assert "reason: PasteBlockReason," in coordinator
+    assert "transcript: PasteBlockedTranscriptDisposition" in coordinator
     assert "private func applyPasteAttemptReport" in app_delegate
     assert 'return "paste not confirmed; clipboard kept"' in app_delegate
+    assert "transcript available from menu" in app_delegate
+    assert "Copy Oldest Unconfirmed Transcript" in status_controller
     assert 'return "Pasted"' in app_state
+    assert 'return "Paste not confirmed · Recoverable"' in app_state
     assert 'return "Copied · Paste not confirmed"' in app_state
     assert 'return "Copied · No editable target"' in app_state
-    assert 'return "Blocked · Secure field"' in app_state
+    assert '"Blocked · Secure field"' in app_state
     assert "Paste verified" in status_controller
     assert "transcript kept for manual paste" in status_controller
+    assert '"Copy Failed · Recoverable: \\(message)"' in status_controller
     assert "Paste tried" not in app_state
 
 
@@ -61,8 +67,8 @@ def test_target_resolution_uses_current_focus_without_frame_gating() -> None:
     )
     assert system_wide_index < frontmost_index
     assert "struct PasteTargetContext" in paste_controller
-    assert "foundUniqueEligible" in paste_controller
-    assert "ambiguous eligible=" in paste_controller
+    assert "foundUniqueEligible" not in paste_controller
+    assert "noFocusedCandidate eligible=" in paste_controller
     assert "maxDepth: Int = 10" in paste_controller
     assert "maxNodes: Int = 300" in paste_controller
     assert "optionalFramesMatch" not in paste_controller
@@ -113,7 +119,9 @@ def test_dispatch_settles_clipboard_uses_layout_and_posts_once() -> None:
     assert "KeyboardLayoutKeyCodeResolver.keyCode(for: \"v\")" in paste_controller
     assert "TISCopyCurrentKeyboardLayoutInputSource" in paste_controller
     assert "UCKeyTranslate" in paste_controller
-    assert "translating translate: (UInt16) -> UniChar?" in paste_controller
+    assert "modifierState: UInt32" in paste_controller
+    assert "translating translate: (UInt16, UInt32) -> UniChar?" in paste_controller
+    assert "UInt32(cmdKey >> 8)" in paste_controller
     resolver = paste_controller.split(
         "enum KeyboardLayoutKeyCodeResolver", maxsplit=1
     )[1]
@@ -141,9 +149,10 @@ def test_verification_precedes_restore_and_submit() -> None:
     assert "verificationPollNanoseconds: UInt64 = 50_000_000" in coordinator
     assert "verificationTimeout: TimeInterval = 5" in coordinator
     assert "submitDelayNanoseconds: UInt64 = 100_000_000" in coordinator
-    assert "controller.isFocused(target)" in coordinator
+    assert "controller.validateFocus(target) == .matched" in coordinator
     assert "case .verificationTimedOut" in coordinator
-    assert "result: .copiedForManualPaste(reason: .verificationTimedOut)" in coordinator
+    assert "reason: .verificationTimedOut" in coordinator
+    assert "return manualPasteReport(" in coordinator
 
 
 def test_unverified_frontmost_fallback_setting_is_removed_and_migrated() -> None:
@@ -188,12 +197,21 @@ def test_swift_tests_cover_new_paste_invariants() -> None:
     assert "controller.sameLogicalTarget(target, moved)" in core_tests
     assert "func testPasteVerificationUsesUTF16ReplacementAndCaretMovement()" in core_tests
     assert "func testPasteVerificationRequiresCaretAndInsertedFragment()" in core_tests
+    assert (
+        "func testPasteVerificationDoesNotAcceptUnchangedSameTextReplacement()"
+        in core_tests
+    )
     assert "func testPasteKeyCodeResolutionUsesTranslatedLayoutWithoutFixedFallback()" in core_tests
+    assert "func testPasteboardRestorePreservesAllItemsAndTypes()" in core_tests
     assert "func testPasteEligibilityRejectsProtectedAndNonEditableTargets()" in core_tests
     assert 'pasteTarget(searchableText: "pinboard")' in core_tests
     assert "testSettingsStoreRemovesLegacyUnverifiedPasteFallback" in core_tests
     assert "func testOverlappingAttemptsAreSerialized() async" in coordinator_tests
     assert "func testVerificationTimeoutSendsPasteOnlyOnceAndKeepsTranscript() async" in coordinator_tests
+    assert (
+        "func testUnverifiedPasteWithExternalClipboardChangeUsesRecoveryMenu() async"
+        in coordinator_tests
+    )
 
 
 def test_idle_cache_still_only_records_eligible_targets() -> None:

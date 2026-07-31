@@ -98,14 +98,258 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(
             AppState.copied(
                 pasteDispatched: false,
+                reason: "paste not confirmed; newer clipboard preserved; transcript available from menu"
+            ).title,
+            "Paste not confirmed · Recoverable"
+        )
+        XCTAssertEqual(
+            AppState.copied(
+                pasteDispatched: false,
+                reason: "unconfirmed transcript copied"
+            ).title,
+            "Transcript copied"
+        )
+        XCTAssertEqual(
+            AppState.copied(
+                pasteDispatched: false,
                 reason: "no editable target"
             ).title,
             "Copied · No editable target"
         )
         XCTAssertEqual(AppState.copySkipped("target is unsafe").title, "Blocked · Secure field")
+        XCTAssertEqual(
+            AppState.copySkipped(
+                "target safety could not be verified"
+            ).title,
+            "Blocked · Target safety unknown"
+        )
+        XCTAssertEqual(
+            AppState.copySkipped(
+                "target is unsafe; transcript available from menu"
+            ).title,
+            "Blocked · Secure field · Recoverable"
+        )
+        XCTAssertEqual(
+            AppState.copyFailed(
+                "pasteboard write failed; transcript available from menu"
+            ).title,
+            "Copy failed · Recoverable"
+        )
         XCTAssertEqual(AppState.enhancementWarning("safe fallback").title, "Fallback")
         XCTAssertEqual(AppState.postprocessing.title, "Post-processing")
         XCTAssertEqual(StatusText.copyOnlyReason("paste event unavailable"), "No paste")
+    }
+
+    func testPasteAttemptResultsDriveRecoverableStatusPresentation() throws {
+        let writeFailures: [
+            (
+                PasteboardWriteFailureDisposition,
+                String,
+                String
+            )
+        ] = [
+            (
+                .originalUntouched,
+                "pasteboard write failed; clipboard unchanged; transcript available from menu",
+                "Copy Failed · Recoverable: pasteboard write failed; clipboard unchanged; transcript available from menu"
+            ),
+            (
+                .restored,
+                "pasteboard write failed; clipboard restored; transcript available from menu",
+                "Copy Failed · Recoverable: pasteboard write failed; clipboard restored; transcript available from menu"
+            ),
+            (
+                .externalChangePreserved,
+                "pasteboard write failed; external clipboard preserved; transcript available from menu",
+                "Copy Failed · Recoverable: pasteboard write failed; external clipboard preserved; transcript available from menu"
+            ),
+            (
+                .restoreFailed,
+                "pasteboard write failed; clipboard restore failed; transcript available from menu",
+                "Copy Failed · Recoverable: pasteboard write failed; clipboard restore failed; transcript available from menu"
+            )
+        ]
+        for (disposition, expectedReason, expectedMenuText) in writeFailures {
+            let state = try XCTUnwrap(
+                PasteAttemptPresentation.state(
+                    for: .failed(
+                        reason: .pasteboardWriteFailed(
+                            disposition: disposition
+                        )
+                    )
+                )
+            )
+            XCTAssertEqual(state, .copyFailed(expectedReason))
+            XCTAssertEqual(state.title, "Copy failed · Recoverable")
+            XCTAssertEqual(
+                StatusController.menuText(for: state),
+                expectedMenuText
+            )
+        }
+
+        let blockedCases: [
+            (
+                PasteAttemptResult,
+                AppState,
+                String,
+                String
+            )
+        ] = [
+            (
+                .blocked(
+                    reason: .unsafeTarget,
+                    transcript: .intentionallyDiscarded
+                ),
+                .copySkipped("target is unsafe"),
+                "Blocked · Secure field",
+                "Blocked: secure or sensitive field"
+            ),
+            (
+                .blocked(
+                    reason: .unsafeTarget,
+                    transcript: .recoveryMenu
+                ),
+                .copySkipped(
+                    "target is unsafe; transcript available from menu"
+                ),
+                "Blocked · Secure field · Recoverable",
+                "Blocked: secure or sensitive field; transcript available from menu"
+            ),
+            (
+                .blocked(
+                    reason: .targetSafetyIndeterminate,
+                    transcript: .intentionallyDiscarded
+                ),
+                .copySkipped("target safety could not be verified"),
+                "Blocked · Target safety unknown",
+                "Blocked: target safety could not be verified"
+            ),
+            (
+                .blocked(
+                    reason: .targetSafetyIndeterminate,
+                    transcript: .recoveryMenu
+                ),
+                .copySkipped(
+                    "target safety could not be verified; transcript available from menu"
+                ),
+                "Blocked · Safety unknown · Recoverable",
+                "Blocked: target safety could not be verified; transcript available from menu"
+            )
+        ]
+        for (result, expectedState, expectedTitle, expectedMenuText) in blockedCases {
+            let state = try XCTUnwrap(
+                PasteAttemptPresentation.state(for: result)
+            )
+            XCTAssertEqual(state, expectedState)
+            XCTAssertEqual(state.title, expectedTitle)
+            XCTAssertEqual(
+                StatusController.menuText(for: state),
+                expectedMenuText
+            )
+        }
+    }
+
+    func testUnconfirmedTranscriptRecoveryIsFIFOAndRetainsFailedCopy() {
+        var store = UnconfirmedTranscriptRecoveryStore()
+        store.append("first")
+        store.append("second")
+        var copied: [String] = []
+
+        XCTAssertEqual(
+            store.copyNext(using: { _ in false }),
+            .copyFailed
+        )
+        XCTAssertEqual(store.count, 2)
+        XCTAssertEqual(
+            store.copyNext(using: {
+                copied.append($0)
+                return true
+            }),
+            .copied
+        )
+        XCTAssertEqual(copied, ["first"])
+        XCTAssertEqual(store.count, 1)
+        XCTAssertEqual(
+            store.copyNext(using: {
+                copied.append($0)
+                return true
+            }),
+            .copied
+        )
+        XCTAssertEqual(copied, ["first", "second"])
+        XCTAssertEqual(store.count, 0)
+        XCTAssertEqual(
+            store.copyNext(using: { _ in true }),
+            .empty
+        )
+    }
+
+    func testUnconfirmedTranscriptRecoveryPolicyRetainsOnlyUnconfirmedOutput() {
+        XCTAssertTrue(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .manualPasteFallback(
+                    reason: .verificationTimedOut,
+                    availability: .clipboard
+                )
+            )
+        )
+        XCTAssertTrue(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .manualPasteFallback(
+                    reason: .noEditableTarget,
+                    availability: .recoveryMenu
+                )
+            )
+        )
+        XCTAssertTrue(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .failed(
+                    reason: .pasteboardWriteFailed(disposition: .restored)
+                )
+            )
+        )
+        XCTAssertTrue(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .failed(reason: .pasteboardRestoreFailed)
+            )
+        )
+        XCTAssertFalse(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .manualPasteFallback(
+                    reason: .copyOnlyMode,
+                    availability: .clipboard
+                )
+            )
+        )
+        XCTAssertFalse(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .pastedVerified(
+                    clipboard: .restored,
+                    submit: .notRequested
+                )
+            )
+        )
+        XCTAssertFalse(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .blocked(
+                    reason: .unsafeTarget,
+                    transcript: .intentionallyDiscarded
+                )
+            )
+        )
+        XCTAssertTrue(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .blocked(
+                    reason: .unsafeTarget,
+                    transcript: .recoveryMenu
+                )
+            )
+        )
+        XCTAssertFalse(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: .failed(reason: .superseded)
+            )
+        )
     }
 
     func testBackendStopReportsExitedProcessCleanlinessSeparately() throws {
@@ -1041,6 +1285,28 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(unavailable.canVerify)
     }
 
+    func testPasteVerificationDoesNotAcceptUnchangedSameTextReplacement() {
+        let before = PasteTextState(
+            value: "same",
+            selectedRange: NSRange(location: 0, length: 4)
+        )
+        let expectation = PasteVerificationExpectation(
+            before: before,
+            insertedText: "same"
+        )
+
+        XCTAssertFalse(expectation.isSatisfied(by: before))
+        XCTAssertTrue(
+            expectation.isSatisfied(
+                by: PasteTextState(
+                    value: "same",
+                    selectedRange: NSRange(location: 4, length: 0),
+                    textImmediatelyBeforeSelection: "same"
+                )
+            )
+        )
+    }
+
     func testPasteAttemptTimingAndOutcomeCodesAreStable() {
         let timing = PasteAttemptTiming()
 
@@ -1062,19 +1328,283 @@ final class CoreTests: XCTestCase {
     }
 
     func testPasteKeyCodeResolutionUsesTranslatedLayoutWithoutFixedFallback() {
+        var observedModifierStates: [UInt32] = []
+        let commandState = UInt32(cmdKey >> 8)
         XCTAssertEqual(
             KeyboardLayoutKeyCodeResolver.keyCode(
                 for: "v",
-                translating: { $0 == 42 ? 118 : nil }
+                modifierState: commandState,
+                translating: { keyCode, modifierState in
+                    observedModifierStates.append(modifierState)
+                    return keyCode == 42 && modifierState == commandState
+                        ? 118
+                        : nil
+                }
             ),
             42
         )
+        XCTAssertEqual(Set(observedModifierStates), [commandState])
         XCTAssertNil(
             KeyboardLayoutKeyCodeResolver.keyCode(
                 for: "v",
-                translating: { _ in nil }
+                modifierState: commandState,
+                translating: { _, _ in nil }
             )
         )
+    }
+
+    func testTransientAXErrorsAreNotTreatedAsMissingAttributes() {
+        XCTAssertTrue(AXError.attributeUnsupported.isBenignMissingAttribute)
+        XCTAssertTrue(AXError.noValue.isBenignMissingAttribute)
+        XCTAssertFalse(AXError.cannotComplete.isBenignMissingAttribute)
+        XCTAssertFalse(AXError.invalidUIElement.isBenignMissingAttribute)
+
+        XCTAssertEqual(
+            resolvePasteTargetSafetyAttributes(
+                role: .value("AXTextArea"),
+                subrole: .missing,
+                enabled: .missing,
+                protectedContent: .missing
+            ),
+            .resolved(
+                PasteTargetSafetyAttributes(
+                    role: "AXTextArea",
+                    subrole: "",
+                    enabled: true,
+                    isProtectedContent: false
+                )
+            )
+        )
+        XCTAssertEqual(
+            resolvePasteTargetSafetyAttributes(
+                role: .value("AXTextArea"),
+                subrole: .missing,
+                enabled: .missing,
+                protectedContent: .failed(
+                    "error=\(AXError.cannotComplete.rawValue)"
+                )
+            ),
+            .retry("protected=error=\(AXError.cannotComplete.rawValue)")
+        )
+        XCTAssertEqual(
+            resolvePasteTargetSafetyAttributes(
+                role: .value("AXTextArea"),
+                subrole: .failed("wrongType"),
+                enabled: .value(true),
+                protectedContent: .value(false)
+            ),
+            .retry("subrole=wrongType")
+        )
+    }
+
+    func testPasteboardRestorePreservesAllItemsAndTypes() throws {
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
+        )
+        pasteboard.clearContents()
+        let customType = NSPasteboard.PasteboardType("test.custom.binary")
+        let first = NSPasteboardItem()
+        XCTAssertTrue(first.setString("original", forType: .string))
+        XCTAssertTrue(first.setData(Data([0, 1, 2, 255]), forType: customType))
+        let second = NSPasteboardItem()
+        XCTAssertTrue(second.setString("second", forType: .string))
+        XCTAssertTrue(pasteboard.writeObjects([first, second]))
+        let controller = PasteController(pasteboard: pasteboard)
+
+        let writeResult = controller.prepareAutoPaste(
+            "transcript",
+            attemptID: UUID()
+        )
+        guard case .success(let token) = writeResult else {
+            return XCTFail("expected prepared pasteboard transaction")
+        }
+        XCTAssertEqual(pasteboard.string(forType: .string), "transcript")
+        XCTAssertEqual(controller.restoreIfOwned(token), .restored)
+
+        let restored = try XCTUnwrap(pasteboard.pasteboardItems)
+        XCTAssertEqual(restored.count, 2)
+        XCTAssertEqual(restored[0].string(forType: .string), "original")
+        XCTAssertEqual(
+            restored[0].data(forType: customType),
+            Data([0, 1, 2, 255])
+        )
+        XCTAssertEqual(restored[1].string(forType: .string), "second")
+    }
+
+    func testPasteboardRestoreNeverOverwritesExternalSameTextWrite() throws {
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
+        )
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("original", forType: .string))
+        let controller = PasteController(pasteboard: pasteboard)
+
+        let writeResult = controller.prepareAutoPaste(
+            "transcript",
+            attemptID: UUID()
+        )
+        guard case .success(let token) = writeResult else {
+            return XCTFail("expected prepared pasteboard transaction")
+        }
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("transcript", forType: .string))
+
+        XCTAssertEqual(controller.restoreIfOwned(token), .ownershipLost)
+        XCTAssertEqual(pasteboard.string(forType: .string), "transcript")
+    }
+
+    func testPasteboardWriteFailureRestoresOnlyWhileClearedStateIsOwned() {
+        let restoredPasteboard = NSPasteboard(
+            name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
+        )
+        restoredPasteboard.clearContents()
+        XCTAssertTrue(restoredPasteboard.setString("original", forType: .string))
+        let restoringController = PasteController(
+            pasteboard: restoredPasteboard,
+            writePasteboardItems: { _, _ in false }
+        )
+
+        guard case .writeFailed(let restoredDisposition) =
+            restoringController.prepareAutoPaste("transcript") else {
+            return XCTFail("expected a simulated pasteboard write failure")
+        }
+        XCTAssertEqual(restoredDisposition, .restored)
+        XCTAssertEqual(
+            restoredPasteboard.string(forType: .string),
+            "original"
+        )
+
+        let changedPasteboard = NSPasteboard(
+            name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
+        )
+        changedPasteboard.clearContents()
+        XCTAssertTrue(changedPasteboard.setString("original", forType: .string))
+        let changedController = PasteController(
+            pasteboard: changedPasteboard,
+            writePasteboardItems: { pasteboard, _ in
+                pasteboard.clearContents()
+                XCTAssertTrue(
+                    pasteboard.setString("external", forType: .string)
+                )
+                return false
+            }
+        )
+
+        guard case .writeFailed(let changedDisposition) =
+            changedController.prepareAutoPaste("transcript") else {
+            return XCTFail("expected a simulated pasteboard write failure")
+        }
+        XCTAssertEqual(changedDisposition, .externalChangePreserved)
+        XCTAssertEqual(
+            changedPasteboard.string(forType: .string),
+            "external"
+        )
+    }
+
+    func testPlainTextWriteFailurePreservesExternalClipboardChange() {
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name(
+                "zen-whisper-tests.\(UUID().uuidString)"
+            )
+        )
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("original", forType: .string))
+        let controller = PasteController(
+            pasteboard: pasteboard,
+            writePasteboardItems: { pasteboard, _ in
+                pasteboard.clearContents()
+                XCTAssertTrue(
+                    pasteboard.setString("external", forType: .string)
+                )
+                return false
+            }
+        )
+
+        guard case .writeFailed(let disposition) =
+            controller.copyPlainText("transcript") else {
+            return XCTFail("expected a simulated plain-text write failure")
+        }
+        XCTAssertEqual(disposition, .externalChangePreserved)
+        XCTAssertEqual(
+            pasteboard.string(forType: .string),
+            "external"
+        )
+    }
+
+    func testPasteboardClearCountCannotClaimConcurrentExternalWrite() {
+        func makeController() -> (
+            NSPasteboard,
+            PasteController
+        ) {
+            let pasteboard = NSPasteboard(
+                name: NSPasteboard.Name(
+                    "zen-whisper-tests.\(UUID().uuidString)"
+                )
+            )
+            pasteboard.clearContents()
+            XCTAssertTrue(
+                pasteboard.setString("original", forType: .string)
+            )
+            let controller = PasteController(
+                pasteboard: pasteboard,
+                clearPasteboard: { pasteboard in
+                    let ownedChangeCount = pasteboard.clearContents()
+                    pasteboard.clearContents()
+                    XCTAssertTrue(
+                        pasteboard.setString(
+                            "external-after-clear",
+                            forType: .string
+                        )
+                    )
+                    return ownedChangeCount
+                },
+                writePasteboardItems: { _, _ in false }
+            )
+            return (pasteboard, controller)
+        }
+
+        let (autoPasteboard, autoController) = makeController()
+        guard case .writeFailed(let autoDisposition) =
+            autoController.prepareAutoPaste("transcript") else {
+            return XCTFail("expected auto-paste write failure")
+        }
+        XCTAssertEqual(autoDisposition, .externalChangePreserved)
+        XCTAssertEqual(
+            autoPasteboard.string(forType: .string),
+            "external-after-clear"
+        )
+
+        let (plainPasteboard, plainController) = makeController()
+        guard case .writeFailed(let plainDisposition) =
+            plainController.copyPlainText("transcript") else {
+            return XCTFail("expected plain-text write failure")
+        }
+        XCTAssertEqual(plainDisposition, .externalChangePreserved)
+        XCTAssertEqual(
+            plainPasteboard.string(forType: .string),
+            "external-after-clear"
+        )
+    }
+
+    func testPasteboardWriteReportsRestoreFailure() {
+        let pasteboard = NSPasteboard(
+            name: NSPasteboard.Name(
+                "zen-whisper-tests.\(UUID().uuidString)"
+            )
+        )
+        pasteboard.clearContents()
+        XCTAssertTrue(pasteboard.setString("original", forType: .string))
+        let controller = PasteController(
+            pasteboard: pasteboard,
+            writePasteboardItems: { _, _ in false },
+            restorePasteboardItems: { _, _ in false }
+        )
+
+        guard case .writeFailed(let disposition) =
+            controller.prepareAutoPaste("transcript") else {
+            return XCTFail("expected a simulated pasteboard write failure")
+        }
+        XCTAssertEqual(disposition, .restoreFailed)
     }
 
     func testPasteEligibilityRejectsProtectedAndNonEditableTargets() {
@@ -1117,6 +1647,300 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(controller.isEligible(pasteTarget(searchableText: "api key")))
         XCTAssertFalse(controller.isEligible(pasteTarget(searchableText: "認証コード")))
         XCTAssertTrue(controller.isEligible(pasteTarget(subrole: "AXSearchField")))
+    }
+
+    func testDispatchFocusValidationRejectsCurrentProtectedTarget() {
+        let controller = PasteController()
+        let approved = pasteTarget()
+
+        XCTAssertEqual(
+            controller.dispatchFocusValidation(
+                approved: approved,
+                current: approved,
+                elementsEqual: true
+            ),
+            .matched
+        )
+        XCTAssertEqual(
+            controller.dispatchFocusValidation(
+                approved: approved,
+                current: pasteTarget(isProtectedContent: true),
+                elementsEqual: true
+            ),
+            .unsafe
+        )
+        XCTAssertEqual(
+            controller.dispatchFocusValidation(
+                approved: approved,
+                current: pasteTarget(role: "AXSecureTextField"),
+                elementsEqual: true
+            ),
+            .unsafe
+        )
+    }
+
+    func testDescendantFocusFailureIsIndeterminateForPasteCandidate() {
+        XCTAssertEqual(
+            resolvePasteDescendantFocus(
+                focused: .failed("error=-25204"),
+                candidateCouldReceivePaste: true
+            ),
+            .safetyIndeterminate("focusedState=error=-25204")
+        )
+        XCTAssertEqual(
+            resolvePasteDescendantFocus(
+                focused: .failed("error=-25204"),
+                candidateCouldReceivePaste: false
+            ),
+            .focused(false)
+        )
+        XCTAssertEqual(
+            resolvePasteDescendantFocus(
+                focused: .missing,
+                candidateCouldReceivePaste: true
+            ),
+            .safetyIndeterminate("focusedState=missing")
+        )
+        XCTAssertEqual(
+            resolvePasteDescendantFocus(
+                focused: .value(true),
+                candidateCouldReceivePaste: true
+            ),
+            .focused(true)
+        )
+        XCTAssertFalse(
+            pasteTreeSearchWasIncomplete(
+                queuedNodeCount: 0,
+                depthWasTruncated: false
+            )
+        )
+        XCTAssertTrue(
+            pasteTreeSearchWasIncomplete(
+                queuedNodeCount: 1,
+                depthWasTruncated: false
+            )
+        )
+        XCTAssertTrue(
+            pasteTreeSearchWasIncomplete(
+                queuedNodeCount: 0,
+                depthWasTruncated: true
+            )
+        )
+    }
+
+    func testPasteTreeTraversalPropagatesChildReadFailure() {
+        let result: PasteTreeSearchResult<Int> = searchPasteTree(
+            root: 0,
+            maxDepth: 10,
+            maxNodes: 300,
+            nodeKey: { $0 },
+            inspect: { _ in
+                PasteTreeNodeObservation(
+                    focused: .value(false),
+                    resolution: .noCandidate(detail: "notEditable")
+                )
+            },
+            readChildren: { _ in
+                [
+                    PasteTreeChildRead(
+                        nodes: [],
+                        failureDetail: "childrenAttribute=AXChildren error=-25204 wrongType=false"
+                    )
+                ]
+            }
+        )
+
+        guard case .safetyIndeterminate(let detail) = result else {
+            return XCTFail("expected child read failure to be indeterminate")
+        }
+        XCTAssertTrue(detail.contains("childrenAttribute=AXChildren"))
+        XCTAssertTrue(detail.contains("visited=1"))
+    }
+
+    func testPasteTreeTraversalFailsClosedWhenDepthLimitTruncates() {
+        let result: PasteTreeSearchResult<Int> = searchPasteTree(
+            root: 0,
+            maxDepth: 0,
+            maxNodes: 300,
+            nodeKey: { $0 },
+            inspect: { _ in
+                PasteTreeNodeObservation(
+                    focused: .value(false),
+                    resolution: .noCandidate(detail: "notEditable")
+                )
+            },
+            readChildren: { node in
+                [
+                    PasteTreeChildRead(
+                        nodes: node == 0 ? [1] : [],
+                        failureDetail: nil
+                    )
+                ]
+            }
+        )
+
+        guard case .safetyIndeterminate(let detail) = result else {
+            return XCTFail("expected depth truncation to be indeterminate")
+        }
+        XCTAssertTrue(detail.contains("depthTruncated=true"))
+    }
+
+    func testPasteTreeTraversalFailsClosedWhenNodeLimitTruncates() {
+        let result: PasteTreeSearchResult<Int> = searchPasteTree(
+            root: 0,
+            maxDepth: 10,
+            maxNodes: 1,
+            nodeKey: { $0 },
+            inspect: { _ in
+                PasteTreeNodeObservation(
+                    focused: .value(false),
+                    resolution: .noCandidate(detail: "notEditable")
+                )
+            },
+            readChildren: { node in
+                [
+                    PasteTreeChildRead(
+                        nodes: node == 0 ? [1] : [],
+                        failureDetail: nil
+                    )
+                ]
+            }
+        )
+
+        guard case .safetyIndeterminate(let detail) = result else {
+            return XCTFail("expected node truncation to be indeterminate")
+        }
+        XCTAssertTrue(detail.contains("queued=1"))
+        XCTAssertTrue(detail.contains("visited=1"))
+    }
+
+    func testPasteTreeTraversalResolvesFocusedCandidatesAndMissingFocus() {
+        for kind in [
+            PasteTreeCandidateKind.eligible,
+            PasteTreeCandidateKind.unsafe
+        ] {
+            let result: PasteTreeSearchResult<String> = searchPasteTree(
+                root: 0,
+                maxDepth: 10,
+                maxNodes: 300,
+                nodeKey: { $0 },
+                inspect: { _ in
+                    PasteTreeNodeObservation(
+                        focused: .value(true),
+                        resolution: .candidate(
+                            context: "target",
+                            kind: kind,
+                            sample: "role=AXTextArea",
+                            foundDetail: "redacted"
+                        )
+                    )
+                },
+                readChildren: { _ in [] }
+            )
+            guard case .found(let context, let detail) = result else {
+                return XCTFail(
+                    "expected focused \(kind) candidate to be found"
+                )
+            }
+            XCTAssertEqual(context, "target")
+            XCTAssertTrue(detail.contains("foundFocused"))
+        }
+
+        let unfocused: PasteTreeSearchResult<String> = searchPasteTree(
+            root: 0,
+            maxDepth: 10,
+            maxNodes: 300,
+            nodeKey: { $0 },
+            inspect: { _ in
+                PasteTreeNodeObservation(
+                    focused: .value(false),
+                    resolution: .candidate(
+                        context: "target",
+                        kind: .eligible,
+                        sample: "role=AXTextArea",
+                        foundDetail: "redacted"
+                    )
+                )
+            },
+            readChildren: { _ in [] }
+        )
+        guard case .noTarget(let unfocusedDetail) = unfocused else {
+            return XCTFail("expected unfocused candidate not to be selected")
+        }
+        XCTAssertTrue(
+            unfocusedDetail.contains(
+                "noFocusedCandidate eligible=1 unsafe=0"
+            )
+        )
+
+        let missingFocus: PasteTreeSearchResult<String> = searchPasteTree(
+            root: 0,
+            maxDepth: 10,
+            maxNodes: 300,
+            nodeKey: { $0 },
+            inspect: { _ in
+                PasteTreeNodeObservation(
+                    focused: .missing,
+                    resolution: .candidate(
+                        context: "target",
+                        kind: .eligible,
+                        sample: "role=AXTextArea",
+                        foundDetail: "redacted"
+                    )
+                )
+            },
+            readChildren: { _ in [] }
+        )
+        guard case .safetyIndeterminate(let missingDetail) = missingFocus else {
+            return XCTFail("expected missing candidate focus to fail closed")
+        }
+        XCTAssertEqual(missingDetail, "focusedState=missing")
+    }
+
+    func testPasteTreeTraversalAllowsExactDepthAndNodeLimits() {
+        func exactLimitResult(
+            maxDepth: Int,
+            maxNodes: Int
+        ) -> PasteTreeSearchResult<Int> {
+            searchPasteTree(
+                root: 0,
+                maxDepth: maxDepth,
+                maxNodes: maxNodes,
+                nodeKey: { $0 },
+                inspect: { _ in
+                    PasteTreeNodeObservation(
+                        focused: .value(false),
+                        resolution: .noCandidate(
+                            detail: "notEditable"
+                        )
+                    )
+                },
+                readChildren: { node in
+                    [
+                        PasteTreeChildRead(
+                            nodes: node == 0 ? [1] : [],
+                            failureDetail: nil
+                        )
+                    ]
+                }
+            )
+        }
+
+        guard case .noTarget(let depthDetail) = exactLimitResult(
+            maxDepth: 1,
+            maxNodes: 300
+        ) else {
+            return XCTFail("expected exact depth limit to complete")
+        }
+        XCTAssertTrue(depthDetail.contains("visited=2"))
+
+        guard case .noTarget(let nodeDetail) = exactLimitResult(
+            maxDepth: 10,
+            maxNodes: 2
+        ) else {
+            return XCTFail("expected exact node limit to complete")
+        }
+        XCTAssertTrue(nodeDetail.contains("visited=2"))
     }
 
     private func pasteTarget(

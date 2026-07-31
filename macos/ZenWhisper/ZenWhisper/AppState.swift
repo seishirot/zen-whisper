@@ -43,6 +43,12 @@ enum AppState: Equatable {
                 }
                 return "Pasted"
             }
+            if reason?.lowercased().contains("unconfirmed transcript copied") == true {
+                return "Transcript copied"
+            }
+            if reason?.lowercased().contains("transcript available from menu") == true {
+                return "Paste not confirmed · Recoverable"
+            }
             if reason?.lowercased().contains("not confirmed") == true {
                 return "Copied · Paste not confirmed"
             }
@@ -51,11 +57,24 @@ enum AppState: Equatable {
             }
             return reason.map { "Copied: \(StatusText.copyOnlyReason($0))" } ?? "Copied"
         case .copySkipped(let reason):
+            let recoverable = reason.lowercased().contains(
+                "transcript available from menu"
+            )
             if reason.lowercased().contains("unsafe") {
-                return "Blocked · Secure field"
+                return recoverable
+                    ? "Blocked · Secure field · Recoverable"
+                    : "Blocked · Secure field"
+            }
+            if reason.lowercased().contains("safety could not be verified") {
+                return recoverable
+                    ? "Blocked · Safety unknown · Recoverable"
+                    : "Blocked · Target safety unknown"
             }
             return "Skipped: \(StatusText.copyOnlyReason(reason))"
-        case .copyFailed:
+        case .copyFailed(let reason):
+            if reason.lowercased().contains("transcript available from menu") {
+                return "Copy failed · Recoverable"
+            }
             return "Copy failed"
         case .enhancementWarning:
             return "Fallback"

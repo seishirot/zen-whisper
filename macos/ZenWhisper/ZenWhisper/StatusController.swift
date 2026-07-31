@@ -8,6 +8,11 @@ final class StatusController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private let statusMenuItem = NSMenuItem(title: "Starting", action: nil, keyEquivalent: "")
     private let toggleMenuItem = NSMenuItem(title: "Start Recording", action: #selector(toggleRecording), keyEquivalent: "")
+    private let copyUnconfirmedTranscriptMenuItem = NSMenuItem(
+        title: "Copy Oldest Unconfirmed Transcript",
+        action: #selector(copyUnconfirmedTranscript),
+        keyEquivalent: ""
+    )
     private let primaryRecoveryMenuItem = NSMenuItem(title: "", action: #selector(primaryRecovery), keyEquivalent: "")
     private let retryPreloadMenuItem = NSMenuItem(title: "Retry Model Load", action: #selector(retryPreload), keyEquivalent: "")
     private let repairMenuItem = NSMenuItem(title: "Repair Backend", action: #selector(repairBackend), keyEquivalent: "")
@@ -50,6 +55,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     var onToggleRecording: (() -> Void)?
+    var onCopyUnconfirmedTranscript: (() -> Void)?
     var onRetryPreload: (() -> Void)?
     var onRepairBackend: (() -> Void)?
     var onAcceptSignatureChange: (() -> Void)?
@@ -98,11 +104,20 @@ final class StatusController: NSObject, NSMenuDelegate {
         renderLaunchAtLoginState()
     }
 
+    func setUnconfirmedTranscriptCount(_ count: Int) {
+        let available = count > 0
+        copyUnconfirmedTranscriptMenuItem.title = count > 1
+            ? "Copy Oldest Unconfirmed Transcript (\(count))"
+            : "Copy Oldest Unconfirmed Transcript"
+        copyUnconfirmedTranscriptMenuItem.isHidden = !available
+        copyUnconfirmedTranscriptMenuItem.isEnabled = available
+    }
+
     func update(state: AppState) {
         currentState = state
         renderStatusItem()
         updateAnimationTimer(for: state)
-        statusMenuItem.title = menuText(for: state)
+        statusMenuItem.title = Self.menuText(for: state)
         toggleMenuItem.title = toggleTitle(for: state)
         toggleMenuItem.isEnabled = state.canToggleRecording
         retryPreloadMenuItem.isEnabled = canRetryPreload(state)
@@ -175,6 +190,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         toggleMenuItem.target = self
         menu.addItem(toggleMenuItem)
         menu.addItem(statusMenuItem)
+        copyUnconfirmedTranscriptMenuItem.target = self
+        copyUnconfirmedTranscriptMenuItem.isHidden = true
+        copyUnconfirmedTranscriptMenuItem.isEnabled = false
+        menu.addItem(copyUnconfirmedTranscriptMenuItem)
 
         primaryRecoveryMenuItem.target = self
         primaryRecoveryMenuItem.isHidden = true
@@ -464,7 +483,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         return submenu
     }
 
-    private func menuText(for state: AppState) -> String {
+    nonisolated static func menuText(for state: AppState) -> String {
         switch state {
         case .idle:
             return "Idle"
@@ -512,6 +531,12 @@ final class StatusController: NSObject, NSMenuDelegate {
                 if reason.lowercased().contains("diagnostics") {
                     return "Diagnostics copied"
                 }
+                if reason.lowercased().contains("unconfirmed transcript copied") {
+                    return "Unconfirmed transcript copied"
+                }
+                if reason.lowercased().contains("transcript available from menu") {
+                    return "Paste not confirmed; newer clipboard preserved; transcript available from menu"
+                }
                 if reason.lowercased().contains("not confirmed") {
                     return "Copied; paste not confirmed; transcript kept for manual paste"
                 }
@@ -522,11 +547,24 @@ final class StatusController: NSObject, NSMenuDelegate {
             }
             return "Copied"
         case .copySkipped(let reason):
+            let recoverySuffix = reason.lowercased().contains(
+                "transcript available from menu"
+            )
+                ? "; transcript available from menu"
+                : ""
             if reason.lowercased().contains("unsafe") {
-                return "Blocked: secure or sensitive field"
+                return "Blocked: secure or sensitive field\(recoverySuffix)"
+            }
+            if reason.lowercased().contains("safety could not be verified") {
+                return "Blocked: target safety could not be verified\(recoverySuffix)"
             }
             return "Copy Skipped: \(reason)"
         case .copyFailed(let message):
+            if message.lowercased().contains(
+                "transcript available from menu"
+            ) {
+                return "Copy Failed · Recoverable: \(message)"
+            }
             return "Copy Failed: \(StatusText.visibleErrorSummary(message))"
         case .enhancementWarning(let message):
             return "Enhancement Fallback: \(message)"
@@ -655,6 +693,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleRecording() { onToggleRecording?() }
+    @objc private func copyUnconfirmedTranscript() {
+        onCopyUnconfirmedTranscript?()
+    }
     @objc private func openSettings() { onOpenSettings?() }
     @objc private func primaryRecovery() {
         performRecovery(primaryRecoveryAction)

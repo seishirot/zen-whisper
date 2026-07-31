@@ -42,7 +42,7 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
         XCTAssertEqual(report.verificationLatencyMilliseconds, 50)
         XCTAssertEqual(
             controller.eventLog,
-            ["pasteDown", "pasteUp", "returnDown", "returnUp"]
+            ["pasteDown", "pasteUp", "restore", "returnDown", "returnUp"]
         )
         XCTAssertEqual(controller.preparedTexts, [insertedText])
         XCTAssertEqual(controller.restoreCallCount, 1)
@@ -78,7 +78,10 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             report.result,
-            .copiedForManualPaste(reason: .verificationTimedOut)
+            .manualPasteFallback(
+                reason: .verificationTimedOut,
+                availability: .clipboard
+            )
         )
         XCTAssertEqual(controller.eventLog, ["pasteDown", "pasteUp"])
         XCTAssertEqual(controller.restoreCallCount, 0)
@@ -112,11 +115,107 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             report.result,
-            .copiedForManualPaste(reason: .noEditableTarget)
+            .manualPasteFallback(
+                reason: .noEditableTarget,
+                availability: .clipboard
+            )
         )
         XCTAssertEqual(controller.probeCallCount, 3)
         XCTAssertEqual(clock.sleeps, [50_000_000, 50_000_000])
         XCTAssertEqual(controller.preparedTexts, ["manual fallback"])
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
+    func testIndeterminateTargetSafetyRetriesWithoutWritingClipboard() async {
+        let controller = FakePasteAttemptController()
+        controller.defaultProbe = PasteTargetProbe(
+            outcome: .safetyIndeterminate,
+            detail: "protected=AXErrorCannotComplete"
+        )
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "must not reach clipboard",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .blocked(
+                reason: .targetSafetyIndeterminate,
+                transcript: .intentionallyDiscarded
+            )
+        )
+        XCTAssertEqual(controller.probeCallCount, 3)
+        XCTAssertTrue(controller.preparedTexts.isEmpty)
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
+    func testCopyOnlyBlocksWhenTargetSafetyIsIndeterminate() async {
+        let controller = FakePasteAttemptController()
+        controller.defaultProbe = PasteTargetProbe(
+            outcome: .safetyIndeterminate,
+            detail: "metadata=AXErrorCannotComplete"
+        )
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "must not be copied",
+                outputMode: .copyOnly,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .blocked(
+                reason: .targetSafetyIndeterminate,
+                transcript: .intentionallyDiscarded
+            )
+        )
+        XCTAssertTrue(controller.preparedTexts.isEmpty)
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
+    func testUntrustedCopyOnlyCopiesWithoutProbingAccessibilityTarget() async {
+        let controller = FakePasteAttemptController()
+        controller.accessibilityTrusted = false
+        controller.defaultProbe = PasteTargetProbe(
+            outcome: .safetyIndeterminate,
+            detail: "apiDisabled"
+        )
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(
+            controller: controller,
+            clock: clock
+        )
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "copy without AX",
+                outputMode: .copyOnly,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .manualPasteFallback(
+                reason: .copyOnlyMode,
+                availability: .clipboard
+            )
+        )
+        XCTAssertEqual(controller.probeCallCount, 0)
+        XCTAssertEqual(controller.preparedTexts, ["copy without AX"])
         XCTAssertTrue(controller.eventLog.isEmpty)
     }
 
@@ -137,7 +236,10 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             report.result,
-            .copiedForManualPaste(reason: .eventPermissionUnavailable)
+            .manualPasteFallback(
+                reason: .eventPermissionUnavailable,
+                availability: .clipboard
+            )
         )
         XCTAssertEqual(controller.preparedTexts, ["manual event fallback"])
         XCTAssertTrue(controller.eventLog.isEmpty)
@@ -167,6 +269,116 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
             )
         )
         XCTAssertEqual(controller.restoreCallCount, 1)
+    }
+
+    func testUnverifiedPasteWithExternalClipboardChangeUsesRecoveryMenu() async {
+        let controller = FakePasteAttemptController()
+        controller.pasteboardOwned = false
+        controller.pasteboardOwnershipResults = [true, false]
+        let unchanged = PasteTextState(
+            value: "before",
+            selectedRange: NSRange(location: 6, length: 0)
+        )
+        controller.textStates = [unchanged]
+        controller.fallbackTextState = unchanged
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "recover me",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .manualPasteFallback(
+                reason: .verificationTimedOut,
+                availability: .recoveryMenu
+            )
+        )
+        XCTAssertEqual(controller.restoreCallCount, 0)
+    }
+
+    func testUnsafeTargetAfterPasteboardPreparationSurfacesRestoreFailure() async {
+        let controller = FakePasteAttemptController()
+        controller.probes = [
+            PasteTargetProbe(
+                context: PasteTargetContext(snapshot: testPasteSnapshot()),
+                detail: "safe"
+            ),
+            PasteTargetProbe(
+                context: PasteTargetContext(
+                    snapshot: testPasteSnapshot(isProtectedContent: true)
+                ),
+                detail: "unsafe"
+            )
+        ]
+        controller.restoreResult = .failed
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "must be restored",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .failed(reason: .pasteboardRestoreFailed)
+        )
+        XCTAssertEqual(controller.restoreCallCount, 1)
+        XCTAssertEqual(controller.eventLog, ["restore"])
+    }
+
+    func testUnsafeTargetAfterOwnershipLossRetainsTranscriptForRecovery() async {
+        let controller = FakePasteAttemptController()
+        controller.probes = [
+            PasteTargetProbe(
+                context: PasteTargetContext(snapshot: testPasteSnapshot()),
+                detail: "safe"
+            ),
+            PasteTargetProbe(
+                context: PasteTargetContext(
+                    snapshot: testPasteSnapshot(isProtectedContent: true)
+                ),
+                detail: "unsafe"
+            )
+        ]
+        controller.restoreResult = .ownershipLost
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "recover outside the secure target",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .blocked(
+                reason: .unsafeTarget,
+                transcript: .recoveryMenu
+            )
+        )
+        XCTAssertTrue(
+            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
+                for: report.result
+            )
+        )
+        XCTAssertEqual(controller.restoreCallCount, 1)
+        XCTAssertEqual(controller.eventLog, ["restore"])
     }
 
     func testCurrentExternalTargetWinsOverRecordingAnchor() async {
@@ -227,7 +439,7 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
 
     func testSubmitIsSuppressedWhenFocusChangesAfterVerifiedPaste() async {
         let controller = FakePasteAttemptController()
-        controller.focusResults = [true, false]
+        controller.focusResults = [.matched, .changed]
         controller.textStates = verifiedTextStates(insertedText: "new")
         let clock = PasteVirtualClock()
         let coordinator = makeCoordinator(controller: controller, clock: clock)
@@ -252,6 +464,135 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
         XCTAssertEqual(clock.sleeps.last, 100_000_000)
     }
 
+    func testImmediateFocusSafetyRecheckStopsBeforePasteKeyDown() async {
+        let controller = FakePasteAttemptController()
+        controller.focusResults = [.changed]
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "do not dispatch",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .manualPasteFallback(
+                reason: .noEditableTarget,
+                availability: .clipboard
+            )
+        )
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
+    func testImmediateUnsafeFocusRestoresBeforePasteKeyDown() async {
+        let controller = FakePasteAttemptController()
+        controller.focusResults = [.unsafe]
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "do not leave on clipboard",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .blocked(
+                reason: .unsafeTarget,
+                transcript: .intentionallyDiscarded
+            )
+        )
+        XCTAssertEqual(controller.restoreCallCount, 1)
+        XCTAssertEqual(controller.eventLog, ["restore"])
+    }
+
+    func testImmediateIndeterminateFocusRestoresBeforePasteKeyDown() async {
+        let controller = FakePasteAttemptController()
+        controller.focusResults = [.safetyIndeterminate]
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "do not leave after AX failure",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .blocked(
+                reason: .targetSafetyIndeterminate,
+                transcript: .intentionallyDiscarded
+            )
+        )
+        XCTAssertEqual(controller.restoreCallCount, 1)
+        XCTAssertEqual(controller.eventLog, ["restore"])
+    }
+
+    func testClipboardOwnershipLossBeforeKeyDownSkipsPasteEvent() async {
+        let controller = FakePasteAttemptController()
+        controller.pasteboardOwned = false
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "must not paste a newer clipboard",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .manualPasteFallback(
+                reason: .verificationUnavailable,
+                availability: .recoveryMenu
+            )
+        )
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
+    func testClipboardOwnershipLossDuringEventCreationSkipsPasteEvent() async {
+        let controller = FakePasteAttemptController()
+        controller.onMakePasteEvents = {
+            controller.pasteboardOwned = false
+        }
+        let clock = PasteVirtualClock()
+        let coordinator = makeCoordinator(controller: controller, clock: clock)
+
+        let report = await coordinator.perform(
+            PasteRequest(
+                text: "do not paste after event creation race",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: nil
+            )
+        )
+
+        XCTAssertEqual(
+            report.result,
+            .manualPasteFallback(
+                reason: .verificationUnavailable,
+                availability: .recoveryMenu
+            )
+        )
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
     func testUnsafeTargetBlocksPasteboardAndEventWrites() async {
         let controller = FakePasteAttemptController()
         controller.unsafe = true
@@ -267,7 +608,13 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(report.result, .blocked(reason: .unsafeTarget))
+        XCTAssertEqual(
+            report.result,
+            .blocked(
+                reason: .unsafeTarget,
+                transcript: .intentionallyDiscarded
+            )
+        )
         XCTAssertTrue(controller.preparedTexts.isEmpty)
         XCTAssertTrue(controller.eventLog.isEmpty)
     }
@@ -349,6 +696,223 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
         XCTAssertEqual(controller.preparedTexts, ["first", "second"])
     }
 
+    func testCancellationDuringTargetRetryStopsBeforePasteboardWrite() async {
+        let controller = FakePasteAttemptController()
+        controller.probes = [
+            PasteTargetProbe(context: nil, detail: "transient")
+        ]
+        let clock = PasteGatedVirtualClock()
+        let coordinator = PasteAttemptCoordinator(
+            controller: controller,
+            logger: { _ in },
+            sleep: { nanoseconds in
+                await clock.sleep(nanoseconds)
+            },
+            now: { clock.now }
+        )
+        let attempt = Task { @MainActor in
+            await coordinator.perform(
+                PasteRequest(
+                    text: "cancelled",
+                    outputMode: .pasteRestoreClipboard,
+                    submitAfterPaste: false,
+                    recordingAnchor: nil
+                )
+            )
+        }
+        for _ in 0..<100 where !clock.isBlocked {
+            await Task.yield()
+        }
+        XCTAssertTrue(clock.isBlocked)
+
+        coordinator.cancel()
+        clock.release()
+        let report = await attempt.value
+
+        XCTAssertEqual(report.result, .failed(reason: .superseded))
+        XCTAssertTrue(controller.preparedTexts.isEmpty)
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
+    func testCopyOnlyCancellationDuringTargetRetryStopsBeforePasteboardWrite() async {
+        let controller = FakePasteAttemptController()
+        controller.probes = [
+            PasteTargetProbe(context: nil, detail: "transient")
+        ]
+        let clock = PasteGatedVirtualClock()
+        let coordinator = PasteAttemptCoordinator(
+            controller: controller,
+            logger: { _ in },
+            sleep: { nanoseconds in
+                await clock.sleep(nanoseconds)
+            },
+            now: { clock.now }
+        )
+        let attempt = Task { @MainActor in
+            await coordinator.perform(
+                PasteRequest(
+                    text: "cancelled copy",
+                    outputMode: .copyOnly,
+                    submitAfterPaste: false,
+                    recordingAnchor: nil
+                )
+            )
+        }
+        for _ in 0..<100 where !clock.isBlocked {
+            await Task.yield()
+        }
+        XCTAssertTrue(clock.isBlocked)
+
+        coordinator.cancel()
+        clock.release()
+        let report = await attempt.value
+
+        XCTAssertEqual(report.result, .failed(reason: .superseded))
+        XCTAssertTrue(controller.preparedTexts.isEmpty)
+        XCTAssertTrue(controller.eventLog.isEmpty)
+    }
+
+    func testCancellationDuringDispatchRetryRestoresBeforeReturning() async {
+        let controller = FakePasteAttemptController()
+        controller.probes = [
+            PasteTargetProbe(
+                context: PasteTargetContext(snapshot: testPasteSnapshot()),
+                detail: "initial"
+            ),
+            PasteTargetProbe(context: nil, detail: "dispatch transient")
+        ]
+        let clock = PasteNthGatedVirtualClock(blockAtCall: 2)
+        let coordinator = PasteAttemptCoordinator(
+            controller: controller,
+            logger: { _ in },
+            sleep: { nanoseconds in
+                await clock.sleep(nanoseconds)
+            },
+            now: { clock.now }
+        )
+        let attempt = Task { @MainActor in
+            await coordinator.perform(
+                PasteRequest(
+                    text: "restore on cancel",
+                    outputMode: .pasteRestoreClipboard,
+                    submitAfterPaste: false,
+                    recordingAnchor: nil
+                )
+            )
+        }
+        for _ in 0..<100 where !clock.isBlocked {
+            await Task.yield()
+        }
+        XCTAssertTrue(clock.isBlocked)
+        XCTAssertEqual(controller.preparedTexts, ["restore on cancel"])
+
+        coordinator.cancel()
+        clock.release()
+        let report = await attempt.value
+
+        XCTAssertEqual(report.result, .failed(reason: .superseded))
+        XCTAssertEqual(controller.restoreCallCount, 1)
+        XCTAssertEqual(controller.eventLog, ["restore"])
+    }
+
+    func testCancellationDuringDispatchRetrySurfacesRestoreFailure() async {
+        let controller = FakePasteAttemptController()
+        controller.restoreResult = .failed
+        controller.probes = [
+            PasteTargetProbe(
+                context: PasteTargetContext(snapshot: testPasteSnapshot()),
+                detail: "initial"
+            ),
+            PasteTargetProbe(context: nil, detail: "dispatch transient")
+        ]
+        let clock = PasteNthGatedVirtualClock(blockAtCall: 2)
+        let coordinator = PasteAttemptCoordinator(
+            controller: controller,
+            logger: { _ in },
+            sleep: { nanoseconds in
+                await clock.sleep(nanoseconds)
+            },
+            now: { clock.now }
+        )
+        let attempt = Task { @MainActor in
+            await coordinator.perform(
+                PasteRequest(
+                    text: "restore failure on cancel",
+                    outputMode: .pasteRestoreClipboard,
+                    submitAfterPaste: false,
+                    recordingAnchor: nil
+                )
+            )
+        }
+        for _ in 0..<100 where !clock.isBlocked {
+            await Task.yield()
+        }
+        XCTAssertTrue(clock.isBlocked)
+        XCTAssertEqual(
+            controller.preparedTexts,
+            ["restore failure on cancel"]
+        )
+
+        coordinator.cancel()
+        clock.release()
+        let report = await attempt.value
+
+        XCTAssertEqual(
+            report.result,
+            .failed(reason: .pasteboardRestoreFailed)
+        )
+        XCTAssertEqual(controller.restoreCallCount, 1)
+        XCTAssertEqual(controller.eventLog, ["restore"])
+    }
+
+    func testCancellationDuringVerificationKeepsTranscriptRecoverable() async {
+        let controller = FakePasteAttemptController()
+        let unchanged = PasteTextState(
+            value: "before",
+            selectedRange: NSRange(location: 6, length: 0)
+        )
+        controller.textStates = [unchanged]
+        controller.fallbackTextState = unchanged
+        let clock = PasteNthGatedVirtualClock(blockAtCall: 3)
+        let coordinator = PasteAttemptCoordinator(
+            controller: controller,
+            logger: { _ in },
+            sleep: { nanoseconds in
+                await clock.sleep(nanoseconds)
+            },
+            now: { clock.now }
+        )
+        let attempt = Task { @MainActor in
+            await coordinator.perform(
+                PasteRequest(
+                    text: "recover after dispatch",
+                    outputMode: .pasteRestoreClipboard,
+                    submitAfterPaste: false,
+                    recordingAnchor: nil
+                )
+            )
+        }
+        for _ in 0..<100 where !clock.isBlocked {
+            await Task.yield()
+        }
+        XCTAssertTrue(clock.isBlocked)
+        XCTAssertEqual(controller.eventLog, ["pasteDown", "pasteUp"])
+
+        coordinator.cancel()
+        clock.release()
+        let report = await attempt.value
+
+        XCTAssertEqual(
+            report.result,
+            .manualPasteFallback(
+                reason: .superseded,
+                availability: .clipboard
+            )
+        )
+        XCTAssertEqual(controller.eventLog, ["pasteDown", "pasteUp"])
+        XCTAssertEqual(controller.restoreCallCount, 0)
+    }
+
     func testUnconfirmedAttemptCarriesOriginalClipboardIntoNextAttempt() async {
         let controller = FakePasteAttemptController()
         controller.textStates = [
@@ -385,7 +949,10 @@ final class PasteAttemptCoordinatorTests: XCTestCase {
 
         XCTAssertEqual(
             first.result,
-            .copiedForManualPaste(reason: .verificationUnavailable)
+            .manualPasteFallback(
+                reason: .verificationUnavailable,
+                availability: .clipboard
+            )
         )
         XCTAssertEqual(
             second.result,
@@ -441,13 +1008,16 @@ private final class FakePasteAttemptController: PasteAttemptControlling {
     var preparedTexts: [String] = []
     var receivedRetainedToken: [Bool] = []
     var restoreResult = PasteboardRestoreResult.restored
+    var pasteboardOwned = true
+    var pasteboardOwnershipResults: [Bool] = []
     var restoreCallCount = 0
     var activationCallCount = 0
     var textStates: [PasteTextState] = []
     var fallbackTextState = PasteTextState(value: nil, selectedRange: nil)
     var precedingLengths: [Int] = []
-    var focusResults: [Bool] = []
+    var focusResults: [PasteFocusValidation] = []
     var eventLog: [String] = []
+    var onMakePasteEvents: (() -> Void)?
 
     private var targetContext: PasteTargetContext {
         PasteTargetContext(snapshot: targetSnapshot)
@@ -506,7 +1076,15 @@ private final class FakePasteAttemptController: PasteAttemptControlling {
         _ token: PasteboardRestoreToken
     ) -> PasteboardRestoreResult {
         restoreCallCount += 1
+        eventLog.append("restore")
         return restoreResult
+    }
+
+    func ownsPasteboard(_ token: PasteboardRestoreToken) -> Bool {
+        if !pasteboardOwnershipResults.isEmpty {
+            return pasteboardOwnershipResults.removeFirst()
+        }
+        return pasteboardOwned
     }
 
     func textState(
@@ -520,15 +1098,18 @@ private final class FakePasteAttemptController: PasteAttemptControlling {
         return textStates.removeFirst()
     }
 
-    func isFocused(_ approved: PasteTargetContext) -> Bool {
+    func validateFocus(
+        _ approved: PasteTargetContext
+    ) -> PasteFocusValidation {
         guard !focusResults.isEmpty else {
-            return true
+            return .matched
         }
         return focusResults.removeFirst()
     }
 
     func makePasteKeyEventPair() -> PasteKeyEventPair? {
-        pasteEventsAvailable
+        onMakePasteEvents?()
+        return pasteEventsAvailable
             ? PasteKeyEventPair(testVirtualKey: 41)
             : nil
     }
@@ -550,7 +1131,8 @@ private final class FakePasteAttemptController: PasteAttemptControlling {
 
 private func testPasteSnapshot(
     pid: pid_t = 4242,
-    elementIdentifier: String = "editor"
+    elementIdentifier: String = "editor",
+    isProtectedContent: Bool = false
 ) -> PasteTargetSnapshot {
     PasteTargetSnapshot(
         pid: pid,
@@ -566,7 +1148,7 @@ private func testPasteSnapshot(
         canSetSelectedTextRange: true,
         hasReadableValue: true,
         hasReadableSelectedTextRange: true,
-        isProtectedContent: false,
+        isProtectedContent: isProtectedContent,
         searchableText: "editor",
         discovery: "fake"
     )
@@ -604,6 +1186,37 @@ private final class PasteGatedVirtualClock: PasteVirtualClock {
             return
         }
         shouldBlock = false
+        await withCheckedContinuation { continuation in
+            self.continuation = continuation
+        }
+    }
+
+    func release() {
+        continuation?.resume()
+        continuation = nil
+    }
+}
+
+private final class PasteNthGatedVirtualClock: PasteVirtualClock {
+    private let blockAtCall: Int
+    private var callCount = 0
+    private var continuation: CheckedContinuation<Void, Never>?
+
+    init(blockAtCall: Int) {
+        self.blockAtCall = blockAtCall
+    }
+
+    var isBlocked: Bool {
+        continuation != nil
+    }
+
+    override func sleep(_ duration: UInt64) async {
+        sleeps.append(duration)
+        nanoseconds += duration
+        callCount += 1
+        guard callCount == blockAtCall else {
+            return
+        }
         await withCheckedContinuation { continuation in
             self.continuation = continuation
         }
