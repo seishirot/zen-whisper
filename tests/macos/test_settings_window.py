@@ -24,7 +24,6 @@ def test_settings_window_covers_native_settings_and_preserves_unavailable_mic() 
         "microphonePopup",
         "outputModePopup",
         "silenceAutoStopCheckbox",
-        "unverifiedPasteFallbackCheckbox",
         "launchAtLoginCheckbox",
     ):
         assert control in controller
@@ -127,7 +126,6 @@ def test_settings_window_supports_keyboard_voiceover_and_resizing() -> None:
         "settings.microphone",
         "settings.outputMode",
         "settings.silenceAutoStop",
-        "settings.unverifiedPasteFallback",
         "settings.launchAtLogin",
         "settings.launchAtLoginMessage",
         "settings.busyMessage",

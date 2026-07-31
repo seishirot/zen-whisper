@@ -194,11 +194,6 @@ struct SettingsEditorState {
                     baseline: previousBaseline.outputMode,
                     authoritative: authoritativeSettings.outputMode
                 ),
-                allowUnverifiedPasteFallback: Self.mergeField(
-                    local: localSettings.allowUnverifiedPasteFallback,
-                    baseline: previousBaseline.allowUnverifiedPasteFallback,
-                    authoritative: authoritativeSettings.allowUnverifiedPasteFallback
-                ),
                 enhancement: Self.mergeField(
                     local: localSettings.enhancement,
                     baseline: previousBaseline.enhancement,
@@ -243,7 +238,6 @@ struct SettingsEditorState {
                 ? nil
                 : settings.microphoneDeviceUID,
             outputMode: settings.outputMode,
-            allowUnverifiedPasteFallback: settings.allowUnverifiedPasteFallback,
             enhancement: enhancement
         )
     }

@@ -1218,8 +1218,7 @@ final class SettingsEnhancementUITests: XCTestCase {
             ],
             silenceAutoStopEnabled: true,
             microphoneDeviceUID: nil,
-            outputMode: .pasteRestoreClipboard,
-            allowUnverifiedPasteFallback: false
+            outputMode: .pasteRestoreClipboard
         )
     }
 }

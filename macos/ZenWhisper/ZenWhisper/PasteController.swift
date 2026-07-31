@@ -14,12 +14,52 @@ struct PasteTargetSnapshot: Equatable {
     let elementIdentifier: String
     let elementFrame: CGRect
     let hasEditableValue: Bool
+    let canSetSelectedText: Bool
+    let canSetSelectedTextRange: Bool
+    let hasReadableValue: Bool
+    let hasReadableSelectedTextRange: Bool
     let isProtectedContent: Bool
     let searchableText: String
     let discovery: String
 
+    init(
+        pid: pid_t,
+        bundleIdentifier: String,
+        role: String,
+        subrole: String,
+        windowTitle: String,
+        windowFrame: CGRect,
+        elementIdentifier: String,
+        elementFrame: CGRect,
+        hasEditableValue: Bool,
+        canSetSelectedText: Bool = false,
+        canSetSelectedTextRange: Bool = false,
+        hasReadableValue: Bool = false,
+        hasReadableSelectedTextRange: Bool = false,
+        isProtectedContent: Bool,
+        searchableText: String,
+        discovery: String
+    ) {
+        self.pid = pid
+        self.bundleIdentifier = bundleIdentifier
+        self.role = role
+        self.subrole = subrole
+        self.windowTitle = windowTitle
+        self.windowFrame = windowFrame
+        self.elementIdentifier = elementIdentifier
+        self.elementFrame = elementFrame
+        self.hasEditableValue = hasEditableValue
+        self.canSetSelectedText = canSetSelectedText
+        self.canSetSelectedTextRange = canSetSelectedTextRange
+        self.hasReadableValue = hasReadableValue
+        self.hasReadableSelectedTextRange = hasReadableSelectedTextRange
+        self.isProtectedContent = isProtectedContent
+        self.searchableText = searchableText
+        self.discovery = discovery
+    }
+
     var redactedDescription: String {
-        "appHash=\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier)) role=\(role) subrole=\(subrole) editable=\(hasEditableValue) protected=\(isProtectedContent) discovery=\(discovery) window=\(frameDescription(windowFrame)) element=\(frameDescription(elementFrame))"
+        "appHash=\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier)) role=\(role) subrole=\(subrole) editable=\(hasEditableValue) selectedTextSettable=\(canSetSelectedText) selectedRangeSettable=\(canSetSelectedTextRange) valueReadable=\(hasReadableValue) selectedRangeReadable=\(hasReadableSelectedTextRange) protected=\(isProtectedContent) discovery=\(discovery) window=\(frameDescription(windowFrame)) element=\(frameDescription(elementFrame))"
     }
 
     private func frameDescription(_ frame: CGRect) -> String {
@@ -30,17 +70,29 @@ struct PasteTargetSnapshot: Equatable {
     }
 }
 
-struct PasteTargetProbe {
-    let snapshot: PasteTargetSnapshot?
-    let detail: String
+struct PasteTargetContext {
+    let snapshot: PasteTargetSnapshot
+    fileprivate let element: AXUIElement?
+
+#if DEBUG
+    init(snapshot: PasteTargetSnapshot) {
+        self.snapshot = snapshot
+        element = nil
+    }
+#endif
+
+    fileprivate init(snapshot: PasteTargetSnapshot, element: AXUIElement) {
+        self.snapshot = snapshot
+        self.element = element
+    }
 }
 
-struct PasteApplicationTarget: Equatable {
-    let pid: pid_t
-    let bundleIdentifier: String
+struct PasteTargetProbe {
+    let context: PasteTargetContext?
+    let detail: String
 
-    var redactedDescription: String {
-        "appHash=\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier))"
+    var snapshot: PasteTargetSnapshot? {
+        context?.snapshot
     }
 }
 
@@ -55,107 +107,191 @@ private func redactedAppIdentityDescription(pid: pid_t, bundleIdentifier: String
     "appHash=\(redactedAppIdentityHash(pid: pid, bundleIdentifier: bundleIdentifier))"
 }
 
-enum PasteCopyOnlyReason: Equatable {
-    case missingRecordingStartAXTarget
-    case missingRecordingStopAXTarget
-    case missingCurrentAXTarget
-    case targetChangedDuringRecording
-    case targetChanged
-    case targetNotEditable
-
-    var message: String {
-        switch self {
-        case .missingRecordingStartAXTarget:
-            return "missing recording start AX target"
-        case .missingRecordingStopAXTarget:
-            return "missing recording stop AX target"
-        case .missingCurrentAXTarget:
-            return "missing current AX target"
-        case .targetChangedDuringRecording:
-            return "target changed during recording"
-        case .targetChanged:
-            return "target changed"
-        case .targetNotEditable:
-            return "target is not editable"
-        }
-    }
-
-    var isMissingAXTarget: Bool {
-        switch self {
-        case .missingRecordingStartAXTarget, .missingRecordingStopAXTarget, .missingCurrentAXTarget:
-            return true
-        case .targetChangedDuringRecording, .targetChanged, .targetNotEditable:
-            return false
-        }
-    }
-}
-
-enum PasteDecision: Equatable {
-    case paste
-    case copyOnly(PasteCopyOnlyReason)
-    case skipCopy(String)
-}
-
 enum PasteboardWriteResult {
     case success(PasteboardRestoreToken)
     case writeFailed(restoreSucceeded: Bool)
 }
 
+enum PasteboardRestoreResult: Equatable {
+    case restored
+    case ownershipLost
+    case failed
+}
+
+struct PasteTextState: Equatable {
+    let value: String?
+    let selectedRange: NSRange?
+    let textImmediatelyBeforeSelection: String?
+
+    init(
+        value: String?,
+        selectedRange: NSRange?,
+        textImmediatelyBeforeSelection: String? = nil
+    ) {
+        self.value = value
+        self.selectedRange = selectedRange
+        self.textImmediatelyBeforeSelection = textImmediatelyBeforeSelection
+    }
+}
+
+struct PasteVerificationExpectation: Equatable {
+    let before: PasteTextState
+    let insertedText: String
+    let expectedValue: String?
+    let expectedCaretLocation: Int?
+
+    init(before: PasteTextState, insertedText: String) {
+        self.before = before
+        self.insertedText = insertedText
+        if let value = before.value,
+           let selectedRange = before.selectedRange,
+           selectedRange.location >= 0,
+           selectedRange.length >= 0,
+           NSMaxRange(selectedRange) <= (value as NSString).length {
+            expectedValue = (value as NSString).replacingCharacters(
+                in: selectedRange,
+                with: insertedText
+            )
+            expectedCaretLocation = selectedRange.location + (insertedText as NSString).length
+        } else {
+            expectedValue = nil
+            expectedCaretLocation = before.selectedRange.map {
+                $0.location + (insertedText as NSString).length
+            }
+        }
+    }
+
+    var canVerify: Bool {
+        expectedValue != nil || expectedCaretLocation != nil
+    }
+
+    func isSatisfied(by after: PasteTextState) -> Bool {
+        if let expectedValue, after.value == expectedValue {
+            return true
+        }
+        if let expectedCaretLocation,
+           let selectedRange = after.selectedRange,
+           selectedRange.location == expectedCaretLocation,
+           selectedRange.length == 0 {
+            return after.textImmediatelyBeforeSelection == insertedText
+        }
+        return false
+    }
+}
+
+struct PasteKeyEventPair {
+    fileprivate enum Storage {
+        case events(keyDown: CGEvent, keyUp: CGEvent)
+#if DEBUG
+        case test
+#endif
+    }
+
+    let virtualKey: CGKeyCode
+    fileprivate let storage: Storage
+
+    fileprivate init(
+        virtualKey: CGKeyCode,
+        keyDown: CGEvent,
+        keyUp: CGEvent
+    ) {
+        self.virtualKey = virtualKey
+        storage = .events(keyDown: keyDown, keyUp: keyUp)
+    }
+
+#if DEBUG
+    init(testVirtualKey: CGKeyCode) {
+        virtualKey = testVirtualKey
+        storage = .test
+    }
+#endif
+}
+
+protocol PasteAttemptControlling: AnyObject {
+    func isAccessibilityTrusted() -> Bool
+    func snapshotFocusedTargetProbe() -> PasteTargetProbe
+    func isUnsafeForClipboard(_ snapshot: PasteTargetSnapshot) -> Bool
+    func isEligible(_ snapshot: PasteTargetSnapshot) -> Bool
+    func activateApplication(for anchor: PasteTargetSnapshot) -> Bool
+    func currentProcessIdentifier() -> pid_t
+    func frontmostProcessIdentifier() -> pid_t?
+    func canCreatePasteEvents() -> Bool
+    func prepareAutoPaste(
+        _ text: String,
+        attemptID: UUID,
+        preservingBaseFrom retainedToken: PasteboardRestoreToken?
+    ) -> PasteboardWriteResult
+    func restoreIfOwned(_ token: PasteboardRestoreToken) -> PasteboardRestoreResult
+    func textState(
+        for context: PasteTargetContext,
+        precedingUTF16Length: Int
+    ) -> PasteTextState
+    func isFocused(_ approved: PasteTargetContext) -> Bool
+    func makePasteKeyEventPair() -> PasteKeyEventPair?
+    func makeReturnKeyEventPair() -> PasteKeyEventPair?
+    func postKeyDown(_ pair: PasteKeyEventPair)
+    func postKeyUp(_ pair: PasteKeyEventPair)
+}
+
 final class PasteController {
+    private static let pasteAttemptPasteboardType = NSPasteboard.PasteboardType(
+        "app.zen-whisper.paste-attempt"
+    )
+
     func isAccessibilityTrusted() -> Bool {
         AXIsProcessTrusted()
     }
 
-    func copy(_ text: String, restoreAfter delay: TimeInterval? = nil) -> Bool {
-        guard let restoreToken = copyForAutoPaste(text) else {
-            return false
-        }
-        if let delay {
-            scheduleRestore(restoreToken, after: delay)
-        }
-        return true
-    }
-
-    func copyForAutoPaste(_ text: String) -> PasteboardRestoreToken? {
-        guard case .success(let token) = prepareAutoPaste(text) else {
-            return nil
-        }
-        return token
-    }
-
-    func prepareAutoPaste(_ text: String) -> PasteboardWriteResult {
+    func prepareAutoPaste(
+        _ text: String,
+        attemptID: UUID = UUID(),
+        preservingBaseFrom retainedToken: PasteboardRestoreToken? = nil
+    ) -> PasteboardWriteResult {
         let pasteboard = NSPasteboard.general
-        let previous = PasteboardSnapshot(pasteboard: pasteboard)
+        let previous: PasteboardSnapshot
+        if let retainedToken, ownsPasteboard(retainedToken) {
+            previous = retainedToken.previous
+        } else {
+            previous = PasteboardSnapshot(pasteboard: pasteboard)
+        }
+        let item = NSPasteboardItem()
+        guard item.setString(text, forType: .string),
+              item.setString(
+                attemptID.uuidString,
+                forType: Self.pasteAttemptPasteboardType
+              ) else {
+            return .writeFailed(restoreSucceeded: true)
+        }
         pasteboard.clearContents()
-        guard pasteboard.setString(text, forType: .string) else {
+        guard pasteboard.writeObjects([item]) else {
             return .writeFailed(restoreSucceeded: previous.restore(to: pasteboard))
         }
         return .success(PasteboardRestoreToken(
             previous: previous,
             writtenChangeCount: pasteboard.changeCount,
-            text: text
+            text: text,
+            attemptID: attemptID
         ))
     }
 
-    func scheduleRestore(
-        _ token: PasteboardRestoreToken,
-        after delay: TimeInterval,
-        completion: @escaping (Bool) -> Void = { _ in }
-    ) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-            let current = NSPasteboard.general
-            guard current.changeCount == token.writtenChangeCount,
-                  current.string(forType: .string) == token.text else {
-                completion(false)
-                return
-            }
-            completion(self.restore(token))
-        }
+    @discardableResult
+    private func restore(_ token: PasteboardRestoreToken) -> Bool {
+        token.previous.restore(to: NSPasteboard.general)
     }
 
-    @discardableResult
-    func restore(_ token: PasteboardRestoreToken) -> Bool {
-        token.previous.restore(to: NSPasteboard.general)
+    func restoreIfOwned(_ token: PasteboardRestoreToken) -> PasteboardRestoreResult {
+        guard ownsPasteboard(token) else {
+            return .ownershipLost
+        }
+        return restore(token) ? .restored : .failed
+    }
+
+    func ownsPasteboard(_ token: PasteboardRestoreToken) -> Bool {
+        let pasteboard = NSPasteboard.general
+        return pasteboard.changeCount == token.writtenChangeCount
+            && pasteboard.string(forType: .string) == token.text
+            && pasteboard.string(forType: Self.pasteAttemptPasteboardType)
+                == token.attemptID.uuidString
     }
 
     func snapshotFocusedTarget() -> PasteTargetSnapshot? {
@@ -178,8 +314,9 @@ final class PasteController {
         if let focused = systemFocused.element {
             let result = snapshotWithDetail(from: focused)
             detail.append("systemSnapshot=\(result.detail)")
-            if let snapshot = result.snapshot {
-                return PasteTargetProbe(snapshot: snapshot, detail: detail.joined(separator: " "))
+            if let context = result.context,
+               isEligible(context.snapshot) || isUnsafeForClipboard(context.snapshot) {
+                return PasteTargetProbe(context: context, detail: detail.joined(separator: " "))
             }
         }
 
@@ -196,32 +333,33 @@ final class PasteController {
                 if let focusedElement = focused.element {
                     let result = snapshotWithDetail(from: focusedElement, pid: focusedAppPID)
                     detail.append("focusedAppSnapshot=\(result.detail)")
-                    if let snapshot = result.snapshot {
-                        return PasteTargetProbe(snapshot: snapshot, detail: detail.joined(separator: " "))
+                    if let context = result.context,
+                       isEligible(context.snapshot) || isUnsafeForClipboard(context.snapshot) {
+                        return PasteTargetProbe(context: context, detail: detail.joined(separator: " "))
                     }
                 }
-                if let snapshot = snapshotFromWindowDescendant(
+                if let context = snapshotFromWindowDescendant(
                     axApp: axApp,
                     pid: focusedAppPID,
                     label: "focusedApp",
                     searchWindowDescendants: searchWindowDescendants,
                     detail: &detail
                 ) {
-                    return PasteTargetProbe(snapshot: snapshot, detail: detail.joined(separator: " "))
+                    return PasteTargetProbe(context: context, detail: detail.joined(separator: " "))
                 }
             }
         }
 
         guard let app = NSWorkspace.shared.frontmostApplication else {
             detail.append("frontmost=nil")
-            return PasteTargetProbe(snapshot: nil, detail: detail.joined(separator: " "))
+            return PasteTargetProbe(context: nil, detail: detail.joined(separator: " "))
         }
         detail.append(
             "frontmost=\(redactedAppIdentityDescription(pid: app.processIdentifier, bundleIdentifier: app.bundleIdentifier ?? "<nil>"))"
         )
         guard app.processIdentifier != NSRunningApplication.current.processIdentifier else {
             detail.append("frontmost=current")
-            return PasteTargetProbe(snapshot: nil, detail: detail.joined(separator: " "))
+            return PasteTargetProbe(context: nil, detail: detail.joined(separator: " "))
         }
         let axApp = AXUIElementCreateApplication(app.processIdentifier)
         let focused = copyElementAttributeResult(axApp, kAXFocusedUIElementAttribute as CFString)
@@ -229,20 +367,21 @@ final class PasteController {
         if let focusedElement = focused.element {
             let result = snapshotWithDetail(from: focusedElement, pid: app.processIdentifier)
             detail.append("frontmostSnapshot=\(result.detail)")
-            if let snapshot = result.snapshot {
-                return PasteTargetProbe(snapshot: snapshot, detail: detail.joined(separator: " "))
+            if let context = result.context,
+               isEligible(context.snapshot) || isUnsafeForClipboard(context.snapshot) {
+                return PasteTargetProbe(context: context, detail: detail.joined(separator: " "))
             }
         }
-        if let snapshot = snapshotFromWindowDescendant(
+        if let context = snapshotFromWindowDescendant(
             axApp: axApp,
             pid: app.processIdentifier,
             label: "frontmost",
             searchWindowDescendants: searchWindowDescendants,
             detail: &detail
         ) {
-            return PasteTargetProbe(snapshot: snapshot, detail: detail.joined(separator: " "))
+            return PasteTargetProbe(context: context, detail: detail.joined(separator: " "))
         }
-        return PasteTargetProbe(snapshot: nil, detail: detail.joined(separator: " "))
+        return PasteTargetProbe(context: nil, detail: detail.joined(separator: " "))
     }
 
     private func snapshotFromWindowDescendant(
@@ -251,17 +390,17 @@ final class PasteController {
         label: String,
         searchWindowDescendants: Bool,
         detail: inout [String]
-    ) -> PasteTargetSnapshot? {
+    ) -> PasteTargetContext? {
         let focusedWindow = copyElementAttributeResult(axApp, kAXFocusedWindowAttribute as CFString)
         detail.append("\(label)FocusedWindow=\(describe(focusedWindow))")
-        if searchWindowDescendants, let snapshot = searchWindow(focusedWindow.element, pid: pid, label: label, detail: &detail) {
-            return snapshot
+        if searchWindowDescendants, let context = searchWindow(focusedWindow.element, pid: pid, label: label, detail: &detail) {
+            return context
         }
 
         let mainWindow = copyElementAttributeResult(axApp, kAXMainWindowAttribute as CFString)
         detail.append("\(label)MainWindow=\(describe(mainWindow))")
-        if searchWindowDescendants, let snapshot = searchWindow(mainWindow.element, pid: pid, label: label, detail: &detail) {
-            return snapshot
+        if searchWindowDescendants, let context = searchWindow(mainWindow.element, pid: pid, label: label, detail: &detail) {
+            return context
         }
         return nil
     }
@@ -271,25 +410,26 @@ final class PasteController {
         pid: pid_t,
         label: String,
         detail: inout [String]
-    ) -> PasteTargetSnapshot? {
+    ) -> PasteTargetContext? {
         guard let window else {
             return nil
         }
         let result = snapshotEditableDescendant(in: window, pid: pid)
         detail.append("\(label)WindowSearch=\(result.detail)")
-        return result.snapshot
+        return result.context
     }
 
     private func snapshotEditableDescendant(
         in root: AXUIElement,
         pid: pid_t,
-        maxDepth: Int = 8,
-        maxNodes: Int = 180
-    ) -> (snapshot: PasteTargetSnapshot?, detail: String) {
+        maxDepth: Int = 10,
+        maxNodes: Int = 300
+    ) -> (context: PasteTargetContext?, detail: String) {
         var queue: [(element: AXUIElement, depth: Int)] = [(root, 0)]
         var visited = 0
         var sample: [String] = []
-        var candidates: [PasteTargetSnapshot] = []
+        var candidates: [PasteTargetContext] = []
+        var unsafeCandidates: [PasteTargetContext] = []
         var seenNodes = Set<CFHashCode>()
 
         while !queue.isEmpty, visited < maxNodes {
@@ -302,14 +442,34 @@ final class PasteController {
             visited += 1
 
             let result = snapshotWithDetail(from: item.element, pid: pid, discovery: "windowDescendant")
-            if let snapshot = result.snapshot {
-                if isEligible(snapshot) {
-                    let focused = copyBoolAttribute(item.element, kAXFocusedAttribute as CFString) ?? false
+            if let context = result.context {
+                let snapshot = context.snapshot
+                let focused =
+                    copyBoolAttribute(item.element, kAXFocusedAttribute as CFString)
+                    ?? false
+                if isUnsafeForClipboard(snapshot) {
                     if focused {
-                        return (snapshot, "foundFocused depth=\(item.depth) visited=\(visited) \(snapshot.redactedDescription)")
+                        return (
+                            context,
+                            "foundFocusedUnsafe depth=\(item.depth) visited=\(visited) \(snapshot.redactedDescription)"
+                        )
                     }
-                    if !candidates.contains(snapshot) {
-                        candidates.append(snapshot)
+                    if !unsafeCandidates.contains(where: {
+                        $0.snapshot == snapshot
+                    }) {
+                        unsafeCandidates.append(context)
+                    }
+                    if sample.count < 8 {
+                        sample.append(
+                            "d\(item.depth):unsafe role=\(snapshot.role):subrole=\(snapshot.subrole)"
+                        )
+                    }
+                } else if isEligible(snapshot) {
+                    if focused {
+                        return (context, "foundFocused depth=\(item.depth) visited=\(visited) \(snapshot.redactedDescription)")
+                    }
+                    if !candidates.contains(where: { $0.snapshot == snapshot }) {
+                        candidates.append(context)
                     }
                     if sample.count < 8 {
                         sample.append("d\(item.depth):eligible role=\(snapshot.role):subrole=\(snapshot.subrole)")
@@ -333,7 +493,19 @@ final class PasteController {
             }
         }
 
-        let outcome = candidates.isEmpty ? "notFound" : "unverified eligible=\(candidates.count)"
+        if let unsafe = unsafeCandidates.first {
+            return (
+                unsafe,
+                "foundUnsafeCandidate count=\(unsafeCandidates.count) visited=\(visited) \(unsafe.snapshot.redactedDescription)"
+            )
+        }
+        if candidates.count == 1, let context = candidates.first {
+            return (
+                context,
+                "foundUniqueEligible visited=\(visited) \(context.snapshot.redactedDescription)"
+            )
+        }
+        let outcome = candidates.isEmpty ? "notFound" : "ambiguous eligible=\(candidates.count)"
         return (nil, "\(outcome) visited=\(visited) sample=\(sample.joined(separator: ","))")
     }
 
@@ -383,7 +555,7 @@ final class PasteController {
         from focused: AXUIElement,
         pid fallbackPID: pid_t? = nil,
         discovery: String = "focused"
-    ) -> (snapshot: PasteTargetSnapshot?, detail: String) {
+    ) -> (context: PasteTargetContext?, detail: String) {
         var pid = fallbackPID ?? 0
         if fallbackPID == nil {
             let status = AXUIElementGetPid(focused, &pid)
@@ -406,7 +578,17 @@ final class PasteController {
         let elementFrame = frame(of: focused) ?? .null
         let elementIdentifier = copyStringAttribute(focused, kAXIdentifierAttribute as CFString) ?? ""
         let searchable = searchableMetadata(for: focused, window: window, role: role, subrole: subrole)
-        let hasEditableValue = canSetValue(focused)
+        let hasEditableValue = canSetAttribute(focused, kAXValueAttribute as CFString)
+        let canSetSelectedText = canSetAttribute(focused, kAXSelectedTextAttribute as CFString)
+        let canSetSelectedTextRange = canSetAttribute(
+            focused,
+            kAXSelectedTextRangeAttribute as CFString
+        )
+        let hasReadableValue = hasReadableAttribute(focused, kAXValueAttribute as CFString)
+        let hasReadableSelectedTextRange = hasReadableAttribute(
+            focused,
+            kAXSelectedTextRangeAttribute as CFString
+        )
         let isProtectedContent = copyBoolAttribute(focused, "AXProtectedContent" as CFString) ?? false
         let snapshot = PasteTargetSnapshot(
             pid: pid,
@@ -418,11 +600,18 @@ final class PasteController {
             elementIdentifier: elementIdentifier,
             elementFrame: elementFrame,
             hasEditableValue: hasEditableValue,
+            canSetSelectedText: canSetSelectedText,
+            canSetSelectedTextRange: canSetSelectedTextRange,
+            hasReadableValue: hasReadableValue,
+            hasReadableSelectedTextRange: hasReadableSelectedTextRange,
             isProtectedContent: isProtectedContent,
             searchableText: searchable,
             discovery: discovery
         )
-        return (snapshot, snapshot.redactedDescription)
+        return (
+            PasteTargetContext(snapshot: snapshot, element: focused),
+            snapshot.redactedDescription
+        )
     }
 
     private func searchableMetadata(
@@ -459,139 +648,151 @@ final class PasteController {
         ]
     }
 
-    func decide(
-        start: PasteTargetSnapshot?,
-        stop: PasteTargetSnapshot?,
-        current: PasteTargetSnapshot?
-    ) -> PasteDecision {
-        guard [start, stop, current].compactMap({ $0 }).allSatisfy({ !isUnsafeForClipboard($0) }) else {
-            return .skipCopy("target is unsafe")
-        }
-        guard let stop else {
-            if start == nil {
-                return .copyOnly(.missingRecordingStartAXTarget)
-            }
-            return .copyOnly(.missingRecordingStopAXTarget)
-        }
-        guard let start else {
-            return .copyOnly(.missingRecordingStartAXTarget)
-        }
-        guard sameTarget(start, stop) else {
-            return .copyOnly(.targetChangedDuringRecording)
-        }
-        guard let current else {
-            return .copyOnly(.missingCurrentAXTarget)
-        }
-        guard isEligible(start), isEligible(stop), isEligible(current) else {
-            return .copyOnly(.targetNotEditable)
-        }
-        guard sameTarget(stop, current) else {
-            return .copyOnly(.targetChanged)
-        }
-        return .paste
-    }
-
-    func paste(to pid: pid_t) -> Bool {
-        guard canCreatePasteEvents() else {
-            return false
-        }
-        return postPasteEvents(to: pid)
-    }
-
-    func pasteToFrontmostApplication(approvedTarget: PasteApplicationTarget) -> Bool {
-        guard canCreatePasteEvents(),
-              Self.currentFrontmostApplicationTarget() == approvedTarget else {
-            return false
-        }
-        return postPasteEventsToFrontmostApplication()
-    }
-
-    func pressReturn(to pid: pid_t) -> Bool {
-        guard canCreateKeyEvents(virtualKey: CGKeyCode(kVK_Return)) else {
-            return false
-        }
-        return postKeyEvents(to: pid, virtualKey: CGKeyCode(kVK_Return), flags: [])
-    }
-
-    func pressReturnToFrontmostApplication(approvedTarget: PasteApplicationTarget) -> Bool {
-        guard canCreateKeyEvents(virtualKey: CGKeyCode(kVK_Return)),
-              Self.currentFrontmostApplicationTarget() == approvedTarget else {
-            return false
-        }
-        return postKeyEventsToFrontmostApplication(virtualKey: CGKeyCode(kVK_Return), flags: [])
-    }
-
     func canCreatePasteEvents() -> Bool {
-        canCreateKeyEvents(virtualKey: 9)
+        guard let virtualKey = KeyboardLayoutKeyCodeResolver.keyCode(for: "v") else {
+            return false
+        }
+        return canCreateKeyEvents(virtualKey: virtualKey)
+    }
+
+    func makePasteKeyEventPair() -> PasteKeyEventPair? {
+        guard let virtualKey = KeyboardLayoutKeyCodeResolver.keyCode(for: "v") else {
+            return nil
+        }
+        return makeKeyEventPair(virtualKey: virtualKey, flags: .maskCommand)
+    }
+
+    func makeReturnKeyEventPair() -> PasteKeyEventPair? {
+        makeKeyEventPair(virtualKey: CGKeyCode(kVK_Return), flags: [])
+    }
+
+    func postKeyDown(_ pair: PasteKeyEventPair) {
+        guard case .events(let keyDown, _) = pair.storage else {
+            return
+        }
+        keyDown.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    func postKeyUp(_ pair: PasteKeyEventPair) {
+        guard case .events(_, let keyUp) = pair.storage else {
+            return
+        }
+        keyUp.post(tap: .cgAnnotatedSessionEventTap)
+    }
+
+    func textState(
+        for context: PasteTargetContext,
+        precedingUTF16Length: Int = 0
+    ) -> PasteTextState {
+        guard let element = context.element else {
+            return PasteTextState(value: nil, selectedRange: nil)
+        }
+        let selectedRange = copyRangeAttribute(
+            element,
+            kAXSelectedTextRangeAttribute as CFString
+        )
+        let precedingText: String?
+        if precedingUTF16Length > 0,
+           let selectedRange,
+           selectedRange.length == 0,
+           selectedRange.location >= precedingUTF16Length {
+            precedingText = copyStringForRange(
+                element,
+                range: NSRange(
+                    location: selectedRange.location - precedingUTF16Length,
+                    length: precedingUTF16Length
+                )
+            )
+        } else {
+            precedingText = nil
+        }
+        return PasteTextState(
+            value: copyStringAttribute(element, kAXValueAttribute as CFString),
+            selectedRange: selectedRange,
+            textImmediatelyBeforeSelection: precedingText
+        )
+    }
+
+    func isFocused(_ approved: PasteTargetContext) -> Bool {
+        guard let approvedElement = approved.element,
+              let current = snapshotFocusedTargetProbe().context,
+              let currentElement = current.element else {
+            return false
+        }
+        if CFEqual(approvedElement, currentElement) {
+            return true
+        }
+        let approvedSnapshot = approved.snapshot
+        let currentSnapshot = current.snapshot
+        guard approvedSnapshot.pid == currentSnapshot.pid,
+              !approvedSnapshot.elementIdentifier.isEmpty,
+              approvedSnapshot.elementIdentifier == currentSnapshot.elementIdentifier else {
+            return false
+        }
+        return approvedSnapshot.role == currentSnapshot.role
+            && approvedSnapshot.subrole == currentSnapshot.subrole
+    }
+
+    func currentProcessIdentifier() -> pid_t {
+        NSRunningApplication.current.processIdentifier
+    }
+
+    func frontmostProcessIdentifier() -> pid_t? {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }
+
+    @discardableResult
+    func activateApplication(for anchor: PasteTargetSnapshot) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: anchor.pid),
+              !app.isTerminated else {
+            return false
+        }
+        return app.activate(options: [])
     }
 
     private func canCreateKeyEvents(virtualKey: CGKeyCode) -> Bool {
         guard CGPreflightPostEventAccess() else {
             return false
         }
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            return false
-        }
-        let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true)
-        let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false)
-        return keyDown != nil && keyUp != nil
+        return makeKeyEventPair(virtualKey: virtualKey, flags: []) != nil
     }
 
-    private func postPasteEvents(to pid: pid_t) -> Bool {
-        postKeyEvents(to: pid, virtualKey: 9, flags: .maskCommand)
-    }
-
-    private func postPasteEventsToFrontmostApplication() -> Bool {
-        postKeyEventsToFrontmostApplication(virtualKey: 9, flags: .maskCommand)
-    }
-
-    private func postKeyEvents(to pid: pid_t, virtualKey: CGKeyCode, flags: CGEventFlags) -> Bool {
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false) else {
-            return false
+    private func makeKeyEventPair(
+        virtualKey: CGKeyCode,
+        flags: CGEventFlags
+    ) -> PasteKeyEventPair? {
+        guard CGPreflightPostEventAccess(),
+              let source = CGEventSource(stateID: .combinedSessionState),
+              let keyDown = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: virtualKey,
+                keyDown: true
+              ),
+              let keyUp = CGEvent(
+                keyboardEventSource: source,
+                virtualKey: virtualKey,
+                keyDown: false
+              ) else {
+            return nil
         }
         keyDown.flags = flags
         keyUp.flags = flags
-        keyDown.postToPid(pid)
-        keyUp.postToPid(pid)
-        return true
-    }
-
-    private func postKeyEventsToFrontmostApplication(virtualKey: CGKeyCode, flags: CGEventFlags) -> Bool {
-        guard let source = CGEventSource(stateID: .hidSystemState),
-              let keyDown = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: virtualKey, keyDown: false) else {
-            return false
-        }
-        keyDown.flags = flags
-        keyUp.flags = flags
-        keyDown.post(tap: .cghidEventTap)
-        keyUp.post(tap: .cghidEventTap)
-        return true
-    }
-
-    private static func currentFrontmostApplicationTarget() -> PasteApplicationTarget? {
-        guard let app = NSWorkspace.shared.frontmostApplication else {
-            return nil
-        }
-        guard app.processIdentifier != NSRunningApplication.current.processIdentifier else {
-            return nil
-        }
-        return PasteApplicationTarget(
-            pid: app.processIdentifier,
-            bundleIdentifier: app.bundleIdentifier ?? "<nil>"
+        return PasteKeyEventPair(
+            virtualKey: virtualKey,
+            keyDown: keyDown,
+            keyUp: keyUp
         )
     }
 
     func isEligible(_ snapshot: PasteTargetSnapshot) -> Bool {
-        guard snapshot.hasEditableValue else {
+        let hasTextInputCapability = snapshot.hasEditableValue
+            || snapshot.canSetSelectedText
+            || snapshot.canSetSelectedTextRange
+            || snapshot.hasReadableSelectedTextRange
+        guard hasTextInputCapability else {
             return false
         }
         if isUnsafeForClipboard(snapshot) {
-            return false
-        }
-        if snapshot.role == "AXWebArea" {
             return false
         }
         if snapshot.role == "AXTextField" || snapshot.role == "AXTextArea" || snapshot.role == "AXComboBox" {
@@ -599,6 +800,9 @@ final class PasteController {
         }
         if snapshot.subrole == "AXSearchField" {
             return true
+        }
+        if snapshot.role == "AXWebArea" {
+            return snapshot.canSetSelectedText
         }
         return false
     }
@@ -631,29 +835,12 @@ final class PasteController {
         term.count <= 4 && term.range(of: #"^[a-z0-9 ]+$"#, options: .regularExpression) != nil
     }
 
-    private func optionalFramesMatch(_ lhs: CGRect, _ rhs: CGRect) -> Bool {
-        if lhs.isNull || rhs.isNull {
-            return true
-        }
-        let tolerance: CGFloat = 8
-        return abs(lhs.origin.x - rhs.origin.x) <= tolerance
-            && abs(lhs.origin.y - rhs.origin.y) <= tolerance
-            && abs(lhs.size.width - rhs.size.width) <= tolerance
-            && abs(lhs.size.height - rhs.size.height) <= tolerance
-    }
-
-    private func sameTarget(_ lhs: PasteTargetSnapshot, _ rhs: PasteTargetSnapshot) -> Bool {
-        guard !lhs.elementFrame.isNull, !rhs.elementFrame.isNull else {
-            return false
-        }
+    func sameLogicalTarget(_ lhs: PasteTargetSnapshot, _ rhs: PasteTargetSnapshot) -> Bool {
         return lhs.pid == rhs.pid
             && identityMatches(lhs.bundleIdentifier, rhs.bundleIdentifier)
             && lhs.role == rhs.role
             && lhs.subrole == rhs.subrole
-            && identityMatches(lhs.windowTitle, rhs.windowTitle)
             && identityMatches(lhs.elementIdentifier, rhs.elementIdentifier)
-            && optionalFramesMatch(lhs.windowFrame, rhs.windowFrame)
-            && optionalFramesMatch(lhs.elementFrame, rhs.elementFrame)
     }
 
     private func identityMatches(_ lhs: String, _ rhs: String) -> Bool {
@@ -663,6 +850,8 @@ final class PasteController {
         return lhs == rhs
     }
 }
+
+extension PasteController: PasteAttemptControlling {}
 
 private struct AXElementAttributeResult {
     let element: AXUIElement?
@@ -732,7 +921,10 @@ private func copyStringAttribute(_ element: AXUIElement, _ attribute: CFString) 
     guard AXUIElementCopyAttributeValue(element, attribute, &value) == .success else {
         return nil
     }
-    return value as? String
+    if let string = value as? String {
+        return string
+    }
+    return (value as? NSAttributedString)?.string
 }
 
 private func copyBoolAttribute(_ element: AXUIElement, _ attribute: CFString) -> Bool? {
@@ -766,20 +958,90 @@ private func copyAXValue(_ element: AXUIElement, _ attribute: CFString) -> AXVal
     return (value as! AXValue)
 }
 
-private func canSetValue(_ element: AXUIElement) -> Bool {
+private func copyRangeAttribute(_ element: AXUIElement, _ attribute: CFString) -> NSRange? {
+    guard let value = copyAXValue(element, attribute),
+          AXValueGetType(value) == .cfRange else {
+        return nil
+    }
+    var range = CFRange()
+    guard AXValueGetValue(value, .cfRange, &range),
+          range.location >= 0,
+          range.length >= 0 else {
+        return nil
+    }
+    return NSRange(location: range.location, length: range.length)
+}
+
+private func copyStringForRange(
+    _ element: AXUIElement,
+    range: NSRange
+) -> String? {
+    var cfRange = CFRange(location: range.location, length: range.length)
+    guard let rangeValue = AXValueCreate(.cfRange, &cfRange) else {
+        return nil
+    }
+    var value: CFTypeRef?
+    guard AXUIElementCopyParameterizedAttributeValue(
+        element,
+        kAXStringForRangeParameterizedAttribute as CFString,
+        rangeValue,
+        &value
+    ) == .success else {
+        return nil
+    }
+    if let string = value as? String {
+        return string
+    }
+    return (value as? NSAttributedString)?.string
+}
+
+private func canSetAttribute(_ element: AXUIElement, _ attribute: CFString) -> Bool {
     var settable = DarwinBoolean(false)
-    return AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success
+    return AXUIElementIsAttributeSettable(element, attribute, &settable) == .success
         && settable.boolValue
+}
+
+private func hasReadableAttribute(_ element: AXUIElement, _ attribute: CFString) -> Bool {
+    var value: CFTypeRef?
+    return AXUIElementCopyAttributeValue(element, attribute, &value) == .success
 }
 
 struct PasteboardRestoreToken {
     fileprivate let previous: PasteboardSnapshot
     fileprivate let writtenChangeCount: Int
     fileprivate let text: String
+    fileprivate let attemptID: UUID
+
+    fileprivate init(
+        previous: PasteboardSnapshot,
+        writtenChangeCount: Int,
+        text: String,
+        attemptID: UUID
+    ) {
+        self.previous = previous
+        self.writtenChangeCount = writtenChangeCount
+        self.text = text
+        self.attemptID = attemptID
+    }
+
+#if DEBUG
+    init(testIdentifier: UUID = UUID()) {
+        previous = PasteboardSnapshot(items: [])
+        writtenChangeCount = -1
+        text = ""
+        attemptID = testIdentifier
+    }
+#endif
 }
 
 fileprivate struct PasteboardSnapshot {
     private let items: [NSPasteboardItem]
+
+#if DEBUG
+    fileprivate init(items: [NSPasteboardItem]) {
+        self.items = items
+    }
+#endif
 
     init(pasteboard: NSPasteboard) {
         items = pasteboard.pasteboardItems?.compactMap { item in
@@ -802,5 +1064,61 @@ fileprivate struct PasteboardSnapshot {
             return true
         }
         return pasteboard.writeObjects(items)
+    }
+}
+
+enum KeyboardLayoutKeyCodeResolver {
+    static func keyCode(for character: Character) -> CGKeyCode? {
+        guard let inputSource = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let rawLayoutData = TISGetInputSourceProperty(
+                inputSource,
+                kTISPropertyUnicodeKeyLayoutData
+              ) else {
+            return nil
+        }
+
+        let layoutData = unsafeBitCast(rawLayoutData, to: CFData.self)
+        guard let bytes = CFDataGetBytePtr(layoutData) else {
+            return nil
+        }
+        let keyboardLayout = UnsafeRawPointer(bytes)
+            .assumingMemoryBound(to: UCKeyboardLayout.self)
+        let keyboardType = UInt32(LMGetKbdType())
+
+        return keyCode(for: character) { rawKeyCode in
+            var deadKeyState: UInt32 = 0
+            var translated = [UniChar](repeating: 0, count: 4)
+            var translatedCount = 0
+            let status = UCKeyTranslate(
+                keyboardLayout,
+                rawKeyCode,
+                UInt16(kUCKeyActionDisplay),
+                0,
+                keyboardType,
+                OptionBits(kUCKeyTranslateNoDeadKeysBit),
+                &deadKeyState,
+                translated.count,
+                &translatedCount,
+                &translated
+            )
+            guard status == noErr, translatedCount == 1 else {
+                return nil
+            }
+            return translated[0]
+        }
+    }
+
+    static func keyCode(
+        for character: Character,
+        translating translate: (UInt16) -> UniChar?
+    ) -> CGKeyCode? {
+        guard let scalar = String(character).lowercased().utf16.first else {
+            return nil
+        }
+        for rawKeyCode in UInt16(0)...UInt16(127)
+        where translate(rawKeyCode) == scalar {
+            return CGKeyCode(rawKeyCode)
+        }
+        return nil
     }
 }

@@ -376,8 +376,7 @@ final class HotkeyPairRegistrationTests: XCTestCase {
             ],
             silenceAutoStopEnabled: true,
             microphoneDeviceUID: nil,
-            outputMode: .pasteRestoreClipboard,
-            allowUnverifiedPasteFallback: false
+            outputMode: .pasteRestoreClipboard
         )
     }
 }

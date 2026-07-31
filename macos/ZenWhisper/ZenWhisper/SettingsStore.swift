@@ -9,7 +9,6 @@ struct SettingsSnapshot: Equatable {
     var silenceAutoStopEnabled: Bool
     var microphoneDeviceUID: String?
     var outputMode: OutputMode
-    var allowUnverifiedPasteFallback: Bool
     var enhancement: EnhancementSelection = .off
 }
 
@@ -21,7 +20,7 @@ enum OutputMode: String, CaseIterable, Codable {
     var label: String {
         switch self {
         case .pasteRestoreClipboard:
-            return "Paste + Restore Clipboard"
+            return "Paste + Restore on Success"
         case .pasteKeepClipboard:
             return "Paste + Keep Clipboard"
         case .copyOnly:
@@ -48,7 +47,8 @@ final class SettingsStore {
         static let silenceAutoStopEnabled = "silenceAutoStopEnabled"
         static let microphoneDeviceUID = "microphoneDeviceUID"
         static let outputMode = "outputMode"
-        static let allowUnverifiedPasteFallback = "allowUnverifiedPasteFallback"
+        static let legacyAllowUnverifiedPasteFallback =
+            "allowUnverifiedPasteFallback"
         static let enhancementProfile = "enhancementProfile"
         static let enhancementPostprocessor = "enhancementPostprocessor"
         static let enhancementPostprocessorApprovalRevision =
@@ -64,6 +64,7 @@ final class SettingsStore {
     }
 
     func load() -> SettingsSnapshot {
+        defaults.removeObject(forKey: Key.legacyAllowUnverifiedPasteFallback)
         let hotkey = HotkeyShortcut.fromStorageValue(defaults.string(forKey: Key.hotkey))
         let storedSubmitHotkey = HotkeyShortcut.optionalFromStorageValue(defaults.string(forKey: Key.submitHotkey))
         let submitHotkey = storedSubmitHotkey == hotkey ? nil : storedSubmitHotkey
@@ -100,7 +101,6 @@ final class SettingsStore {
             silenceAutoStopEnabled: hasSilenceSetting ? defaults.bool(forKey: Key.silenceAutoStopEnabled) : true,
             microphoneDeviceUID: microphoneDeviceUID,
             outputMode: outputMode,
-            allowUnverifiedPasteFallback: defaults.bool(forKey: Key.allowUnverifiedPasteFallback),
             enhancement: enhancement
         )
     }
@@ -123,7 +123,7 @@ final class SettingsStore {
             defaults.removeObject(forKey: Key.microphoneDeviceUID)
         }
         defaults.set(snapshot.outputMode.rawValue, forKey: Key.outputMode)
-        defaults.set(snapshot.allowUnverifiedPasteFallback, forKey: Key.allowUnverifiedPasteFallback)
+        defaults.removeObject(forKey: Key.legacyAllowUnverifiedPasteFallback)
         if let profileID = snapshot.enhancement.profileID,
            !profileID.isEmpty {
             defaults.set(profileID, forKey: Key.enhancementProfile)

@@ -38,16 +38,22 @@ enum AppState: Equatable {
             return "Post-processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
-                if reason?.lowercased().contains("enter attempted") == true {
-                    return "Paste tried + Enter"
+                if reason?.lowercased().contains("enter sent") == true {
+                    return "Pasted + Enter"
                 }
-                if reason?.lowercased().contains("kept") == true {
-                    return "Paste tried"
-                }
-                return "Paste tried"
+                return "Pasted"
+            }
+            if reason?.lowercased().contains("not confirmed") == true {
+                return "Copied · Paste not confirmed"
+            }
+            if reason?.lowercased().contains("no editable") == true {
+                return "Copied · No editable target"
             }
             return reason.map { "Copied: \(StatusText.copyOnlyReason($0))" } ?? "Copied"
         case .copySkipped(let reason):
+            if reason.lowercased().contains("unsafe") {
+                return "Blocked · Secure field"
+            }
             return "Skipped: \(StatusText.copyOnlyReason(reason))"
         case .copyFailed:
             return "Copy failed"
@@ -140,6 +146,9 @@ enum StatusText {
         }
         if lower.contains("editable") {
             return "Not editable"
+        }
+        if lower.contains("not confirmed") {
+            return "Unconfirmed"
         }
         if lower.contains("unsafe") {
             return "Unsafe"

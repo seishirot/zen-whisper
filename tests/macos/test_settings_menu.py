@@ -32,9 +32,8 @@ def test_settings_menu_shows_selected_values_and_disables_while_busy() -> None:
     assert 'outputModeMenuItem.title = "Output: \\(settings.outputMode.label)"' in status_controller
     assert "items: OutputMode.allCases.map" in status_controller
     assert "onSelectOutputMode?(mode)" in status_controller
-    assert 'NSMenuItem(\n        title: "Allow Unverified Paste/Submit to Frontmost App"' in status_controller
-    assert "settings.allowUnverifiedPasteFallback ? .on : .off" in status_controller
-    assert "onToggleUnverifiedPasteFallback?(enabled)" in status_controller
+    assert "Allow Unverified Paste/Submit" not in status_controller
+    assert "onToggleUnverifiedPasteFallback" not in status_controller
     assert 'NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin)' in status_controller
     assert "func updateLaunchAtLogin(status: LoginItemStatus)" in status_controller
     assert "launchAtLoginMenuItem.isEnabled = true" in status_controller
@@ -87,8 +86,8 @@ def test_app_delegate_wires_settings_menu_to_saved_settings() -> None:
     assert "statusController.onToggleSilenceAutoStop" in app_delegate
     assert "statusController.onSelectOutputMode" in app_delegate
     assert "private func selectOutputMode(_ mode: OutputMode)" in app_delegate
-    assert "statusController.onToggleUnverifiedPasteFallback" in app_delegate
-    assert "private func setUnverifiedPasteFallback(_ enabled: Bool)" in app_delegate
+    assert "statusController.onToggleUnverifiedPasteFallback" not in app_delegate
+    assert "private func setUnverifiedPasteFallback" not in app_delegate
     assert "statusController.onSelectMicrophone" in app_delegate
     assert "statusController.onToggleLaunchAtLogin" in app_delegate
     assert "private let loginItemManager = LoginItemManager()" in app_delegate

@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var recorder: AudioRecorder!
     private var appLogger: AppLogger?
     private let pasteController = PasteController()
+    private var pasteAttemptCoordinator: PasteAttemptCoordinator!
     private let hotkeyManager = HotkeyManager()
     private let submitHotkeyManager = HotkeyManager(signature: HotkeyManager.submitSignature)
     private let loginItemManager = LoginItemManager()
@@ -33,9 +34,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pendingEnhancementWarningMessage: String?
     private var pasteTargetCacheTimer: Timer?
     private var pasteTargetAtRecordingStart: PasteTargetSnapshot?
-    private var pasteApplicationAtRecordingStart: PasteApplicationTarget?
     private var lastKnownPasteTarget: PasteTargetSnapshot?
     private var lastKnownPasteTargetDate: Date?
+    private var pasteAttemptsInProgress = 0
     private var enhancementCatalogForCurrentRecording: EnhancementCatalogSnapshot?
     private var startupDiagnostics: [String] = []
 
@@ -44,6 +45,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             let preparationWarnings = try paths.prepare()
             appLogger = AppLogger(logsDirectory: paths.logs)
+            pasteAttemptCoordinator = PasteAttemptCoordinator(
+                controller: pasteController,
+                logger: { [weak self] message in
+                    self?.logInfo(message)
+                }
+            )
             startupDiagnostics.append(contentsOf: preparationWarnings)
             for warning in preparationWarnings {
                 logInfo(warning)
@@ -87,6 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timer?.invalidate()
         statusResetTimer?.invalidate()
         pasteTargetCacheTimer?.invalidate()
+        pasteAttemptCoordinator?.cancel()
         if let warning = recorder?.cancel() {
             startupDiagnostics.append(warning)
             logInfo(warning)
@@ -116,7 +124,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusController.onRecordCustomSubmitHotkey = { [weak self] in self?.recordCustomSubmitHotkey() }
         statusController.onToggleSilenceAutoStop = { [weak self] enabled in self?.setSilenceAutoStop(enabled) }
         statusController.onSelectOutputMode = { [weak self] mode in self?.selectOutputMode(mode) }
-        statusController.onToggleUnverifiedPasteFallback = { [weak self] enabled in self?.setUnverifiedPasteFallback(enabled) }
         statusController.onSelectMicrophone = { [weak self] uid in self?.selectMicrophone(uid) }
         statusController.onToggleLaunchAtLogin = { [weak self] enabled in self?.setLaunchAtLogin(enabled) }
         statusController.onMenuWillOpen = { [weak self] in
@@ -135,6 +142,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         statusController.onCopyDiagnostics = { [weak self] in self?.copyDiagnostics() }
+#if DEBUG
+        statusController.onTestPastePipeline = { [weak self] in
+            self?.testPastePipeline()
+        }
+#endif
         statusController.onQuit = { NSApp.terminate(nil) }
     }
 
@@ -314,7 +326,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refreshEnhancementCatalog()
             enhancementCatalogForCurrentRecording = enhancementCatalog
             synchronizeSettingsWindow()
-            pasteApplicationAtRecordingStart = capturePasteApplicationTarget(stage: "recording start")
             pasteTargetAtRecordingStart = capturePasteTarget(stage: "recording start", allowCached: true)
             try recorder.start(deviceUID: settings.microphoneDeviceUID)
             setState(.recording(elapsed: 0, voiceActive: false))
@@ -352,8 +363,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         submitAfterPasteForCurrentRecording = false
         let transcriptionCatalog = enhancementCatalogForCurrentRecording ?? enhancementCatalog
         enhancementCatalogForCurrentRecording = nil
-        let stopApplication = capturePasteApplicationTarget(stage: "recording stop")
-        let stopTarget = capturePasteTarget(stage: "recording stop", allowCached: true)
         do {
             let recording = try recorder.stop()
             if recording.isEmptyAudio {
@@ -365,7 +374,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let audioURL = recording.url
             setState(.transcribing)
             let startTarget = pasteTargetAtRecordingStart
-            let startApplication = pasteApplicationAtRecordingStart
             let engine = settings.engine
             let model = registry.validModel(settings.lastModelByEngine[engine], for: engine)
             let language = settings.language
@@ -414,10 +422,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         )
                         self.handleTranscript(
                             result.text,
-                            startTarget: startTarget,
-                            stopTarget: stopTarget,
-                            startApplication: startApplication,
-                            stopApplication: stopApplication,
+                            recordingAnchor: startTarget,
                             submitAfterPaste: shouldSubmitAfterPaste
                         )
                         let warningCode = Self.preferredEnhancementWarningCode(
@@ -445,10 +450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func handleTranscript(
         _ text: String,
-        startTarget: PasteTargetSnapshot?,
-        stopTarget: PasteTargetSnapshot?,
-        startApplication: PasteApplicationTarget?,
-        stopApplication: PasteApplicationTarget?,
+        recordingAnchor: PasteTargetSnapshot?,
         submitAfterPaste: Bool = false
     ) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -457,197 +459,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setState(readyState())
             return
         }
-        if [startTarget, stopTarget].compactMap({ $0 }).contains(where: { pasteController.isUnsafeForClipboard($0) }) {
-            logInfo(
-                "paste decision skip-copy before AX check: target is unsafe start=\(startTarget?.redactedDescription ?? "nil") stop=\(stopTarget?.redactedDescription ?? "nil")"
-            )
-            setCopySkippedTransient("target is unsafe")
-            return
-        }
-        guard pasteController.isAccessibilityTrusted() else {
-            copyTranscriptWithoutPaste(trimmed, reason: "Accessibility not allowed")
-            return
-        }
-        guard settings.outputMode.shouldAttemptPaste else {
-            if let current = capturePasteTarget(stage: "copy-only output check", allowCached: false),
-               pasteController.isUnsafeForClipboard(current) {
-                logInfo("copy-only output skipped: target is unsafe current=\(current.redactedDescription)")
-                setCopySkippedTransient("target is unsafe")
-                return
-            }
-            logInfo("output mode copy-only; paste skipped")
-            copyTranscriptWithoutPaste(trimmed, reason: "output mode copy only")
-            return
-        }
-        let currentApplication = capturePasteApplicationTarget(stage: "transcription complete")
-        let current = capturePasteTarget(stage: "transcription complete", allowCached: false)
-        let decision = pasteController.decide(
-            start: startTarget,
-            stop: stopTarget,
-            current: current
+        let request = PasteRequest(
+            text: trimmed,
+            outputMode: settings.outputMode,
+            submitAfterPaste: submitAfterPaste,
+            recordingAnchor: recordingAnchor
         )
-        switch decision {
-        case .paste:
-            guard pasteController.canCreatePasteEvents() else {
-                logInfo("paste event unavailable before pasteboard write")
-                copyTranscriptWithoutPaste(trimmed, reason: "paste event unavailable")
-                return
-            }
-            let pasteboardWrite = pasteController.prepareAutoPaste(trimmed)
-            guard case .success(let restoreToken) = pasteboardWrite else {
-                if case .writeFailed(let restoreSucceeded) = pasteboardWrite, !restoreSucceeded {
-                    setCopyFailedTransient("pasteboard write failed; clipboard restore failed")
-                } else {
-                    setCopyFailedTransient("pasteboard write failed")
-                }
-                return
-            }
-            if let pid = current?.pid, pasteController.paste(to: pid) {
-                let pasteReason: String
-                if settings.outputMode.restoresClipboardAfterPaste {
-                    pasteReason = "clipboard restore pending"
-                    pasteController.scheduleRestore(restoreToken, after: 1.0) { [weak self] restored in
-                        guard let self else {
-                            return
-                        }
-                        if restored {
-                            self.logInfo("clipboard restored after paste")
-                            self.updateClipboardRestoreStatus(restored: true)
-                        } else {
-                            self.logInfo("clipboard restore failed after paste")
-                            self.updateClipboardRestoreStatus(restored: false)
-                        }
-                    }
-                } else {
-                    pasteReason = "clipboard kept"
-                }
-                if let current {
-                    logInfo(
-                        "paste event posted to target: \(current.redactedDescription) submitAfterPaste=\(submitAfterPaste)"
-                    )
-                }
-                setCopiedTransient(pasteDispatched: true, reason: pasteReason)
-                if submitAfterPaste, let current {
-                    scheduleSubmitReturn(to: current, pasteReason: pasteReason)
-                }
-            } else {
-                logInfo("paste event unavailable for target: \(current?.redactedDescription ?? "nil")")
-                if settings.outputMode.restoresClipboardAfterPaste {
-                    guard pasteController.restore(restoreToken) else {
-                        setCopiedTransient(pasteDispatched: false, reason: "paste event unavailable; clipboard restore failed")
-                        return
-                    }
-                    setCopySkippedTransient(Self.copySkippedReasonAfterRestoredPasteFailure("paste event unavailable"))
-                    return
-                }
-                setCopiedTransient(pasteDispatched: false, reason: "paste event unavailable")
-            }
-        case .copyOnly(let reason):
-            let reasonText = reason.message
-            if settings.allowUnverifiedPasteFallback,
-               let fallback = Self.fallbackPasteApplicationTarget(
-                reason: reason,
-                start: startApplication,
-                stop: stopApplication,
-                current: currentApplication
-            ) {
-                logInfo(
-                    "paste decision fallback-to-frontmost-app: \(reasonText) appTarget=\(fallback.redactedDescription) appStart=\(startApplication?.redactedDescription ?? "nil") appStop=\(stopApplication?.redactedDescription ?? "nil") appCurrent=\(currentApplication?.redactedDescription ?? "nil") axStart=\(startTarget?.redactedDescription ?? "nil") axStop=\(stopTarget?.redactedDescription ?? "nil") axCurrent=\(current?.redactedDescription ?? "nil")"
-                )
-                pasteTranscriptToApplicationFallback(
-                    trimmed,
-                    target: fallback,
-                    submitAfterPaste: submitAfterPaste
-                )
-                return
-            }
-            logInfo(
-                "paste decision copy-only: \(reasonText) start=\(startTarget?.redactedDescription ?? "nil") stop=\(stopTarget?.redactedDescription ?? "nil") current=\(current?.redactedDescription ?? "nil")"
-            )
-            copyTranscriptWithoutPaste(trimmed, reason: reasonText)
-        case .skipCopy(let reason):
-            logInfo(
-                "paste decision skip-copy: \(reason) start=\(startTarget?.redactedDescription ?? "nil") stop=\(stopTarget?.redactedDescription ?? "nil") current=\(current?.redactedDescription ?? "nil")"
-            )
-            setCopySkippedTransient(reason)
-        }
+        performPasteRequest(request)
     }
 
-    private func scheduleSubmitReturn(to approvedTarget: PasteTargetSnapshot, pasteReason: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+    private func performPasteRequest(_ request: PasteRequest) {
+        guard let pasteAttemptCoordinator else {
+            setCopyFailedTransient("paste coordinator unavailable")
+            return
+        }
+        pasteAttemptsInProgress += 1
+        if state.canStartRecording {
+            setState(.transcribing)
+        }
+        Task { @MainActor [weak self] in
             guard let self else {
                 return
             }
-            let current = self.capturePasteTarget(stage: "submit return", allowCached: false)
-            guard self.pasteController.decide(
-                start: approvedTarget,
-                stop: approvedTarget,
-                current: current
-            ) == .paste else {
+            let report = await pasteAttemptCoordinator.perform(request)
+            self.pasteAttemptsInProgress = max(
+                0,
+                self.pasteAttemptsInProgress - 1
+            )
+            if report.result == .failed(reason: .superseded) {
                 self.logInfo(
-                    "submit return skipped: target changed approved=\(approvedTarget.redactedDescription) current=\(current?.redactedDescription ?? "nil")"
+                    "paste attempt result ignored because a newer attempt superseded it"
                 )
-                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter skipped")
                 return
             }
-            if self.pasteController.pressReturn(to: approvedTarget.pid) {
-                self.logInfo("submit return posted to target: \(approvedTarget.redactedDescription)")
-                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter attempted")
-            } else {
-                self.logInfo("submit return unavailable for target: \(approvedTarget.redactedDescription)")
-                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter unavailable")
-            }
+            self.applyPasteAttemptReport(report)
         }
     }
 
-    private func scheduleFallbackSubmitReturn(to approvedTarget: PasteApplicationTarget, pasteReason: String) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            guard let self else {
-                return
-            }
-            guard let frontmost = self.capturePasteApplicationTarget(stage: "fallback submit return"),
-                  frontmost == approvedTarget else {
-                self.logInfo("fallback submit return skipped: target changed approved=\(approvedTarget.redactedDescription)")
-                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter skipped")
-                return
-            }
-            if self.pasteController.pressReturnToFrontmostApplication(approvedTarget: approvedTarget) {
-                self.logInfo("unverified fallback submit return posted target=\(approvedTarget.redactedDescription)")
-                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter attempted")
-            } else {
-                self.logInfo("unverified fallback submit return unavailable target=\(approvedTarget.redactedDescription)")
-                self.setCopiedTransient(pasteDispatched: true, reason: "\(pasteReason); enter unavailable")
-            }
-        }
-    }
-
-    private func updateClipboardRestoreStatus(restored: Bool) {
-        guard case .copied(let pasteDispatched, let reason) = state, pasteDispatched else {
+#if DEBUG
+    private func testPastePipeline() {
+        guard state.canStartRecording else {
+            logInfo("debug paste pipeline test skipped while app is busy")
             return
         }
-        let current = reason ?? ""
-        let replacement = restored ? "clipboard restored" : "clipboard restore failed"
-        let nextReason: String
-        if current.localizedCaseInsensitiveContains("clipboard restore pending") {
-            nextReason = current.replacingOccurrences(
-                of: "clipboard restore pending",
-                with: replacement,
-                options: [.caseInsensitive]
+        let marker = UUID().uuidString.prefix(8)
+        performPasteRequest(
+            PasteRequest(
+                text: "ZenWhisper paste test \(marker)",
+                outputMode: .pasteRestoreClipboard,
+                submitAfterPaste: false,
+                recordingAnchor: recentCachedPasteTarget()
             )
-        } else if current.isEmpty {
-            nextReason = replacement
-        } else {
-            nextReason = "\(replacement); \(current)"
-        }
-        setCopiedTransient(pasteDispatched: true, reason: nextReason)
+        )
     }
-
-    private func copyTranscriptWithoutPaste(_ text: String, reason: String) {
-        guard copyToPasteboardOrFail(text) else {
-            return
-        }
-        setCopiedTransient(pasteDispatched: false, reason: reason)
-    }
+#endif
 
     private func copyToPasteboardOrFail(_ text: String) -> Bool {
         switch pasteController.prepareAutoPaste(text) {
@@ -663,90 +528,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func pasteTranscriptToApplicationFallback(
-        _ text: String,
-        target: PasteApplicationTarget,
-        submitAfterPaste: Bool
-    ) {
-        guard let verifiedTarget = capturePasteApplicationTarget(stage: "fallback paste verification"),
-              verifiedTarget == target else {
-            logInfo("unverified fallback paste skipped: frontmost app changed target=\(target.redactedDescription)")
-            copyTranscriptWithoutPaste(text, reason: "unverified fallback target changed")
-            return
-        }
-        guard pasteController.canCreatePasteEvents() else {
-            logInfo("unverified fallback paste event unavailable before pasteboard write target=\(target.redactedDescription)")
-            copyTranscriptWithoutPaste(text, reason: "paste event unavailable")
-            return
-        }
-        let pasteboardWrite = pasteController.prepareAutoPaste(text)
-        guard case .success(let restoreToken) = pasteboardWrite else {
-            if case .writeFailed(let restoreSucceeded) = pasteboardWrite, !restoreSucceeded {
-                setCopyFailedTransient("pasteboard write failed; clipboard restore failed")
-            } else {
-                setCopyFailedTransient("pasteboard write failed")
-            }
-            return
-        }
-        guard let dispatchTarget = capturePasteApplicationTarget(stage: "fallback paste dispatch"),
-              dispatchTarget == target else {
-            logInfo("unverified fallback paste skipped after pasteboard write: frontmost app changed target=\(target.redactedDescription)")
-            if settings.outputMode.restoresClipboardAfterPaste {
-                guard pasteController.restore(restoreToken) else {
-                    setCopiedTransient(pasteDispatched: false, reason: "unverified fallback target changed; clipboard restore failed")
-                    return
-                }
-                setCopySkippedTransient(
-                    Self.copySkippedReasonAfterRestoredPasteFailure("unverified fallback target changed")
+    private func applyPasteAttemptReport(_ report: PasteAttemptReport) {
+        switch report.result {
+        case .pastedVerified(let clipboard, let submit):
+            let reason = [
+                Self.clipboardStatusReason(clipboard),
+                Self.submitStatusReason(submit)
+            ]
+            .compactMap { $0 }
+            .joined(separator: "; ")
+            setCopiedTransient(pasteDispatched: true, reason: reason)
+        case .copiedForManualPaste(let reason):
+            setCopiedTransient(
+                pasteDispatched: false,
+                reason: Self.manualPasteReason(reason)
+            )
+        case .blocked:
+            setCopySkippedTransient("target is unsafe")
+        case .failed(let reason):
+            switch reason {
+            case .pasteboardWriteFailed(let restoreSucceeded):
+                setCopyFailedTransient(
+                    restoreSucceeded
+                        ? "pasteboard write failed"
+                        : "pasteboard write failed; clipboard restore failed"
                 )
-                return
+            case .superseded:
+                break
+            default:
+                setCopyFailedTransient(Self.manualPasteReason(reason))
             }
-            setCopiedTransient(pasteDispatched: false, reason: "unverified fallback target changed")
-            return
         }
-        if pasteController.pasteToFrontmostApplication(approvedTarget: target) {
-            let pasteReason: String
-            if settings.outputMode.restoresClipboardAfterPaste {
-                pasteReason = "unverified fallback; clipboard restore pending"
-                pasteController.scheduleRestore(restoreToken, after: 1.0) { [weak self] restored in
-                    guard let self else {
-                        return
-                    }
-                    if restored {
-                        self.logInfo("clipboard restored after fallback paste")
-                        self.updateClipboardRestoreStatus(restored: true)
-                    } else {
-                        self.logInfo("clipboard restore failed after fallback paste")
-                        self.updateClipboardRestoreStatus(restored: false)
-                    }
-                }
-            } else {
-                pasteReason = "unverified fallback; clipboard kept"
-            }
-            logInfo("unverified frontmost fallback paste event posted target=\(target.redactedDescription) submitAfterPaste=\(submitAfterPaste)")
-            setCopiedTransient(pasteDispatched: true, reason: pasteReason)
-            if submitAfterPaste {
-                scheduleFallbackSubmitReturn(to: target, pasteReason: pasteReason)
-            }
-        } else {
-            logInfo("unverified frontmost fallback paste event unavailable target=\(target.redactedDescription)")
-            if settings.outputMode.restoresClipboardAfterPaste {
-                guard pasteController.restore(restoreToken) else {
-                    setCopiedTransient(pasteDispatched: false, reason: "paste event unavailable; clipboard restore failed")
-                    return
-                }
-                setCopySkippedTransient(Self.copySkippedReasonAfterRestoredPasteFailure("paste event unavailable"))
-                return
-            }
-            setCopiedTransient(pasteDispatched: false, reason: "paste event unavailable")
+    }
+
+    nonisolated private static func clipboardStatusReason(
+        _ disposition: PasteClipboardDisposition
+    ) -> String {
+        switch disposition {
+        case .restored:
+            return "clipboard restored"
+        case .kept:
+            return "clipboard kept"
+        case .externalChangePreserved:
+            return "external clipboard preserved"
+        case .restoreFailed:
+            return "clipboard restore failed"
+        }
+    }
+
+    nonisolated private static func submitStatusReason(
+        _ result: PasteSubmitResult
+    ) -> String? {
+        switch result {
+        case .notRequested:
+            return nil
+        case .sent:
+            return "enter sent"
+        case .skippedTargetChanged:
+            return "enter skipped"
+        case .eventUnavailable:
+            return "enter unavailable"
+        }
+    }
+
+    nonisolated private static func manualPasteReason(
+        _ reason: PasteFailureReason
+    ) -> String {
+        switch reason {
+        case .copyOnlyMode:
+            return "output mode copy only"
+        case .accessibilityUnavailable:
+            return "Accessibility not allowed"
+        case .eventPermissionUnavailable:
+            return "paste event unavailable"
+        case .noEditableTarget:
+            return "no editable target"
+        case .verificationUnavailable, .verificationTimedOut:
+            return "paste not confirmed; clipboard kept"
+        case .pasteboardWriteFailed(let restoreSucceeded):
+            return restoreSucceeded
+                ? "pasteboard write failed"
+                : "pasteboard write failed; clipboard restore failed"
+        case .superseded:
+            return "paste superseded"
         }
     }
 
     private func setCopiedTransient(pasteDispatched: Bool, reason: String?) {
         if pasteDispatched {
-            logInfo("transcript copied; paste attempted: \(reason ?? "unknown")")
+            logInfo("transcript copied; paste verified: \(reason ?? "unknown")")
         } else {
-            logInfo("transcript copied; paste skipped: \(reason ?? "unknown")")
+            logInfo("transcript copied; paste not verified: \(reason ?? "unknown")")
         }
         setState(.copied(pasteDispatched: pasteDispatched, reason: reason))
         statusResetTimer?.invalidate()
@@ -822,6 +694,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func enqueueEnhancementWarning(code: String) {
         let message = Self.visibleEnhancementWarningMessage(code: code)
         logInfo("showing enhancement fallback warning")
+        if pasteAttemptsInProgress > 0 {
+            pendingEnhancementWarningMessage = message
+            return
+        }
         switch state {
         case .copied, .copySkipped, .copyFailed:
             pendingEnhancementWarningMessage = message
@@ -863,23 +739,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rememberPasteTarget(stage: String) {
         _ = capturePasteTarget(stage: stage, allowCached: false)
-    }
-
-    private func capturePasteApplicationTarget(stage: String) -> PasteApplicationTarget? {
-        guard let app = NSWorkspace.shared.frontmostApplication else {
-            logInfo("paste app target missing at \(stage): frontmost=nil")
-            return nil
-        }
-        guard app.processIdentifier != NSRunningApplication.current.processIdentifier else {
-            logInfo("paste app target missing at \(stage): frontmost=current")
-            return nil
-        }
-        let target = PasteApplicationTarget(
-            pid: app.processIdentifier,
-            bundleIdentifier: app.bundleIdentifier ?? "<nil>"
-        )
-        logInfo("paste app target captured at \(stage): \(target.redactedDescription)")
-        return target
     }
 
     private func capturePasteTarget(stage: String, allowCached: Bool) -> PasteTargetSnapshot? {
@@ -968,27 +827,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     nonisolated static func shouldContinueAfterBackendStop(_ result: BackendStopResult) -> Bool {
         result.stopped
-    }
-
-    nonisolated static func copySkippedReasonAfterRestoredPasteFailure(_ reason: String) -> String {
-        "\(reason); clipboard restored"
-    }
-
-    nonisolated static func fallbackPasteApplicationTarget(
-        reason: PasteCopyOnlyReason,
-        start: PasteApplicationTarget?,
-        stop: PasteApplicationTarget?,
-        current: PasteApplicationTarget?
-    ) -> PasteApplicationTarget? {
-        guard reason.isMissingAXTarget,
-              let start,
-              let stop,
-              let current,
-              start == stop,
-              stop == current else {
-            return nil
-        }
-        return current
     }
 
     private func showSettings() {
@@ -1443,14 +1281,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         settings.outputMode = mode
-        saveSettingsOnly()
-    }
-
-    private func setUnverifiedPasteFallback(_ enabled: Bool) {
-        guard settings != nil, allowRuntimeSettingsChange("unverified paste fallback") else {
-            return
-        }
-        settings.allowUnverifiedPasteFallback = enabled
         saveSettingsOnly()
     }
 
