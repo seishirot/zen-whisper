@@ -89,7 +89,7 @@ def test_settings_window_and_menu_share_the_central_busy_policy() -> None:
     assert "control.isEnabled = runtimeControlsEnabled" in enabled_state
     assert "launchAtLoginCheckbox.isEnabled = !isSaving" in enabled_state
     assert "editorState.canSave(isBusy: isBusy)" in enabled_state
-    assert "busyMessageLabel.isHidden = !isBusy" in enabled_state
+    assert "setArrangedView(busyMessageLabel, visible: isBusy)" in enabled_state
 
     assert "var onRequestAudioInputDevices: (() -> [AudioInputDevice])?" in controller
     assert "func windowDidBecomeKey(_ notification: Notification)" in controller

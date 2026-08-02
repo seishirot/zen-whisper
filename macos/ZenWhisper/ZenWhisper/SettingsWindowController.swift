@@ -173,6 +173,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let saveButton = NSButton()
     private var contentStack: NSStackView?
     private var footerStack: NSStackView?
+    private var managedVisibilityContexts:
+        [ObjectIdentifier: (stack: NSStackView, index: Int)] = [:]
     private var isUpdatingWindowLayout = false
     private var shouldCenterWindowOnFirstShow: Bool
     private var profileEditorWindowController: ProfileEditorWindowController?
@@ -560,6 +562,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.defaultButtonCell = saveButton.cell as? NSButtonCell
         contentStack = stack
         footerStack = buttonRow
+        registerManagedArrangedViews([
+            microphoneMessageLabel,
+            launchAtLoginMessageLabel,
+            busyMessageLabel,
+            validationMessageLabel
+        ])
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(
@@ -721,11 +729,36 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func setArrangedView(_ view: NSView, visible: Bool) {
+        let identifier = ObjectIdentifier(view)
+        var context = managedVisibilityContexts[identifier]
+        if context == nil,
+           let stack = view.superview as? NSStackView,
+           let index = stack.arrangedSubviews.firstIndex(where: { $0 === view }) {
+            context = (stack, index)
+            managedVisibilityContexts[identifier] = context
+        }
+        if let context {
+            let isArranged = context.stack.arrangedSubviews.contains(where: { $0 === view })
+            if visible, !isArranged {
+                context.stack.insertArrangedSubview(
+                    view,
+                    at: min(context.index, context.stack.arrangedSubviews.count)
+                )
+            } else if !visible, isArranged {
+                context.stack.removeArrangedSubview(view)
+            }
+        }
         view.isHidden = !visible
-        (view.superview as? NSStackView)?.setVisibilityPriority(
-            visible ? .mustHold : .notVisible,
-            for: view
-        )
+    }
+
+    private func registerManagedArrangedViews(_ views: [NSView]) {
+        for view in views {
+            guard let stack = view.superview as? NSStackView,
+                  let index = stack.arrangedSubviews.firstIndex(where: { $0 === view }) else {
+                continue
+            }
+            managedVisibilityContexts[ObjectIdentifier(view)] = (stack, index)
+        }
     }
 
     private func renderHotkeys() {
