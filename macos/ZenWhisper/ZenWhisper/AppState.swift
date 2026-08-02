@@ -38,18 +38,43 @@ enum AppState: Equatable {
             return "Post-processing"
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
-                if reason?.lowercased().contains("enter attempted") == true {
-                    return "Paste tried + Enter"
+                if reason?.lowercased().contains("enter sent") == true {
+                    return "Pasted + Enter"
                 }
-                if reason?.lowercased().contains("kept") == true {
-                    return "Paste tried"
-                }
-                return "Paste tried"
+                return "Pasted"
+            }
+            if reason?.lowercased().contains("unconfirmed transcript copied") == true {
+                return "Transcript copied"
+            }
+            if reason?.lowercased().contains("transcript available from menu") == true {
+                return "Paste not confirmed · Recoverable"
+            }
+            if reason?.lowercased().contains("not confirmed") == true {
+                return "Copied · Paste not confirmed"
+            }
+            if reason?.lowercased().contains("no editable") == true {
+                return "Copied · No editable target"
             }
             return reason.map { "Copied: \(StatusText.copyOnlyReason($0))" } ?? "Copied"
         case .copySkipped(let reason):
+            let recoverable = reason.lowercased().contains(
+                "transcript available from menu"
+            )
+            if reason.lowercased().contains("unsafe") {
+                return recoverable
+                    ? "Blocked · Secure field · Recoverable"
+                    : "Blocked · Secure field"
+            }
+            if reason.lowercased().contains("safety could not be verified") {
+                return recoverable
+                    ? "Blocked · Safety unknown · Recoverable"
+                    : "Blocked · Target safety unknown"
+            }
             return "Skipped: \(StatusText.copyOnlyReason(reason))"
-        case .copyFailed:
+        case .copyFailed(let reason):
+            if reason.lowercased().contains("transcript available from menu") {
+                return "Copy failed · Recoverable"
+            }
             return "Copy failed"
         case .enhancementWarning:
             return "Fallback"
@@ -140,6 +165,9 @@ enum StatusText {
         }
         if lower.contains("editable") {
             return "Not editable"
+        }
+        if lower.contains("not confirmed") {
+            return "Unconfirmed"
         }
         if lower.contains("unsafe") {
             return "Unsafe"

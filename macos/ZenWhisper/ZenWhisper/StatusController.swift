@@ -8,12 +8,24 @@ final class StatusController: NSObject, NSMenuDelegate {
     private let menu = NSMenu()
     private let statusMenuItem = NSMenuItem(title: "Starting", action: nil, keyEquivalent: "")
     private let toggleMenuItem = NSMenuItem(title: "Start Recording", action: #selector(toggleRecording), keyEquivalent: "")
+    private let copyUnconfirmedTranscriptMenuItem = NSMenuItem(
+        title: "Copy Oldest Unconfirmed Transcript",
+        action: #selector(copyUnconfirmedTranscript),
+        keyEquivalent: ""
+    )
     private let primaryRecoveryMenuItem = NSMenuItem(title: "", action: #selector(primaryRecovery), keyEquivalent: "")
     private let retryPreloadMenuItem = NSMenuItem(title: "Retry Model Load", action: #selector(retryPreload), keyEquivalent: "")
     private let repairMenuItem = NSMenuItem(title: "Repair Backend", action: #selector(repairBackend), keyEquivalent: "")
     private let acceptSignatureMenuItem = NSMenuItem(title: "Accept Signature Change", action: #selector(acceptSignatureChange), keyEquivalent: "")
     private let retryMicMenuItem = NSMenuItem(title: "Retry Microphone", action: #selector(recoverMicrophone), keyEquivalent: "")
     private let copyDiagnosticsMenuItem = NSMenuItem(title: "Copy Diagnostics", action: #selector(copyDiagnostics), keyEquivalent: "")
+#if DEBUG
+    private let testPastePipelineMenuItem = NSMenuItem(
+        title: "Test Paste Pipeline",
+        action: #selector(testPastePipeline),
+        keyEquivalent: ""
+    )
+#endif
     private let troubleshootingMenuItem = NSMenuItem(title: "Troubleshooting", action: nil, keyEquivalent: "")
     private let settingsMenuItem = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
     private let languageMenuItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
@@ -22,11 +34,6 @@ final class StatusController: NSObject, NSMenuDelegate {
     private let submitHotkeyMenuItem = NSMenuItem(title: "Submit Hotkey", action: nil, keyEquivalent: "")
     private let silenceAutoStopMenuItem = NSMenuItem(title: "Auto-stop on Silence", action: #selector(toggleSilenceAutoStop), keyEquivalent: "")
     private let outputModeMenuItem = NSMenuItem(title: "Output", action: nil, keyEquivalent: "")
-    private let unverifiedPasteFallbackMenuItem = NSMenuItem(
-        title: "Allow Unverified Paste/Submit to Frontmost App",
-        action: #selector(toggleUnverifiedPasteFallback),
-        keyEquivalent: ""
-    )
     private let microphoneMenuItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
     private let launchAtLoginMenuItem = NSMenuItem(title: "Launch at Login", action: #selector(toggleLaunchAtLogin), keyEquivalent: "")
     private var currentState: AppState = .idle
@@ -48,6 +55,7 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     var onToggleRecording: (() -> Void)?
+    var onCopyUnconfirmedTranscript: (() -> Void)?
     var onRetryPreload: (() -> Void)?
     var onRepairBackend: (() -> Void)?
     var onAcceptSignatureChange: (() -> Void)?
@@ -61,12 +69,14 @@ final class StatusController: NSObject, NSMenuDelegate {
     var onRecordCustomSubmitHotkey: (() -> Void)?
     var onToggleSilenceAutoStop: ((Bool) -> Void)?
     var onSelectOutputMode: ((OutputMode) -> Void)?
-    var onToggleUnverifiedPasteFallback: ((Bool) -> Void)?
     var onSelectMicrophone: ((String?) -> Void)?
     var onToggleLaunchAtLogin: ((Bool) -> Void)?
     var onMenuWillOpen: (() -> Void)?
     var onOpenLogs: (() -> Void)?
     var onCopyDiagnostics: (() -> Void)?
+#if DEBUG
+    var onTestPastePipeline: (() -> Void)?
+#endif
     var onQuit: (() -> Void)?
 
     override init() {
@@ -94,11 +104,20 @@ final class StatusController: NSObject, NSMenuDelegate {
         renderLaunchAtLoginState()
     }
 
+    func setUnconfirmedTranscriptCount(_ count: Int) {
+        let available = count > 0
+        copyUnconfirmedTranscriptMenuItem.title = count > 1
+            ? "Copy Oldest Unconfirmed Transcript (\(count))"
+            : "Copy Oldest Unconfirmed Transcript"
+        copyUnconfirmedTranscriptMenuItem.isHidden = !available
+        copyUnconfirmedTranscriptMenuItem.isEnabled = available
+    }
+
     func update(state: AppState) {
         currentState = state
         renderStatusItem()
         updateAnimationTimer(for: state)
-        statusMenuItem.title = menuText(for: state)
+        statusMenuItem.title = Self.menuText(for: state)
         toggleMenuItem.title = toggleTitle(for: state)
         toggleMenuItem.isEnabled = state.canToggleRecording
         retryPreloadMenuItem.isEnabled = canRetryPreload(state)
@@ -171,6 +190,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         toggleMenuItem.target = self
         menu.addItem(toggleMenuItem)
         menu.addItem(statusMenuItem)
+        copyUnconfirmedTranscriptMenuItem.target = self
+        copyUnconfirmedTranscriptMenuItem.isHidden = true
+        copyUnconfirmedTranscriptMenuItem.isEnabled = false
+        menu.addItem(copyUnconfirmedTranscriptMenuItem)
 
         primaryRecoveryMenuItem.target = self
         primaryRecoveryMenuItem.isHidden = true
@@ -188,8 +211,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         silenceAutoStopMenuItem.target = self
         menu.addItem(silenceAutoStopMenuItem)
         menu.addItem(outputModeMenuItem)
-        unverifiedPasteFallbackMenuItem.target = self
-        menu.addItem(unverifiedPasteFallbackMenuItem)
         menu.addItem(microphoneMenuItem)
         launchAtLoginMenuItem.target = self
         menu.addItem(launchAtLoginMenuItem)
@@ -222,6 +243,10 @@ final class StatusController: NSObject, NSMenuDelegate {
         submenu.addItem(retryMicMenuItem)
 
         submenu.addItem(.separator())
+#if DEBUG
+        testPastePipelineMenuItem.target = self
+        submenu.addItem(testPastePipelineMenuItem)
+#endif
         copyDiagnosticsMenuItem.target = self
         submenu.addItem(copyDiagnosticsMenuItem)
         let openMic = NSMenuItem(title: "Open Microphone Settings", action: #selector(openMicrophoneSettings), keyEquivalent: "")
@@ -250,8 +275,6 @@ final class StatusController: NSObject, NSMenuDelegate {
             silenceAutoStopMenuItem.state = .off
             outputModeMenuItem.title = "Output"
             outputModeMenuItem.isEnabled = false
-            unverifiedPasteFallbackMenuItem.isEnabled = false
-            unverifiedPasteFallbackMenuItem.state = .off
             microphoneMenuItem.title = "Microphone: System Default"
             microphoneMenuItem.submenu = microphoneMenu(selectedUID: nil)
             renderLaunchAtLoginState()
@@ -294,7 +317,6 @@ final class StatusController: NSObject, NSMenuDelegate {
             representedObject: { rawValue in OutputMode(rawValue: rawValue) ?? .pasteRestoreClipboard },
             action: #selector(selectOutputMode(_:))
         )
-        unverifiedPasteFallbackMenuItem.state = settings.allowUnverifiedPasteFallback ? .on : .off
         let devices = AudioDeviceManager.inputDevices()
         let storedUID = settings.microphoneDeviceUID?.isEmpty == true ? nil : settings.microphoneDeviceUID
         if let storedUID,
@@ -318,7 +340,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         submitHotkeyMenuItem.isEnabled = enabled
         silenceAutoStopMenuItem.isEnabled = enabled
         outputModeMenuItem.isEnabled = enabled
-        unverifiedPasteFallbackMenuItem.isEnabled = enabled
         microphoneMenuItem.isEnabled = enabled
         launchAtLoginMenuItem.isEnabled = true
         renderLaunchAtLoginState()
@@ -462,7 +483,7 @@ final class StatusController: NSObject, NSMenuDelegate {
         return submenu
     }
 
-    private func menuText(for state: AppState) -> String {
+    nonisolated static func menuText(for state: AppState) -> String {
         switch state {
         case .idle:
             return "Idle"
@@ -483,8 +504,8 @@ final class StatusController: NSObject, NSMenuDelegate {
         case .copied(let pasteDispatched, let reason):
             if pasteDispatched {
                 let enterText: String
-                if reason?.lowercased().contains("enter attempted") == true {
-                    enterText = "; Enter attempted"
+                if reason?.lowercased().contains("enter sent") == true {
+                    enterText = "; Enter sent"
                 } else if reason?.lowercased().contains("enter skipped") == true {
                     enterText = "; Enter skipped"
                 } else if reason?.lowercased().contains("enter unavailable") == true {
@@ -493,29 +514,57 @@ final class StatusController: NSObject, NSMenuDelegate {
                     enterText = ""
                 }
                 if reason?.lowercased().contains("kept") == true {
-                    return "Paste attempted\(enterText); clipboard kept"
+                    return "Paste verified\(enterText); clipboard kept"
                 }
                 if reason?.lowercased().contains("restore failed") == true {
-                    return "Paste attempted\(enterText); clipboard restore failed"
-                }
-                if reason?.lowercased().contains("restore pending") == true {
-                    return "Paste attempted\(enterText); clipboard restore pending"
+                    return "Paste verified\(enterText); clipboard restore failed"
                 }
                 if reason?.lowercased().contains("restored") == true {
-                    return "Paste attempted\(enterText); clipboard restored"
+                    return "Paste verified\(enterText); clipboard restored"
                 }
-                return "Paste attempted\(enterText)"
+                if reason?.lowercased().contains("external clipboard preserved") == true {
+                    return "Paste verified\(enterText); newer clipboard preserved"
+                }
+                return "Paste verified\(enterText)"
             }
             if let reason, !reason.isEmpty {
                 if reason.lowercased().contains("diagnostics") {
                     return "Diagnostics copied"
                 }
+                if reason.lowercased().contains("unconfirmed transcript copied") {
+                    return "Unconfirmed transcript copied"
+                }
+                if reason.lowercased().contains("transcript available from menu") {
+                    return "Paste not confirmed; newer clipboard preserved; transcript available from menu"
+                }
+                if reason.lowercased().contains("not confirmed") {
+                    return "Copied; paste not confirmed; transcript kept for manual paste"
+                }
+                if reason.lowercased().contains("no editable") {
+                    return "Copied; no editable paste target"
+                }
                 return "Copied; paste skipped: \(reason)"
             }
             return "Copied"
         case .copySkipped(let reason):
+            let recoverySuffix = reason.lowercased().contains(
+                "transcript available from menu"
+            )
+                ? "; transcript available from menu"
+                : ""
+            if reason.lowercased().contains("unsafe") {
+                return "Blocked: secure or sensitive field\(recoverySuffix)"
+            }
+            if reason.lowercased().contains("safety could not be verified") {
+                return "Blocked: target safety could not be verified\(recoverySuffix)"
+            }
             return "Copy Skipped: \(reason)"
         case .copyFailed(let message):
+            if message.lowercased().contains(
+                "transcript available from menu"
+            ) {
+                return "Copy Failed · Recoverable: \(message)"
+            }
             return "Copy Failed: \(StatusText.visibleErrorSummary(message))"
         case .enhancementWarning(let message):
             return "Enhancement Fallback: \(message)"
@@ -644,6 +693,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
 
     @objc private func toggleRecording() { onToggleRecording?() }
+    @objc private func copyUnconfirmedTranscript() {
+        onCopyUnconfirmedTranscript?()
+    }
     @objc private func openSettings() { onOpenSettings?() }
     @objc private func primaryRecovery() {
         performRecovery(primaryRecoveryAction)
@@ -706,10 +758,6 @@ final class StatusController: NSObject, NSMenuDelegate {
         guard let mode = sender.representedObject as? OutputMode else { return }
         onSelectOutputMode?(mode)
     }
-    @objc private func toggleUnverifiedPasteFallback() {
-        let enabled = unverifiedPasteFallbackMenuItem.state != .on
-        onToggleUnverifiedPasteFallback?(enabled)
-    }
     @objc private func toggleLaunchAtLogin() {
         let enabled = launchAtLoginMenuItem.state != .on
         onToggleLaunchAtLogin?(enabled)
@@ -720,6 +768,9 @@ final class StatusController: NSObject, NSMenuDelegate {
     }
     @objc private func openLogs() { onOpenLogs?() }
     @objc private func copyDiagnostics() { onCopyDiagnostics?() }
+#if DEBUG
+    @objc private func testPastePipeline() { onTestPastePipeline?() }
+#endif
     @objc private func quit() { onQuit?() }
 
     @objc private func openMicrophoneSettings() {

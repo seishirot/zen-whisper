@@ -91,7 +91,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         static let silenceAutoStop = "settings.silenceAutoStop"
         static let microphone = "settings.microphone"
         static let outputMode = "settings.outputMode"
-        static let unverifiedPasteFallback = "settings.unverifiedPasteFallback"
         static let launchAtLogin = "settings.launchAtLogin"
         static let launchAtLoginMessage = "settings.launchAtLoginMessage"
         static let busyMessage = "settings.busyMessage"
@@ -166,8 +165,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let microphonePopup = NSPopUpButton()
     private let microphoneMessageLabel = NSTextField(wrappingLabelWithString: "")
     private let outputModePopup = NSPopUpButton()
-    private let unverifiedPasteFallbackCheckbox = NSButton()
-    private let fallbackCautionLabel = NSTextField(wrappingLabelWithString: "")
     private let launchAtLoginCheckbox = NSButton()
     private let launchAtLoginMessageLabel = NSTextField(wrappingLabelWithString: "")
     private let busyMessageLabel = NSTextField(wrappingLabelWithString: "")
@@ -415,18 +412,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             action: #selector(outputModeChanged)
         )
         configureCheckbox(
-            unverifiedPasteFallbackCheckbox,
-            title: "Allow unverified paste and submit",
-            label: "Allow unverified paste and submit to the frontmost application",
-            identifier: AccessibilityIdentifier.unverifiedPasteFallback,
-            action: #selector(unverifiedPasteFallbackChanged)
-        )
-        fallbackCautionLabel.stringValue =
-            "Caution: This may paste or submit to the frontmost app when the Accessibility target cannot be verified."
-        fallbackCautionLabel.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
-        fallbackCautionLabel.textColor = .secondaryLabelColor
-
-        configureCheckbox(
             launchAtLoginCheckbox,
             title: "Launch Zen Whisper at login",
             label: "Launch Zen Whisper at login",
@@ -529,9 +514,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         let outputSection = makeSection(
             title: "Output",
             views: [
-                makeLabeledRow(title: "Mode:", control: outputModePopup),
-                unverifiedPasteFallbackCheckbox,
-                fallbackCautionLabel
+                makeLabeledRow(title: "Mode:", control: outputModePopup)
             ]
         )
         let generalSection = makeSection(
@@ -1011,10 +994,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         }) {
             outputModePopup.select(item)
         }
-        unverifiedPasteFallbackCheckbox.state =
-            settings.allowUnverifiedPasteFallback ? .on : .off
-        fallbackCautionLabel.textColor =
-            settings.allowUnverifiedPasteFallback ? .systemOrange : .secondaryLabelColor
     }
 
     private func refreshEnabledState() {
@@ -1030,8 +1009,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             postprocessingPopup,
             silenceAutoStopCheckbox,
             microphonePopup,
-            outputModePopup,
-            unverifiedPasteFallbackCheckbox
+            outputModePopup
         ] {
             control.isEnabled = runtimeControlsEnabled
         }
@@ -1430,12 +1408,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             return
         }
         editorState.draftSettings.outputMode = mode
-        didEdit()
-    }
-
-    @objc private func unverifiedPasteFallbackChanged() {
-        editorState.draftSettings.allowUnverifiedPasteFallback =
-            unverifiedPasteFallbackCheckbox.state == .on
         didEdit()
     }
 

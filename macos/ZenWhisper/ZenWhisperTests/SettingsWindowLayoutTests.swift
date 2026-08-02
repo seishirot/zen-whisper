@@ -63,6 +63,10 @@ final class SettingsWindowLayoutTests: XCTestCase {
     func testVisibleWarningsExpandTheWindowWithoutCompressingGeneralSection() throws {
         let registry = try ModelRegistry.loadDefault()
         let settings = makeSettings()
+        let launchStatusIssue = String(
+            repeating: "The saved LaunchAgent could not be read and needs an explicit replacement. ",
+            count: 10
+        )
         let controller = SettingsWindowController(
             registry: registry,
             settings: settings,
@@ -73,6 +77,23 @@ final class SettingsWindowLayoutTests: XCTestCase {
               let contentView = window.contentView else {
             return XCTFail("Expected Settings window")
         }
+        controller.synchronize(
+            authoritativeSettings: settings,
+            launchAtLoginStatus: .invalid(launchStatusIssue),
+            audioInputDevices: [],
+            isBusy: true
+        )
+        contentView.layoutSubtreeIfNeeded()
+        controller.synchronize(
+            authoritativeSettings: settings,
+            launchAtLoginStatus: .disabled,
+            audioInputDevices: [],
+            isBusy: false
+        )
+        contentView.layoutSubtreeIfNeeded()
+        controller.windowDidResize(
+            Notification(name: NSWindow.didResizeNotification, object: window)
+        )
         let baselineMinimumHeight = window.contentMinSize.height
         window.setContentSize(NSSize(width: 720, height: baselineMinimumHeight))
         controller.windowDidResize(
@@ -80,12 +101,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
         )
         controller.synchronize(
             authoritativeSettings: settings,
-            launchAtLoginStatus: .invalid(
-                String(
-                    repeating: "The saved LaunchAgent could not be read and needs an explicit replacement. ",
-                    count: 10
-                )
-            ),
+            launchAtLoginStatus: .invalid(launchStatusIssue),
             audioInputDevices: [],
             isBusy: true
         )
@@ -99,6 +115,10 @@ final class SettingsWindowLayoutTests: XCTestCase {
               ),
               let launchMessage = findView(
                   identifier: SettingsWindowController.AccessibilityIdentifier.launchAtLoginMessage,
+                  in: contentView
+              ),
+              let busyMessage = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.busyMessage,
                   in: contentView
               ),
               let generalSection = ancestors(of: launchAtLogin).first(where: { $0 is NSBox }),
@@ -167,6 +187,12 @@ final class SettingsWindowLayoutTests: XCTestCase {
             audioInputDevices: [],
             isBusy: false
         )
+        contentView.layoutSubtreeIfNeeded()
+        controller.windowDidResize(
+            Notification(name: NSWindow.didResizeNotification, object: window)
+        )
+        XCTAssertTrue(launchMessage.isHidden)
+        XCTAssertTrue(busyMessage.isHidden)
         XCTAssertEqual(window.contentMinSize.height, baselineMinimumHeight, accuracy: 1)
     }
 
@@ -424,8 +450,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
             ],
             silenceAutoStopEnabled: true,
             microphoneDeviceUID: nil,
-            outputMode: .pasteRestoreClipboard,
-            allowUnverifiedPasteFallback: false
+            outputMode: .pasteRestoreClipboard
         )
     }
 }
