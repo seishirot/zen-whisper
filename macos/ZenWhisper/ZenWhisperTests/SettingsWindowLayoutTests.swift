@@ -73,6 +73,12 @@ final class SettingsWindowLayoutTests: XCTestCase {
               let contentView = window.contentView else {
             return XCTFail("Expected Settings window")
         }
+        controller.synchronize(
+            authoritativeSettings: settings,
+            launchAtLoginStatus: .disabled,
+            audioInputDevices: [],
+            isBusy: false
+        )
         contentView.layoutSubtreeIfNeeded()
         controller.windowDidResize(
             Notification(name: NSWindow.didResizeNotification, object: window)
@@ -120,16 +126,6 @@ final class SettingsWindowLayoutTests: XCTestCase {
 
         let launchFrame = launchAtLogin.convert(launchAtLogin.bounds, to: generalSection)
         let messageFrame = launchMessage.convert(launchMessage.bounds, to: generalSection)
-        XCTAssertTrue(
-            (launchMessage.superview as? NSStackView)?.arrangedSubviews.contains(where: {
-                $0 === launchMessage
-            }) == true
-        )
-        XCTAssertTrue(
-            (busyMessage.superview as? NSStackView)?.arrangedSubviews.contains(where: {
-                $0 === busyMessage
-            }) == true
-        )
         XCTAssertTrue(generalSection.bounds.contains(launchFrame))
         XCTAssertTrue(generalSection.bounds.contains(messageFrame))
         XCTAssertGreaterThan(window.contentLayoutRect.height, baselineMinimumHeight)
@@ -191,43 +187,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
         )
         XCTAssertTrue(launchMessage.isHidden)
         XCTAssertTrue(busyMessage.isHidden)
-        XCTAssertFalse(
-            (launchMessage.superview as? NSStackView)?.arrangedSubviews.contains(where: {
-                $0 === launchMessage
-            }) == true
-        )
-        XCTAssertFalse(
-            (busyMessage.superview as? NSStackView)?.arrangedSubviews.contains(where: {
-                $0 === busyMessage
-            }) == true
-        )
         XCTAssertEqual(window.contentMinSize.height, baselineMinimumHeight, accuracy: 1)
-
-        var invalidSettings = settings
-        invalidSettings.submitHotkey = settings.hotkey
-        controller.synchronize(
-            authoritativeSettings: invalidSettings,
-            launchAtLoginStatus: .disabled,
-            audioInputDevices: [],
-            isBusy: true
-        )
-        contentView.layoutSubtreeIfNeeded()
-        guard let validationMessage = findView(
-            identifier: SettingsWindowController.AccessibilityIdentifier.validationMessage,
-            in: contentView
-        ),
-              let messageStack = busyMessage.superview as? NSStackView,
-              let busyIndex = messageStack.arrangedSubviews.firstIndex(where: {
-                  $0 === busyMessage
-              }),
-              let validationIndex = messageStack.arrangedSubviews.firstIndex(where: {
-                  $0 === validationMessage
-              }) else {
-            return XCTFail("Expected busy and validation messages in the content stack")
-        }
-        XCTAssertFalse(busyMessage.isHidden)
-        XCTAssertFalse(validationMessage.isHidden)
-        XCTAssertLessThan(busyIndex, validationIndex)
     }
 
     func testPostprocessorEditorKeepsFooterVisibleAndFormScrollableAtMinimumSize() {

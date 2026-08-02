@@ -173,8 +173,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let saveButton = NSButton()
     private var contentStack: NSStackView?
     private var footerStack: NSStackView?
-    private var managedVisibilityContexts:
-        [ObjectIdentifier: (stack: NSStackView, index: Int)] = [:]
     private var isUpdatingWindowLayout = false
     private var shouldCenterWindowOnFirstShow: Bool
     private var profileEditorWindowController: ProfileEditorWindowController?
@@ -562,12 +560,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.defaultButtonCell = saveButton.cell as? NSButtonCell
         contentStack = stack
         footerStack = buttonRow
-        registerManagedArrangedViews([
-            microphoneMessageLabel,
-            launchAtLoginMessageLabel,
-            busyMessageLabel,
-            validationMessageLabel
-        ])
 
         NSLayoutConstraint.activate([
             stack.leadingAnchor.constraint(
@@ -720,45 +712,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if let issue = editorState.launchAtLoginStatusIssue {
             launchAtLoginMessageLabel.stringValue =
                 "Launch at Login status could not be read. Choose On or Off to replace it. \(issue)"
-            setArrangedView(launchAtLoginMessageLabel, visible: true)
+            launchAtLoginMessageLabel.isHidden = false
         } else {
             launchAtLoginMessageLabel.stringValue = ""
-            setArrangedView(launchAtLoginMessageLabel, visible: false)
+            launchAtLoginMessageLabel.isHidden = true
         }
         refreshEnabledState()
-    }
-
-    private func setArrangedView(_ view: NSView, visible: Bool) {
-        let identifier = ObjectIdentifier(view)
-        var context = managedVisibilityContexts[identifier]
-        if context == nil,
-           let stack = view.superview as? NSStackView,
-           let index = stack.arrangedSubviews.firstIndex(where: { $0 === view }) {
-            context = (stack, index)
-            managedVisibilityContexts[identifier] = context
-        }
-        if let context {
-            let isArranged = context.stack.arrangedSubviews.contains(where: { $0 === view })
-            if visible, !isArranged {
-                context.stack.insertArrangedSubview(
-                    view,
-                    at: min(context.index, context.stack.arrangedSubviews.count)
-                )
-            } else if !visible, isArranged {
-                context.stack.removeArrangedSubview(view)
-            }
-        }
-        view.isHidden = !visible
-    }
-
-    private func registerManagedArrangedViews(_ views: [NSView]) {
-        for view in views {
-            guard let stack = view.superview as? NSStackView,
-                  let index = stack.arrangedSubviews.firstIndex(where: { $0 === view }) else {
-                continue
-            }
-            managedVisibilityContexts[ObjectIdentifier(view)] = (stack, index)
-        }
     }
 
     private func renderHotkeys() {
@@ -1007,10 +966,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             microphonePopup.lastItem?.toolTip = selectedUID
             microphoneMessageLabel.stringValue =
                 "The saved microphone is unavailable. Its full device identifier is preserved."
-            setArrangedView(microphoneMessageLabel, visible: true)
+            microphoneMessageLabel.isHidden = false
         } else {
             microphoneMessageLabel.stringValue = ""
-            setArrangedView(microphoneMessageLabel, visible: false)
+            microphoneMessageLabel.isHidden = true
         }
 
         if let selectedUID,
@@ -1076,19 +1035,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         launchAtLoginCheckbox.isEnabled = !isSaving
         cancelButton.isEnabled = !isSaving
 
-        setArrangedView(busyMessageLabel, visible: isBusy)
+        busyMessageLabel.isHidden = !isBusy
         if let issue = editorState.validationIssue {
             validationMessageLabel.stringValue = issue.message
-            setArrangedView(validationMessageLabel, visible: true)
+            validationMessageLabel.isHidden = false
         } else if !enhancementConfigurationFitsBudget {
             validationMessageLabel.stringValue =
                 "The selected profile and post-processor are too large to use together. Reduce profile terms or context, or shorten the CLI arguments and environment."
-            setArrangedView(validationMessageLabel, visible: true)
+            validationMessageLabel.isHidden = false
         } else if hasSaveError {
-            setArrangedView(validationMessageLabel, visible: true)
+            validationMessageLabel.isHidden = false
         } else {
             validationMessageLabel.stringValue = ""
-            setArrangedView(validationMessageLabel, visible: false)
+            validationMessageLabel.isHidden = true
         }
 
         saveButton.isEnabled =
