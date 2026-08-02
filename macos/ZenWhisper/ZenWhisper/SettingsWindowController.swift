@@ -712,12 +712,20 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         if let issue = editorState.launchAtLoginStatusIssue {
             launchAtLoginMessageLabel.stringValue =
                 "Launch at Login status could not be read. Choose On or Off to replace it. \(issue)"
-            launchAtLoginMessageLabel.isHidden = false
+            setArrangedView(launchAtLoginMessageLabel, visible: true)
         } else {
             launchAtLoginMessageLabel.stringValue = ""
-            launchAtLoginMessageLabel.isHidden = true
+            setArrangedView(launchAtLoginMessageLabel, visible: false)
         }
         refreshEnabledState()
+    }
+
+    private func setArrangedView(_ view: NSView, visible: Bool) {
+        view.isHidden = !visible
+        (view.superview as? NSStackView)?.setVisibilityPriority(
+            visible ? .mustHold : .notVisible,
+            for: view
+        )
     }
 
     private func renderHotkeys() {
@@ -966,10 +974,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             microphonePopup.lastItem?.toolTip = selectedUID
             microphoneMessageLabel.stringValue =
                 "The saved microphone is unavailable. Its full device identifier is preserved."
-            microphoneMessageLabel.isHidden = false
+            setArrangedView(microphoneMessageLabel, visible: true)
         } else {
             microphoneMessageLabel.stringValue = ""
-            microphoneMessageLabel.isHidden = true
+            setArrangedView(microphoneMessageLabel, visible: false)
         }
 
         if let selectedUID,
@@ -1035,19 +1043,19 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         launchAtLoginCheckbox.isEnabled = !isSaving
         cancelButton.isEnabled = !isSaving
 
-        busyMessageLabel.isHidden = !isBusy
+        setArrangedView(busyMessageLabel, visible: isBusy)
         if let issue = editorState.validationIssue {
             validationMessageLabel.stringValue = issue.message
-            validationMessageLabel.isHidden = false
+            setArrangedView(validationMessageLabel, visible: true)
         } else if !enhancementConfigurationFitsBudget {
             validationMessageLabel.stringValue =
                 "The selected profile and post-processor are too large to use together. Reduce profile terms or context, or shorten the CLI arguments and environment."
-            validationMessageLabel.isHidden = false
+            setArrangedView(validationMessageLabel, visible: true)
         } else if hasSaveError {
-            validationMessageLabel.isHidden = false
+            setArrangedView(validationMessageLabel, visible: true)
         } else {
             validationMessageLabel.stringValue = ""
-            validationMessageLabel.isHidden = true
+            setArrangedView(validationMessageLabel, visible: false)
         }
 
         saveButton.isEnabled =
