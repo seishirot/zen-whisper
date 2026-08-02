@@ -73,6 +73,10 @@ final class SettingsWindowLayoutTests: XCTestCase {
               let contentView = window.contentView else {
             return XCTFail("Expected Settings window")
         }
+        contentView.layoutSubtreeIfNeeded()
+        controller.windowDidResize(
+            Notification(name: NSWindow.didResizeNotification, object: window)
+        )
         let baselineMinimumHeight = window.contentMinSize.height
         window.setContentSize(NSSize(width: 720, height: baselineMinimumHeight))
         controller.windowDidResize(
@@ -99,6 +103,10 @@ final class SettingsWindowLayoutTests: XCTestCase {
               ),
               let launchMessage = findView(
                   identifier: SettingsWindowController.AccessibilityIdentifier.launchAtLoginMessage,
+                  in: contentView
+              ),
+              let busyMessage = findView(
+                  identifier: SettingsWindowController.AccessibilityIdentifier.busyMessage,
                   in: contentView
               ),
               let generalSection = ancestors(of: launchAtLogin).first(where: { $0 is NSBox }),
@@ -167,6 +175,12 @@ final class SettingsWindowLayoutTests: XCTestCase {
             audioInputDevices: [],
             isBusy: false
         )
+        contentView.layoutSubtreeIfNeeded()
+        controller.windowDidResize(
+            Notification(name: NSWindow.didResizeNotification, object: window)
+        )
+        XCTAssertTrue(launchMessage.isHidden)
+        XCTAssertTrue(busyMessage.isHidden)
         XCTAssertEqual(window.contentMinSize.height, baselineMinimumHeight, accuracy: 1)
     }
 
