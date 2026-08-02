@@ -16,7 +16,6 @@ enum PasteFailureReason: Equatable {
     case verificationUnavailable
     case verificationTimedOut
     case pasteboardWriteFailed(disposition: PasteboardWriteFailureDisposition)
-    case pasteboardRestoreFailed
     case superseded
 
     var logCode: String {
@@ -35,8 +34,6 @@ enum PasteFailureReason: Equatable {
             return "verification_timed_out"
         case .pasteboardWriteFailed(let disposition):
             return "pasteboard_write_failed_\(disposition.logCode)"
-        case .pasteboardRestoreFailed:
-            return "pasteboard_restore_failed"
         case .superseded:
             return "superseded"
         }
@@ -72,21 +69,12 @@ enum PasteBlockedTranscriptDisposition: Equatable {
 }
 
 enum PasteClipboardDisposition: Equatable {
-    case restored
     case kept
-    case externalChangePreserved
-    case restoreFailed
 
     var logCode: String {
         switch self {
-        case .restored:
-            return "restored"
         case .kept:
             return "kept"
-        case .externalChangePreserved:
-            return "external_change_preserved"
-        case .restoreFailed:
-            return "restore_failed"
         }
     }
 }
@@ -162,6 +150,7 @@ struct PasteAttemptReport: Equatable {
 
 struct PasteAttemptTiming: Equatable {
     var targetRetryNanoseconds: UInt64 = 50_000_000
+    var targetResolutionTimeout: TimeInterval = 0.25
     var pasteboardSettleNanoseconds: UInt64 = 50_000_000
     var keyUpDelayNanoseconds: UInt64 = 20_000_000
     var verificationPollNanoseconds: UInt64 = 50_000_000
@@ -188,7 +177,6 @@ final class PasteAttemptCoordinator {
     private let sleep: Sleeper
     private let now: Clock
     private var generation = 0
-    private var retainedRestoreToken: PasteboardRestoreToken?
     private var transactionTail: Task<Void, Never>?
     private var latestQueueID: UUID?
 
@@ -258,9 +246,7 @@ final class PasteAttemptCoordinator {
                 attemptID: attemptID,
                 reason: request.outputMode == .copyOnly
                     ? .copyOnlyMode
-                    : .accessibilityUnavailable,
-                retainOriginalClipboard:
-                    request.outputMode.restoresClipboardAfterPaste
+                    : .accessibilityUnavailable
             )
         }
 
@@ -296,8 +282,7 @@ final class PasteAttemptCoordinator {
             return copyForManualPaste(
                 request.text,
                 attemptID: attemptID,
-                reason: .copyOnlyMode,
-                retainOriginalClipboard: false
+                reason: .copyOnlyMode
             )
         }
 
@@ -333,8 +318,7 @@ final class PasteAttemptCoordinator {
             return copyForManualPaste(
                 request.text,
                 attemptID: attemptID,
-                reason: .noEditableTarget,
-                retainOriginalClipboard: request.outputMode.restoresClipboardAfterPaste
+                reason: .noEditableTarget
             )
         case .target(let target):
             log(
@@ -347,20 +331,67 @@ final class PasteAttemptCoordinator {
             return copyForManualPaste(
                 request.text,
                 attemptID: attemptID,
-                reason: .eventPermissionUnavailable,
-                retainOriginalClipboard: request.outputMode.restoresClipboardAfterPaste
+                reason: .eventPermissionUnavailable
+            )
+        }
+
+        let dispatchResolution = await resolveTarget(
+            recordingAnchor: request.recordingAnchor
+        )
+        guard attemptGeneration == generation else {
+            return report(attemptID, result: .failed(reason: .superseded))
+        }
+        let dispatchTarget: PasteTargetContext
+        switch dispatchResolution {
+        case .unsafe:
+            return report(
+                attemptID,
+                result: .blocked(
+                    reason: .unsafeTarget,
+                    transcript: .intentionallyDiscarded
+                )
+            )
+        case .safetyIndeterminate(let detail):
+            log(
+                attemptID,
+                "phase=dispatch result=safety_indeterminate detail=\(detail)"
+            )
+            return report(
+                attemptID,
+                result: .blocked(
+                    reason: .targetSafetyIndeterminate,
+                    transcript: .intentionallyDiscarded
+                )
+            )
+        case .missing(let detail):
+            log(attemptID, "phase=dispatch result=target_missing detail=\(detail)")
+            return copyForManualPaste(
+                request.text,
+                attemptID: attemptID,
+                reason: .noEditableTarget
+            )
+        case .target(let target):
+            dispatchTarget = target
+        }
+
+        guard controller.frontmostProcessIdentifier()
+            == dispatchTarget.snapshot.pid else {
+            log(attemptID, "phase=dispatch result=frontmost_changed")
+            return copyForManualPaste(
+                request.text,
+                attemptID: attemptID,
+                reason: .noEditableTarget
             )
         }
 
         let pasteboardWrite = controller.prepareAutoPaste(
             request.text,
-            attemptID: attemptID,
-            preservingBaseFrom: retainedRestoreToken
+            attemptID: attemptID
         )
-        let restoreToken: PasteboardRestoreToken
+        let ownershipToken: PasteboardOwnershipToken
         switch pasteboardWrite {
         case .success(let token):
-            restoreToken = token
+            ownershipToken = token
         case .writeFailed(let disposition):
             return report(
                 attemptID,
@@ -371,66 +402,12 @@ final class PasteAttemptCoordinator {
                 )
             )
         }
-        if request.outputMode.restoresClipboardAfterPaste {
-            retainedRestoreToken = restoreToken
-        } else {
-            retainedRestoreToken = nil
-        }
         log(attemptID, "phase=pasteboard result=prepared")
 
         await sleep(timing.pasteboardSettleNanoseconds)
         guard attemptGeneration == generation else {
             return supersededBeforePasteDispatch(
-                attemptID: attemptID,
-                token: restoreToken
-            )
-        }
-
-        let dispatchResolution = await resolveTarget(
-            recordingAnchor: request.recordingAnchor
-        )
-        guard attemptGeneration == generation else {
-            return supersededBeforePasteDispatch(
-                attemptID: attemptID,
-                token: restoreToken
-            )
-        }
-        let dispatchTarget: PasteTargetContext
-        switch dispatchResolution {
-        case .unsafe:
-            return blockedAfterPasteboardPreparation(
-                attemptID: attemptID,
-                reason: .unsafeTarget,
-                token: restoreToken
-            )
-        case .safetyIndeterminate(let detail):
-            log(
-                attemptID,
-                "phase=dispatch result=safety_indeterminate detail=\(detail)"
-            )
-            return blockedAfterPasteboardPreparation(
-                attemptID: attemptID,
-                reason: .targetSafetyIndeterminate,
-                token: restoreToken
-            )
-        case .missing(let detail):
-            log(attemptID, "phase=dispatch result=target_missing detail=\(detail)")
-            return manualPasteReport(
-                attemptID: attemptID,
-                reason: .noEditableTarget,
-                token: restoreToken
-            )
-        case .target(let target):
-            dispatchTarget = target
-        }
-
-        guard controller.frontmostProcessIdentifier()
-            == dispatchTarget.snapshot.pid else {
-            log(attemptID, "phase=dispatch result=frontmost_changed")
-            return manualPasteReport(
-                attemptID: attemptID,
-                reason: .noEditableTarget,
-                token: restoreToken
+                attemptID: attemptID
             )
         }
 
@@ -438,7 +415,7 @@ final class PasteAttemptCoordinator {
             return manualPasteReport(
                 attemptID: attemptID,
                 reason: .eventPermissionUnavailable,
-                token: restoreToken
+                token: ownershipToken
             )
         }
 
@@ -450,6 +427,22 @@ final class PasteAttemptCoordinator {
             before: before,
             insertedText: request.text
         )
+        guard attemptGeneration == generation else {
+            return supersededBeforePasteDispatch(
+                attemptID: attemptID
+            )
+        }
+        guard controller.ownsPasteboard(ownershipToken) else {
+            log(
+                attemptID,
+                "phase=dispatch result=clipboard_ownership_lost_before_keydown"
+            )
+            return manualPasteReport(
+                attemptID: attemptID,
+                reason: .verificationUnavailable,
+                token: ownershipToken
+            )
+        }
         switch controller.validateFocus(dispatchTarget) {
         case .matched:
             break
@@ -461,19 +454,17 @@ final class PasteAttemptCoordinator {
             return manualPasteReport(
                 attemptID: attemptID,
                 reason: .noEditableTarget,
-                token: restoreToken
+                token: ownershipToken
             )
         case .unsafe:
             return blockedAfterPasteboardPreparation(
                 attemptID: attemptID,
-                reason: .unsafeTarget,
-                token: restoreToken
+                reason: .unsafeTarget
             )
         case .safetyIndeterminate:
             return blockedAfterPasteboardPreparation(
                 attemptID: attemptID,
-                reason: .targetSafetyIndeterminate,
-                token: restoreToken
+                reason: .targetSafetyIndeterminate
             )
         }
         guard controller.frontmostProcessIdentifier()
@@ -485,40 +476,29 @@ final class PasteAttemptCoordinator {
             return manualPasteReport(
                 attemptID: attemptID,
                 reason: .noEditableTarget,
-                token: restoreToken
-            )
-        }
-        guard attemptGeneration == generation else {
-            return supersededBeforePasteDispatch(
-                attemptID: attemptID,
-                token: restoreToken
-            )
-        }
-        guard controller.ownsPasteboard(restoreToken) else {
-            log(
-                attemptID,
-                "phase=dispatch result=clipboard_ownership_lost_before_keydown"
-            )
-            return manualPasteReport(
-                attemptID: attemptID,
-                reason: .verificationUnavailable,
-                token: restoreToken
+                token: ownershipToken
             )
         }
 
-        controller.postKeyDown(pasteEvents)
+        controller.postKeyDown(
+            pasteEvents,
+            to: dispatchTarget.snapshot.pid
+        )
         await sleep(timing.keyUpDelayNanoseconds)
-        controller.postKeyUp(pasteEvents)
+        controller.postKeyUp(
+            pasteEvents,
+            to: dispatchTarget.snapshot.pid
+        )
         log(
             attemptID,
-            "phase=dispatch result=posted method=annotated_session source=combined_session keyCode=\(pasteEvents.virtualKey) target=\(dispatchTarget.snapshot.redactedDescription)"
+            "phase=dispatch result=posted method=pid_targeted source=combined_session keyCode=\(pasteEvents.virtualKey) target=\(dispatchTarget.snapshot.redactedDescription)"
         )
 
         guard attemptGeneration == generation else {
             return manualPasteReport(
                 attemptID: attemptID,
                 reason: .superseded,
-                token: restoreToken
+                token: ownershipToken
             )
         }
         guard expectation.canVerify else {
@@ -526,7 +506,7 @@ final class PasteAttemptCoordinator {
             return manualPasteReport(
                 attemptID: attemptID,
                 reason: .verificationUnavailable,
-                token: restoreToken
+                token: ownershipToken
             )
         }
 
@@ -544,10 +524,7 @@ final class PasteAttemptCoordinator {
                     (now().timeIntervalSince(verificationStart) * 1_000)
                         .rounded()
                 )
-                let clipboard = finishClipboard(
-                    mode: request.outputMode,
-                    token: restoreToken
-                )
+                let clipboard = finishClipboard()
                 let submit = await submitIfRequested(
                     request.submitAfterPaste,
                     target: dispatchTarget,
@@ -572,7 +549,7 @@ final class PasteAttemptCoordinator {
                 return manualPasteReport(
                     attemptID: attemptID,
                     reason: .superseded,
-                    token: restoreToken
+                    token: ownershipToken
                 )
             }
         } while now() < deadline
@@ -581,18 +558,30 @@ final class PasteAttemptCoordinator {
         return manualPasteReport(
             attemptID: attemptID,
             reason: .verificationTimedOut,
-            token: restoreToken
+            token: ownershipToken
         )
     }
 
     private func resolveTarget(
         recordingAnchor: PasteTargetSnapshot?
     ) async -> TargetResolution {
+        let deadline = now().addingTimeInterval(
+            timing.targetResolutionTimeout
+        )
+        func deadlineExceeded() -> TargetResolution {
+            .safetyIndeterminate(detail: "targetResolutionDeadlineExceeded")
+        }
         var lastDetail = "not_probed"
         var lastProbeWasSafetyIndeterminate = false
         let currentPID = controller.currentProcessIdentifier()
         for attempt in 0..<3 {
+            guard now() < deadline else {
+                return deadlineExceeded()
+            }
             let probe = controller.snapshotFocusedTargetProbe()
+            guard now() < deadline else {
+                return deadlineExceeded()
+            }
             lastDetail = probe.detail
             lastProbeWasSafetyIndeterminate = probe.isSafetyIndeterminate
             if let context = probe.context {
@@ -620,8 +609,17 @@ final class PasteAttemptCoordinator {
            let recordingAnchor,
            controller.isEligible(recordingAnchor),
            controller.activateApplication(for: recordingAnchor) {
+            guard now() < deadline else {
+                return deadlineExceeded()
+            }
             await sleep(timing.targetRetryNanoseconds)
+            guard now() < deadline else {
+                return deadlineExceeded()
+            }
             let probe = controller.snapshotFocusedTargetProbe()
+            guard now() < deadline else {
+                return deadlineExceeded()
+            }
             lastDetail = probe.detail
             lastProbeWasSafetyIndeterminate = probe.isSafetyIndeterminate
             if let context = probe.context {
@@ -646,57 +644,33 @@ final class PasteAttemptCoordinator {
 
     private func blockedAfterPasteboardPreparation(
         attemptID: UUID,
-        reason: PasteBlockReason,
-        token: PasteboardRestoreToken
+        reason: PasteBlockReason
     ) -> PasteAttemptReport {
-        let restoreResult = controller.restoreIfOwned(token)
-        retainedRestoreToken = nil
         log(
             attemptID,
-            "phase=dispatch result=blocked_\(reason.logCode) restore=\(restoreResult)"
+            "phase=dispatch result=blocked_\(reason.logCode) clipboard=kept_non_destructive"
         )
-        switch restoreResult {
-        case .restored:
-            return report(
-                attemptID,
-                result: .blocked(
-                    reason: reason,
-                    transcript: .intentionallyDiscarded
-                )
+        return report(
+            attemptID,
+            result: .blocked(
+                reason: reason,
+                transcript: .recoveryMenu
             )
-        case .ownershipLost:
-            return report(
-                attemptID,
-                result: .blocked(
-                    reason: reason,
-                    transcript: .recoveryMenu
-                )
-            )
-        case .failed:
-            return report(
-                attemptID,
-                result: .failed(reason: .pasteboardRestoreFailed)
-            )
-        }
+        )
     }
 
     private func copyForManualPaste(
         _ text: String,
         attemptID: UUID,
-        reason: PasteFailureReason,
-        retainOriginalClipboard: Bool
+        reason: PasteFailureReason
     ) -> PasteAttemptReport {
         let result = controller.prepareAutoPaste(
             text,
-            attemptID: attemptID,
-            preservingBaseFrom: retainOriginalClipboard
-                ? retainedRestoreToken
-                : nil
+            attemptID: attemptID
         )
-        let token: PasteboardRestoreToken
         switch result {
-        case .success(let preparedToken):
-            token = preparedToken
+        case .success:
+            break
         case .writeFailed(let disposition):
             return report(
                 attemptID,
@@ -707,7 +681,6 @@ final class PasteAttemptCoordinator {
                 )
             )
         }
-        retainedRestoreToken = retainOriginalClipboard ? token : nil
         log(
             attemptID,
             "phase=complete result=manual_paste_fallback reason=\(reason.logCode)"
@@ -724,13 +697,12 @@ final class PasteAttemptCoordinator {
     private func manualPasteReport(
         attemptID: UUID,
         reason: PasteFailureReason,
-        token: PasteboardRestoreToken
+        token: PasteboardOwnershipToken
     ) -> PasteAttemptReport {
         let availability: PasteManualPasteAvailability
         if controller.ownsPasteboard(token) {
             availability = .clipboard
         } else {
-            retainedRestoreToken = nil
             availability = .recoveryMenu
         }
         log(
@@ -747,46 +719,20 @@ final class PasteAttemptCoordinator {
     }
 
     private func supersededBeforePasteDispatch(
-        attemptID: UUID,
-        token: PasteboardRestoreToken
+        attemptID: UUID
     ) -> PasteAttemptReport {
-        let restoreResult = controller.restoreIfOwned(token)
-        retainedRestoreToken = nil
         log(
             attemptID,
-            "phase=cancel result=superseded_before_dispatch restore=\(restoreResult)"
+            "phase=cancel result=superseded_before_dispatch clipboard=kept_non_destructive"
         )
-        if restoreResult == .failed {
-            return report(
-                attemptID,
-                result: .failed(reason: .pasteboardRestoreFailed)
-            )
-        }
         return report(
             attemptID,
             result: .failed(reason: .superseded)
         )
     }
 
-    private func finishClipboard(
-        mode: OutputMode,
-        token: PasteboardRestoreToken
-    ) -> PasteClipboardDisposition {
-        guard mode.restoresClipboardAfterPaste else {
-            retainedRestoreToken = nil
-            return .kept
-        }
-        switch controller.restoreIfOwned(token) {
-        case .restored:
-            retainedRestoreToken = nil
-            return .restored
-        case .ownershipLost:
-            retainedRestoreToken = nil
-            return .externalChangePreserved
-        case .failed:
-            retainedRestoreToken = nil
-            return .restoreFailed
-        }
+    private func finishClipboard() -> PasteClipboardDisposition {
+        return .kept
     }
 
     private func submitIfRequested(
@@ -799,6 +745,10 @@ final class PasteAttemptCoordinator {
             return .notRequested
         }
         await sleep(timing.submitDelayNanoseconds)
+        guard let returnEvents = controller.makeReturnKeyEventPair() else {
+            log(attemptID, "phase=submit result=event_unavailable")
+            return .eventUnavailable
+        }
         guard attemptGeneration == generation,
               controller.validateFocus(target) == .matched,
               controller.frontmostProcessIdentifier()
@@ -806,13 +756,9 @@ final class PasteAttemptCoordinator {
             log(attemptID, "phase=submit result=target_changed")
             return .skippedTargetChanged
         }
-        guard let returnEvents = controller.makeReturnKeyEventPair() else {
-            log(attemptID, "phase=submit result=event_unavailable")
-            return .eventUnavailable
-        }
-        controller.postKeyDown(returnEvents)
+        controller.postKeyDown(returnEvents, to: target.snapshot.pid)
         await sleep(timing.keyUpDelayNanoseconds)
-        controller.postKeyUp(returnEvents)
+        controller.postKeyUp(returnEvents, to: target.snapshot.pid)
         return .sent
     }
 

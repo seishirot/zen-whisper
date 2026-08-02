@@ -40,8 +40,7 @@ enum UnconfirmedTranscriptRecoveryPolicy {
             return reason != .copyOnlyMode
         case .blocked(_, transcript: .recoveryMenu):
             return true
-        case .failed(reason: .pasteboardWriteFailed),
-             .failed(reason: .pasteboardRestoreFailed):
+        case .failed(reason: .pasteboardWriteFailed):
             return true
         case .pastedVerified, .blocked, .failed:
             return false
@@ -81,10 +80,6 @@ enum PasteAttemptPresentation {
                 return .copyFailed(
                     pasteboardWriteFailureReason(disposition)
                 )
-            case .pasteboardRestoreFailed:
-                return .copyFailed(
-                    "clipboard restore failed; transcript available from menu"
-                )
             case .superseded:
                 return nil
             default:
@@ -102,14 +97,8 @@ enum PasteAttemptPresentation {
         _ disposition: PasteClipboardDisposition
     ) -> String {
         switch disposition {
-        case .restored:
-            return "clipboard restored"
         case .kept:
             return "clipboard kept"
-        case .externalChangePreserved:
-            return "external clipboard preserved"
-        case .restoreFailed:
-            return "clipboard restore failed"
         }
     }
 
@@ -148,8 +137,6 @@ enum PasteAttemptPresentation {
             return "paste not confirmed; clipboard kept"
         case .pasteboardWriteFailed(let disposition):
             return pasteboardWriteFailureReason(disposition)
-        case .pasteboardRestoreFailed:
-            return "clipboard restore failed"
         case .superseded:
             return "paste not confirmed; attempt superseded; clipboard kept"
         }
@@ -161,12 +148,10 @@ enum PasteAttemptPresentation {
         switch disposition {
         case .originalUntouched:
             return "pasteboard write failed; clipboard unchanged; transcript available from menu"
-        case .restored:
-            return "pasteboard write failed; clipboard restored; transcript available from menu"
+        case .originalUnavailable:
+            return "pasteboard write failed after clipboard clear; original clipboard unavailable; transcript available from menu"
         case .externalChangePreserved:
             return "pasteboard write failed; external clipboard preserved; transcript available from menu"
-        case .restoreFailed:
-            return "pasteboard write failed; clipboard restore failed; transcript available from menu"
         }
     }
 
@@ -250,6 +235,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             statusController = StatusController()
             wireMenu()
             statusController.updateSettings(registry: registry, settings: settings)
+            if settingsStore.didMigrateClipboardRestoreMode {
+                logInfo(
+                    "clipboard mode initialized to non-destructive keep mode"
+                )
+                DispatchQueue.main.async { [weak self] in
+                    self?.showClipboardRestoreMigrationAlert()
+                }
+            }
             refreshLaunchAtLoginState()
             try registerHotkey()
             verifySignatureAndStartBackend()
@@ -336,6 +329,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 #endif
         statusController.onQuit = { NSApp.terminate(nil) }
+    }
+
+    private func showClipboardRestoreMigrationAlert() {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Clipboard Behavior Updated"
+        alert.informativeText = "To prevent ZenWhisper from overwriting a newer clipboard value, automatic clipboard restore is unavailable. Paste mode now keeps transcripts on the clipboard after a verified paste."
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     private func registerHotkey() throws {

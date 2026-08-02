@@ -154,20 +154,15 @@ final class CoreTests: XCTestCase {
                 "Copy Failed · Recoverable: pasteboard write failed; clipboard unchanged; transcript available from menu"
             ),
             (
-                .restored,
-                "pasteboard write failed; clipboard restored; transcript available from menu",
-                "Copy Failed · Recoverable: pasteboard write failed; clipboard restored; transcript available from menu"
+                .originalUnavailable,
+                "pasteboard write failed after clipboard clear; original clipboard unavailable; transcript available from menu",
+                "Copy Failed · Recoverable: pasteboard write failed after clipboard clear; original clipboard unavailable; transcript available from menu"
             ),
             (
                 .externalChangePreserved,
                 "pasteboard write failed; external clipboard preserved; transcript available from menu",
                 "Copy Failed · Recoverable: pasteboard write failed; external clipboard preserved; transcript available from menu"
             ),
-            (
-                .restoreFailed,
-                "pasteboard write failed; clipboard restore failed; transcript available from menu",
-                "Copy Failed · Recoverable: pasteboard write failed; clipboard restore failed; transcript available from menu"
-            )
         ]
         for (disposition, expectedReason, expectedMenuText) in writeFailures {
             let state = try XCTUnwrap(
@@ -304,13 +299,10 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(
             UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
                 for: .failed(
-                    reason: .pasteboardWriteFailed(disposition: .restored)
+                    reason: .pasteboardWriteFailed(
+                        disposition: .originalUnavailable
+                    )
                 )
-            )
-        )
-        XCTAssertTrue(
-            UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
-                for: .failed(reason: .pasteboardRestoreFailed)
             )
         )
         XCTAssertFalse(
@@ -324,7 +316,7 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(
             UnconfirmedTranscriptRecoveryPolicy.shouldRetain(
                 for: .pastedVerified(
-                    clipboard: .restored,
+                    clipboard: .kept,
                     submit: .notRequested
                 )
             )
@@ -504,9 +496,55 @@ final class CoreTests: XCTestCase {
         let settings = store.load()
 
         XCTAssertNil(defaults.object(forKey: "allowUnverifiedPasteFallback"))
-        XCTAssertEqual(settings.outputMode.label, "Paste + Restore on Success")
+        XCTAssertEqual(settings.outputMode, .pasteKeepClipboard)
         store.save(settings)
         XCTAssertNil(defaults.object(forKey: "allowUnverifiedPasteFallback"))
+    }
+
+    func testSettingsStoreMigratesLegacyClipboardRestoreModeToSafeKeepMode() throws {
+        let registry = try ModelRegistry.loadDefault()
+        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        defaults.set(
+            OutputMode.pasteRestoreClipboard.rawValue,
+            forKey: "outputMode"
+        )
+
+        let store = SettingsStore(
+            defaults: defaults,
+            registry: registry
+        )
+        let settings = store.load()
+
+        XCTAssertEqual(settings.outputMode, .pasteKeepClipboard)
+        XCTAssertTrue(store.didMigrateClipboardRestoreMode)
+        XCTAssertEqual(
+            defaults.string(forKey: "outputMode"),
+            OutputMode.pasteKeepClipboard.rawValue
+        )
+        XCTAssertFalse(OutputMode.allCases.contains(.pasteRestoreClipboard))
+    }
+
+    func testSettingsStoreNeverPersistsLegacyClipboardRestoreMode() throws {
+        let registry = try ModelRegistry.loadDefault()
+        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer {
+            defaults.removePersistentDomain(forName: suiteName)
+        }
+        let store = SettingsStore(defaults: defaults, registry: registry)
+        var settings = store.load()
+        settings.outputMode = .pasteRestoreClipboard
+
+        store.save(settings)
+
+        XCTAssertEqual(
+            defaults.string(forKey: "outputMode"),
+            OutputMode.pasteKeepClipboard.rawValue
+        )
     }
 
     func testRMSAnalyzer() {
@@ -1311,6 +1349,7 @@ final class CoreTests: XCTestCase {
         let timing = PasteAttemptTiming()
 
         XCTAssertEqual(timing.targetRetryNanoseconds, 50_000_000)
+        XCTAssertEqual(timing.targetResolutionTimeout, 0.25)
         XCTAssertEqual(timing.pasteboardSettleNanoseconds, 50_000_000)
         XCTAssertEqual(timing.keyUpDelayNanoseconds, 20_000_000)
         XCTAssertEqual(timing.verificationPollNanoseconds, 50_000_000)
@@ -1321,8 +1360,8 @@ final class CoreTests: XCTestCase {
             "verification_timed_out"
         )
         XCTAssertEqual(
-            PasteClipboardDisposition.externalChangePreserved.logCode,
-            "external_change_preserved"
+            PasteClipboardDisposition.kept.logCode,
+            "kept"
         )
         XCTAssertEqual(PasteSubmitResult.skippedTargetChanged.logCode, "skipped_target_changed")
     }
@@ -1351,6 +1390,40 @@ final class CoreTests: XCTestCase {
                 translating: { _, _ in nil }
             )
         )
+    }
+
+    func testPasteControllerPostsKeyPairOnlyToApprovedPID() throws {
+        let keyDown = try XCTUnwrap(
+            CGEvent(
+                keyboardEventSource: nil,
+                virtualKey: 41,
+                keyDown: true
+            )
+        )
+        let keyUp = try XCTUnwrap(
+            CGEvent(
+                keyboardEventSource: nil,
+                virtualKey: 41,
+                keyDown: false
+            )
+        )
+        var posts: [(CGEventType, pid_t)] = []
+        let controller = PasteController(
+            postEventToPID: { event, pid in
+                posts.append((event.type, pid))
+            }
+        )
+        let pair = PasteKeyEventPair(
+            testVirtualKey: 41,
+            keyDown: keyDown,
+            keyUp: keyUp
+        )
+
+        controller.postKeyDown(pair, to: 4242)
+        controller.postKeyUp(pair, to: 4242)
+
+        XCTAssertEqual(posts.map(\.0), [.keyDown, .keyUp])
+        XCTAssertEqual(posts.map(\.1), [4242, 4242])
     }
 
     func testTransientAXErrorsAreNotTreatedAsMissingAttributes() {
@@ -1397,7 +1470,7 @@ final class CoreTests: XCTestCase {
         )
     }
 
-    func testPasteboardRestorePreservesAllItemsAndTypes() throws {
+    func testPasteboardWriteNeverAutomaticallyRestoresPreviousItems() throws {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
         )
@@ -1415,23 +1488,45 @@ final class CoreTests: XCTestCase {
             "transcript",
             attemptID: UUID()
         )
-        guard case .success(let token) = writeResult else {
+        guard case .success = writeResult else {
             return XCTFail("expected prepared pasteboard transaction")
         }
         XCTAssertEqual(pasteboard.string(forType: .string), "transcript")
-        XCTAssertEqual(controller.restoreIfOwned(token), .restored)
-
-        let restored = try XCTUnwrap(pasteboard.pasteboardItems)
-        XCTAssertEqual(restored.count, 2)
-        XCTAssertEqual(restored[0].string(forType: .string), "original")
-        XCTAssertEqual(
-            restored[0].data(forType: customType),
-            Data([0, 1, 2, 255])
-        )
-        XCTAssertEqual(restored[1].string(forType: .string), "second")
+        let current = try XCTUnwrap(pasteboard.pasteboardItems)
+        XCTAssertEqual(current.count, 1)
+        XCTAssertNil(current[0].data(forType: customType))
     }
 
-    func testPasteboardRestoreNeverOverwritesExternalSameTextWrite() throws {
+    func testFocusedTargetProbeFailsClosedWhenAXTimeoutCannotBeConfigured() {
+        var configuredTimeout: Float?
+        let controller = PasteController(
+            configureAXMessagingTimeout: { _, timeout in
+                configuredTimeout = timeout
+                return .cannotComplete
+            }
+        )
+
+        let probe = controller.snapshotFocusedTargetProbe()
+
+        XCTAssertTrue(probe.isSafetyIndeterminate)
+        XCTAssertTrue(probe.detail.contains("deadlineProtectionUnavailable"))
+        XCTAssertEqual(configuredTimeout, 0.05)
+    }
+
+    func testFocusedTargetProbeFailsClosedAtOverallDeadline() {
+        var times: [TimeInterval] = [0, 0.151]
+        let controller = PasteController(
+            configureAXMessagingTimeout: { _, _ in .success },
+            monotonicNow: { times.removeFirst() }
+        )
+
+        let probe = controller.snapshotFocusedTargetProbe()
+
+        XCTAssertTrue(probe.isSafetyIndeterminate)
+        XCTAssertTrue(probe.detail.contains("probeDeadlineExceeded"))
+    }
+
+    func testPasteboardOwnershipRejectsExternalSameTextWrite() throws {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
         )
@@ -1446,33 +1541,31 @@ final class CoreTests: XCTestCase {
         guard case .success(let token) = writeResult else {
             return XCTFail("expected prepared pasteboard transaction")
         }
+        XCTAssertTrue(controller.ownsPasteboard(token))
         pasteboard.clearContents()
         XCTAssertTrue(pasteboard.setString("transcript", forType: .string))
 
-        XCTAssertEqual(controller.restoreIfOwned(token), .ownershipLost)
+        XCTAssertFalse(controller.ownsPasteboard(token))
         XCTAssertEqual(pasteboard.string(forType: .string), "transcript")
     }
 
-    func testPasteboardWriteFailureRestoresOnlyWhileClearedStateIsOwned() {
-        let restoredPasteboard = NSPasteboard(
+    func testPasteboardWriteFailureReportsUnavailableOriginalWhenClearIsOwned() {
+        let ownedClearedPasteboard = NSPasteboard(
             name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
         )
-        restoredPasteboard.clearContents()
-        XCTAssertTrue(restoredPasteboard.setString("original", forType: .string))
-        let restoringController = PasteController(
-            pasteboard: restoredPasteboard,
+        ownedClearedPasteboard.clearContents()
+        XCTAssertTrue(ownedClearedPasteboard.setString("original", forType: .string))
+        let failingController = PasteController(
+            pasteboard: ownedClearedPasteboard,
             writePasteboardItems: { _, _ in false }
         )
 
-        guard case .writeFailed(let restoredDisposition) =
-            restoringController.prepareAutoPaste("transcript") else {
+        guard case .writeFailed(let unavailableDisposition) =
+            failingController.prepareAutoPaste("transcript") else {
             return XCTFail("expected a simulated pasteboard write failure")
         }
-        XCTAssertEqual(restoredDisposition, .restored)
-        XCTAssertEqual(
-            restoredPasteboard.string(forType: .string),
-            "original"
-        )
+        XCTAssertEqual(unavailableDisposition, .originalUnavailable)
+        XCTAssertNil(ownedClearedPasteboard.string(forType: .string))
 
         let changedPasteboard = NSPasteboard(
             name: NSPasteboard.Name("zen-whisper-tests.\(UUID().uuidString)")
@@ -1586,7 +1679,7 @@ final class CoreTests: XCTestCase {
         )
     }
 
-    func testPasteboardWriteReportsRestoreFailure() {
+    func testPasteboardWriteFailureDoesNotAttemptDestructiveRestore() {
         let pasteboard = NSPasteboard(
             name: NSPasteboard.Name(
                 "zen-whisper-tests.\(UUID().uuidString)"
@@ -1596,15 +1689,43 @@ final class CoreTests: XCTestCase {
         XCTAssertTrue(pasteboard.setString("original", forType: .string))
         let controller = PasteController(
             pasteboard: pasteboard,
-            writePasteboardItems: { _, _ in false },
-            restorePasteboardItems: { _, _ in false }
+            writePasteboardItems: { _, _ in false }
         )
 
         guard case .writeFailed(let disposition) =
             controller.prepareAutoPaste("transcript") else {
             return XCTFail("expected a simulated pasteboard write failure")
         }
-        XCTAssertEqual(disposition, .restoreFailed)
+        XCTAssertEqual(disposition, .originalUnavailable)
+        XCTAssertNil(pasteboard.string(forType: .string))
+    }
+
+    func testPasteTreeSearchStopsWhenProbeDeadlineExpires() {
+        var checks = 0
+        let result: PasteTreeSearchResult<Int> = searchPasteTree(
+            root: 0,
+            maxDepth: 10,
+            maxNodes: 300,
+            nodeKey: { $0 },
+            inspect: { node in
+                PasteTreeNodeObservation(
+                    focused: .value(false),
+                    resolution: .noCandidate(detail: "node=\(node)")
+                )
+            },
+            readChildren: { node in
+                [PasteTreeChildRead(nodes: [node + 1], failureDetail: nil)]
+            },
+            shouldContinue: {
+                checks += 1
+                return checks < 4
+            }
+        )
+
+        guard case .safetyIndeterminate(let detail) = result else {
+            return XCTFail("expected deadline to stop traversal")
+        }
+        XCTAssertTrue(detail.contains("probeDeadlineExceeded"))
     }
 
     func testPasteEligibilityRejectsProtectedAndNonEditableTargets() {

@@ -38,7 +38,7 @@ def test_paste_results_distinguish_verified_unconfirmed_and_blocked() -> None:
     assert "Paste tried" not in app_state
 
 
-def test_pasteboard_restore_requires_attempt_ownership() -> None:
+def test_pasteboard_ownership_never_enables_destructive_restore() -> None:
     paste_controller = source("PasteController.swift")
     coordinator = source("PasteAttemptCoordinator.swift")
 
@@ -46,12 +46,11 @@ def test_pasteboard_restore_requires_attempt_ownership() -> None:
     assert "attemptID.uuidString" in paste_controller
     assert "pasteboard.changeCount == token.writtenChangeCount" in paste_controller
     assert "pasteboard.string(forType: .string) == token.text" in paste_controller
-    assert "func restoreIfOwned" in paste_controller
-    assert "case ownershipLost" in paste_controller
-    assert "previous = retainedToken.previous" in paste_controller
-    assert "case .ownershipLost:" in coordinator
-    assert "return .externalChangePreserved" in coordinator
-    assert "retainedRestoreToken = restoreToken" in coordinator
+    assert "func restoreIfOwned" not in paste_controller
+    assert "PasteboardSnapshot" not in paste_controller
+    assert "retainedRestoreToken" not in coordinator
+    assert "clipboard=kept_non_destructive" in coordinator
+    assert "return .kept" in coordinator
 
 
 def test_target_resolution_uses_current_focus_without_frame_gating() -> None:
@@ -113,9 +112,9 @@ def test_dispatch_settles_clipboard_uses_layout_and_posts_once() -> None:
     revalidate_index = coordinator.index(
         "let dispatchResolution = await resolveTarget("
     )
-    post_index = coordinator.index("controller.postKeyDown(pasteEvents)")
+    post_index = coordinator.index("controller.postKeyDown(")
 
-    assert settle_index < revalidate_index < post_index
+    assert revalidate_index < settle_index < post_index
     assert "KeyboardLayoutKeyCodeResolver.keyCode(for: \"v\")" in paste_controller
     assert "TISCopyCurrentKeyboardLayoutInputSource" in paste_controller
     assert "UCKeyTranslate" in paste_controller
@@ -127,11 +126,16 @@ def test_dispatch_settles_clipboard_uses_layout_and_posts_once() -> None:
     )[1]
     assert "kVK_ANSI_V" not in resolver
     assert "CGEventSource(stateID: .combinedSessionState)" in paste_controller
-    assert ".cgAnnotatedSessionEventTap" in paste_controller
+    assert ".cgAnnotatedSessionEventTap" not in paste_controller
     assert "keyUpDelayNanoseconds: UInt64 = 20_000_000" in coordinator
     assert "pasteboardSettleNanoseconds: UInt64 = 50_000_000" in coordinator
-    assert "postToPid" not in paste_controller
-    assert coordinator.count("controller.postKeyDown(pasteEvents)") == 1
+    assert "targetResolutionTimeout: TimeInterval = 0.25" in coordinator
+    assert "targetResolutionDeadlineExceeded" in coordinator
+    assert "event.postToPid(pid)" in paste_controller
+    assert "postEventToPID(keyDown, pid)" in paste_controller
+    assert "postEventToPID(keyUp, pid)" in paste_controller
+    assert "to: dispatchTarget.snapshot.pid" in coordinator
+    assert "to: target.snapshot.pid" in coordinator
 
 
 def test_verification_precedes_restore_and_submit() -> None:
@@ -168,7 +172,10 @@ def test_unverified_frontmost_fallback_setting_is_removed_and_migrated() -> None
     assert "fallbackPasteApplicationTarget" not in app_delegate
     assert "unverifiedPasteFallbackMenuItem" not in status_controller
     assert "unverifiedPasteFallbackCheckbox" not in settings_window
-    assert "Paste + Restore on Success" in settings_store
+    assert "Paste + Restore on Success" not in settings_store
+    assert "needsOutputModeMigration" in settings_store
+    assert "didMigrateClipboardRestoreMode = true" in settings_store
+    assert "[.pasteKeepClipboard, .copyOnly]" in settings_store
 
 
 def test_logs_use_attempt_ids_without_transcript_values() -> None:
@@ -202,7 +209,15 @@ def test_swift_tests_cover_new_paste_invariants() -> None:
         in core_tests
     )
     assert "func testPasteKeyCodeResolutionUsesTranslatedLayoutWithoutFixedFallback()" in core_tests
-    assert "func testPasteboardRestorePreservesAllItemsAndTypes()" in core_tests
+    assert (
+        "func testPasteboardWriteNeverAutomaticallyRestoresPreviousItems()"
+        in core_tests
+    )
+    assert (
+        "func testPasteboardWriteFailureDoesNotAttemptDestructiveRestore()"
+        in core_tests
+    )
+    assert "func testPasteTreeSearchStopsWhenProbeDeadlineExpires()" in core_tests
     assert "func testPasteEligibilityRejectsProtectedAndNonEditableTargets()" in core_tests
     assert 'pasteTarget(searchableText: "pinboard")' in core_tests
     assert "testSettingsStoreRemovesLegacyUnverifiedPasteFallback" in core_tests
@@ -212,6 +227,8 @@ def test_swift_tests_cover_new_paste_invariants() -> None:
         "func testUnverifiedPasteWithExternalClipboardChangeUsesRecoveryMenu() async"
         in coordinator_tests
     )
+    assert "testFrontmostChangeDuringOwnershipCheckStopsBeforePasteDispatch" in coordinator_tests
+    assert "testSubmitTargetChangeDuringEventCreationSuppressesReturn" in coordinator_tests
 
 
 def test_idle_cache_still_only_records_eligible_targets() -> None:

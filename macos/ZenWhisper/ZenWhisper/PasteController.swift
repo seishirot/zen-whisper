@@ -172,38 +172,29 @@ private func redactedAppIdentityDescription(pid: pid_t, bundleIdentifier: String
 
 enum PasteboardWriteFailureDisposition: Equatable {
     case originalUntouched
-    case restored
+    case originalUnavailable
     case externalChangePreserved
-    case restoreFailed
 
     var logCode: String {
         switch self {
         case .originalUntouched:
             return "original_untouched"
-        case .restored:
-            return "restored"
+        case .originalUnavailable:
+            return "original_unavailable"
         case .externalChangePreserved:
             return "external_change_preserved"
-        case .restoreFailed:
-            return "restore_failed"
         }
     }
 }
 
 enum PasteboardWriteResult {
-    case success(PasteboardRestoreToken)
+    case success(PasteboardOwnershipToken)
     case writeFailed(disposition: PasteboardWriteFailureDisposition)
 }
 
 enum PlainPasteboardWriteResult {
     case copied
     case writeFailed(disposition: PasteboardWriteFailureDisposition)
-}
-
-enum PasteboardRestoreResult: Equatable {
-    case restored
-    case ownershipLost
-    case failed
 }
 
 enum PasteFocusValidation: Equatable {
@@ -301,6 +292,15 @@ struct PasteKeyEventPair {
         virtualKey = testVirtualKey
         storage = .test
     }
+
+    init(
+        testVirtualKey: CGKeyCode,
+        keyDown: CGEvent,
+        keyUp: CGEvent
+    ) {
+        virtualKey = testVirtualKey
+        storage = .events(keyDown: keyDown, keyUp: keyUp)
+    }
 #endif
 }
 
@@ -315,11 +315,9 @@ protocol PasteAttemptControlling: AnyObject {
     func canCreatePasteEvents() -> Bool
     func prepareAutoPaste(
         _ text: String,
-        attemptID: UUID,
-        preservingBaseFrom retainedToken: PasteboardRestoreToken?
+        attemptID: UUID
     ) -> PasteboardWriteResult
-    func restoreIfOwned(_ token: PasteboardRestoreToken) -> PasteboardRestoreResult
-    func ownsPasteboard(_ token: PasteboardRestoreToken) -> Bool
+    func ownsPasteboard(_ token: PasteboardOwnershipToken) -> Bool
     func textState(
         for context: PasteTargetContext,
         precedingUTF16Length: Int
@@ -327,11 +325,13 @@ protocol PasteAttemptControlling: AnyObject {
     func validateFocus(_ approved: PasteTargetContext) -> PasteFocusValidation
     func makePasteKeyEventPair() -> PasteKeyEventPair?
     func makeReturnKeyEventPair() -> PasteKeyEventPair?
-    func postKeyDown(_ pair: PasteKeyEventPair)
-    func postKeyUp(_ pair: PasteKeyEventPair)
+    func postKeyDown(_ pair: PasteKeyEventPair, to pid: pid_t)
+    func postKeyUp(_ pair: PasteKeyEventPair, to pid: pid_t)
 }
 
 final class PasteController {
+    private static let axMessagingTimeout: Float = 0.05
+    private static let axProbeTimeout: TimeInterval = 0.15
     private static let pasteAttemptPasteboardType = NSPasteboard.PasteboardType(
         "app.zen-whisper.paste-attempt"
     )
@@ -341,10 +341,9 @@ final class PasteController {
         NSPasteboard,
         [NSPasteboardItem]
     ) -> Bool
-    private let restorePasteboardItems: (
-        NSPasteboard,
-        [NSPasteboardItem]
-    ) -> Bool
+    private let configureAXMessagingTimeout: (AXUIElement, Float) -> AXError
+    private let monotonicNow: () -> TimeInterval
+    private let postEventToPID: (CGEvent, pid_t) -> Void
 
     init(
         pasteboard: NSPasteboard = .general,
@@ -357,21 +356,25 @@ final class PasteController {
         ) -> Bool = { pasteboard, items in
             pasteboard.writeObjects(items)
         },
-        restorePasteboardItems: @escaping (
-            NSPasteboard,
-            [NSPasteboardItem]
-        ) -> Bool = { pasteboard, items in
-            pasteboard.clearContents()
-            guard !items.isEmpty else {
-                return true
-            }
-            return pasteboard.writeObjects(items)
+        configureAXMessagingTimeout: @escaping (
+            AXUIElement,
+            Float
+        ) -> AXError = AXUIElementSetMessagingTimeout,
+        monotonicNow: @escaping () -> TimeInterval = {
+            ProcessInfo.processInfo.systemUptime
+        },
+        postEventToPID: @escaping (CGEvent, pid_t) -> Void = {
+            event,
+            pid in
+            event.postToPid(pid)
         }
     ) {
         self.pasteboard = pasteboard
         self.clearPasteboard = clearPasteboard
         self.writePasteboardItems = writePasteboardItems
-        self.restorePasteboardItems = restorePasteboardItems
+        self.configureAXMessagingTimeout = configureAXMessagingTimeout
+        self.monotonicNow = monotonicNow
+        self.postEventToPID = postEventToPID
     }
 
     func isAccessibilityTrusted() -> Bool {
@@ -380,15 +383,8 @@ final class PasteController {
 
     func prepareAutoPaste(
         _ text: String,
-        attemptID: UUID = UUID(),
-        preservingBaseFrom retainedToken: PasteboardRestoreToken? = nil
+        attemptID: UUID = UUID()
     ) -> PasteboardWriteResult {
-        let previous: PasteboardSnapshot
-        if let retainedToken, ownsPasteboard(retainedToken) {
-            previous = retainedToken.previous
-        } else {
-            previous = PasteboardSnapshot(pasteboard: pasteboard)
-        }
         let item = NSPasteboardItem()
         guard item.setString(text, forType: .string),
               item.setString(
@@ -401,13 +397,11 @@ final class PasteController {
         guard writePasteboardItems(pasteboard, [item]) else {
             return .writeFailed(
                 disposition: recoverAfterFailedWrite(
-                    previous: previous,
                     ownedChangeCount: clearedChangeCount
                 )
             )
         }
-        return .success(PasteboardRestoreToken(
-            previous: previous,
+        return .success(PasteboardOwnershipToken(
             writtenChangeCount: pasteboard.changeCount,
             text: text,
             attemptID: attemptID
@@ -415,7 +409,6 @@ final class PasteController {
     }
 
     func copyPlainText(_ text: String) -> PlainPasteboardWriteResult {
-        let previous = PasteboardSnapshot(pasteboard: pasteboard)
         let item = NSPasteboardItem()
         guard item.setString(text, forType: .string) else {
             return .writeFailed(disposition: .originalUntouched)
@@ -424,7 +417,6 @@ final class PasteController {
         guard writePasteboardItems(pasteboard, [item]) else {
             return .writeFailed(
                 disposition: recoverAfterFailedWrite(
-                    previous: previous,
                     ownedChangeCount: clearedChangeCount
                 )
             )
@@ -433,36 +425,15 @@ final class PasteController {
     }
 
     private func recoverAfterFailedWrite(
-        previous: PasteboardSnapshot,
         ownedChangeCount: Int
     ) -> PasteboardWriteFailureDisposition {
         guard pasteboard.changeCount == ownedChangeCount else {
             return .externalChangePreserved
         }
-        return previous.restore(
-            to: pasteboard,
-            using: restorePasteboardItems
-        )
-            ? .restored
-            : .restoreFailed
+        return .originalUnavailable
     }
 
-    @discardableResult
-    private func restore(_ token: PasteboardRestoreToken) -> Bool {
-        token.previous.restore(
-            to: pasteboard,
-            using: restorePasteboardItems
-        )
-    }
-
-    func restoreIfOwned(_ token: PasteboardRestoreToken) -> PasteboardRestoreResult {
-        guard ownsPasteboard(token) else {
-            return .ownershipLost
-        }
-        return restore(token) ? .restored : .failed
-    }
-
-    func ownsPasteboard(_ token: PasteboardRestoreToken) -> Bool {
+    func ownsPasteboard(_ token: PasteboardOwnershipToken) -> Bool {
         return pasteboard.changeCount == token.writtenChangeCount
             && pasteboard.string(forType: .string) == token.text
             && pasteboard.string(forType: Self.pasteAttemptPasteboardType)
@@ -478,6 +449,10 @@ final class PasteController {
     }
 
     private func snapshotFocusedTargetProbe(searchWindowDescendants: Bool) -> PasteTargetProbe {
+        let budget = AXProbeBudget(
+            deadline: monotonicNow() + Self.axProbeTimeout,
+            now: monotonicNow
+        )
         let currentPID = NSRunningApplication.current.processIdentifier
         var detail: [String] = [
             "trusted=\(AXIsProcessTrusted())",
@@ -493,13 +468,32 @@ final class PasteController {
             )
         }
         let systemWide = AXUIElementCreateSystemWide()
+        let timeoutStatus = configureAXMessagingTimeout(
+            systemWide,
+            Self.axMessagingTimeout
+        )
+        detail.append("messagingTimeoutStatus=\(timeoutStatus.rawValue)")
+        guard timeoutStatus == .success else {
+            detail.append("deadlineProtectionUnavailable")
+            return PasteTargetProbe(
+                outcome: .safetyIndeterminate,
+                detail: detail.joined(separator: " ")
+            )
+        }
+        guard budget.hasTimeRemaining else {
+            detail.append("probeDeadlineExceeded")
+            return PasteTargetProbe(
+                outcome: .safetyIndeterminate,
+                detail: detail.joined(separator: " ")
+            )
+        }
         let systemFocused = copyElementAttributeResult(systemWide, kAXFocusedUIElementAttribute as CFString)
         detail.append("systemFocused=\(describe(systemFocused))")
         if isIndeterminate(systemFocused) {
             safetyIndeterminateDetail = "systemFocused=\(describe(systemFocused))"
         }
         if let focused = systemFocused.element {
-            let result = snapshotWithDetail(from: focused)
+            let result = snapshotWithDetail(from: focused, budget: budget)
             detail.append("systemSnapshot=\(result.detail)")
             if result.isSafetyIndeterminate {
                 safetyIndeterminateDetail = result.detail
@@ -510,6 +504,13 @@ final class PasteController {
             }
         }
 
+        guard budget.hasTimeRemaining else {
+            detail.append("probeDeadlineExceeded")
+            return PasteTargetProbe(
+                outcome: .safetyIndeterminate,
+                detail: detail.joined(separator: " ")
+            )
+        }
         let focusedApp = copyElementAttributeResult(systemWide, kAXFocusedApplicationAttribute as CFString)
         detail.append("systemFocusedApp=\(describe(focusedApp))")
         if isIndeterminate(focusedApp) {
@@ -532,7 +533,11 @@ final class PasteController {
                         "focusedAppElement=\(describe(focused))"
                 }
                 if let focusedElement = focused.element {
-                    let result = snapshotWithDetail(from: focusedElement, pid: focusedAppPID)
+                    let result = snapshotWithDetail(
+                        from: focusedElement,
+                        pid: focusedAppPID,
+                        budget: budget
+                    )
                     detail.append("focusedAppSnapshot=\(result.detail)")
                     if result.isSafetyIndeterminate {
                         safetyIndeterminateDetail = result.detail
@@ -547,6 +552,7 @@ final class PasteController {
                     pid: focusedAppPID,
                     label: "focusedApp",
                     searchWindowDescendants: searchWindowDescendants,
+                    budget: budget,
                     detail: &detail
                 )
                 if windowResult.isSafetyIndeterminate {
@@ -558,6 +564,13 @@ final class PasteController {
             }
         }
 
+        guard budget.hasTimeRemaining else {
+            detail.append("probeDeadlineExceeded")
+            return PasteTargetProbe(
+                outcome: .safetyIndeterminate,
+                detail: detail.joined(separator: " ")
+            )
+        }
         guard let app = NSWorkspace.shared.frontmostApplication else {
             detail.append("frontmost=nil")
             return unresolvedProbe()
@@ -577,7 +590,11 @@ final class PasteController {
                 "frontmostElement=\(describe(focused))"
         }
         if let focusedElement = focused.element {
-            let result = snapshotWithDetail(from: focusedElement, pid: app.processIdentifier)
+            let result = snapshotWithDetail(
+                from: focusedElement,
+                pid: app.processIdentifier,
+                budget: budget
+            )
             detail.append("frontmostSnapshot=\(result.detail)")
             if result.isSafetyIndeterminate {
                 safetyIndeterminateDetail = result.detail
@@ -592,6 +609,7 @@ final class PasteController {
             pid: app.processIdentifier,
             label: "frontmost",
             searchWindowDescendants: searchWindowDescendants,
+            budget: budget,
             detail: &detail
         )
         if windowResult.isSafetyIndeterminate {
@@ -608,10 +626,14 @@ final class PasteController {
         pid: pid_t,
         label: String,
         searchWindowDescendants: Bool,
+        budget: AXProbeBudget,
         detail: inout [String]
     ) -> PasteTargetSnapshotResolution {
         guard searchWindowDescendants else {
             return .noTarget(detail: "windowSearchDisabled")
+        }
+        guard budget.hasTimeRemaining else {
+            return .safetyIndeterminate(detail: "probeDeadlineExceeded")
         }
         var indeterminateDetail: String?
         let focusedWindow = copyElementAttributeResult(axApp, kAXFocusedWindowAttribute as CFString)
@@ -623,6 +645,7 @@ final class PasteController {
             focusedWindow.element,
             pid: pid,
             label: label,
+            budget: budget,
             detail: &detail
         )
         if let context = focusedResult.context {
@@ -632,6 +655,9 @@ final class PasteController {
             indeterminateDetail = focusedResult.detail
         }
 
+        guard budget.hasTimeRemaining else {
+            return .safetyIndeterminate(detail: "probeDeadlineExceeded")
+        }
         let mainWindow = copyElementAttributeResult(
             axApp,
             kAXMainWindowAttribute as CFString
@@ -644,6 +670,7 @@ final class PasteController {
             mainWindow.element,
             pid: pid,
             label: label,
+            budget: budget,
             detail: &detail
         )
         if let context = mainResult.context {
@@ -662,12 +689,17 @@ final class PasteController {
         _ window: AXUIElement?,
         pid: pid_t,
         label: String,
+        budget: AXProbeBudget,
         detail: inout [String]
     ) -> PasteTargetSnapshotResolution {
         guard let window else {
             return .noTarget(detail: "windowMissing")
         }
-        let result = snapshotEditableDescendant(in: window, pid: pid)
+        let result = snapshotEditableDescendant(
+            in: window,
+            pid: pid,
+            budget: budget
+        )
         detail.append("\(label)WindowSearch=\(result.detail)")
         return result
     }
@@ -675,6 +707,7 @@ final class PasteController {
     private func snapshotEditableDescendant(
         in root: AXUIElement,
         pid: pid_t,
+        budget: AXProbeBudget,
         maxDepth: Int = 10,
         maxNodes: Int = 300
     ) -> PasteTargetSnapshotResolution {
@@ -691,7 +724,8 @@ final class PasteController {
                 let resolution = snapshotWithDetail(
                     from: element,
                     pid: pid,
-                    discovery: "windowDescendant"
+                    discovery: "windowDescendant",
+                    budget: budget
                 )
                 if let context = resolution.context {
                     let snapshot = context.snapshot
@@ -745,7 +779,8 @@ final class PasteController {
                         failureDetail: failureDetail
                     )
                 }
-            }
+            },
+            shouldContinue: { budget.hasTimeRemaining }
         )
         switch result {
         case .found(let context, let detail):
@@ -802,8 +837,12 @@ final class PasteController {
     private func snapshotWithDetail(
         from focused: AXUIElement,
         pid fallbackPID: pid_t? = nil,
-        discovery: String = "focused"
+        discovery: String = "focused",
+        budget: AXProbeBudget
     ) -> PasteTargetSnapshotResolution {
+        guard budget.hasTimeRemaining else {
+            return .safetyIndeterminate(detail: "probeDeadlineExceeded")
+        }
         var pid = fallbackPID ?? 0
         if fallbackPID == nil {
             let status = AXUIElementGetPid(focused, &pid)
@@ -832,6 +871,9 @@ final class PasteController {
             focused,
             "AXProtectedContent" as CFString
         )
+        guard budget.hasTimeRemaining else {
+            return .safetyIndeterminate(detail: "probeDeadlineExceeded")
+        }
         let safetyAttributes: PasteTargetSafetyAttributes
         switch resolvePasteTargetSafetyAttributes(
             role: roleResult,
@@ -889,7 +931,8 @@ final class PasteController {
             for: focused,
             window: window,
             role: role,
-            subrole: subrole
+            subrole: subrole,
+            budget: budget
         )
         guard searchableResult.failure == nil else {
             return .safetyIndeterminate(
@@ -937,10 +980,15 @@ final class PasteController {
         for focused: AXUIElement,
         window: AXUIElement?,
         role: String,
-        subrole: String
+        subrole: String,
+        budget: AXProbeBudget
     ) -> (text: String, failure: String?) {
         var pieces = [role, subrole]
-        let elementMetadata = metadataPieces(from: focused, prefix: "element")
+        let elementMetadata = metadataPieces(
+            from: focused,
+            prefix: "element",
+            budget: budget
+        )
         guard elementMetadata.failure == nil else {
             return ("", elementMetadata.failure)
         }
@@ -956,14 +1004,22 @@ final class PasteController {
             return ("", "parent=\(describe(parentResult))")
         }
         if let parent = parentResult.element {
-            let parentMetadata = metadataPieces(from: parent, prefix: "parent")
+            let parentMetadata = metadataPieces(
+                from: parent,
+                prefix: "parent",
+                budget: budget
+            )
             guard parentMetadata.failure == nil else {
                 return ("", parentMetadata.failure)
             }
             pieces.append(contentsOf: parentMetadata.pieces)
         }
         if let window {
-            let windowMetadata = metadataPieces(from: window, prefix: "window")
+            let windowMetadata = metadataPieces(
+                from: window,
+                prefix: "window",
+                budget: budget
+            )
             guard windowMetadata.failure == nil else {
                 return ("", windowMetadata.failure)
             }
@@ -974,10 +1030,14 @@ final class PasteController {
 
     private func metadataPieces(
         from element: AXUIElement,
-        prefix: String
+        prefix: String,
+        budget: AXProbeBudget
     ) -> (pieces: [String], failure: String?) {
         var pieces: [String] = []
         for attribute in metadataAttributes {
+            guard budget.hasTimeRemaining else {
+                return ([], "probeDeadlineExceeded")
+            }
             let result = copyStringAttributeResult(element, attribute)
             if let failure = result.failureDetail {
                 return (
@@ -1021,18 +1081,18 @@ final class PasteController {
         makeKeyEventPair(virtualKey: CGKeyCode(kVK_Return), flags: [])
     }
 
-    func postKeyDown(_ pair: PasteKeyEventPair) {
+    func postKeyDown(_ pair: PasteKeyEventPair, to pid: pid_t) {
         guard case .events(let keyDown, _) = pair.storage else {
             return
         }
-        keyDown.post(tap: .cgAnnotatedSessionEventTap)
+        postEventToPID(keyDown, pid)
     }
 
-    func postKeyUp(_ pair: PasteKeyEventPair) {
+    func postKeyUp(_ pair: PasteKeyEventPair, to pid: pid_t) {
         guard case .events(_, let keyUp) = pair.storage else {
             return
         }
-        keyUp.post(tap: .cgAnnotatedSessionEventTap)
+        postEventToPID(keyUp, pid)
     }
 
     func textState(
@@ -1347,6 +1407,20 @@ struct PasteTreeChildRead<Node> {
     let failureDetail: String?
 }
 
+private final class AXProbeBudget {
+    let deadline: TimeInterval
+    let now: () -> TimeInterval
+
+    init(deadline: TimeInterval, now: @escaping () -> TimeInterval) {
+        self.deadline = deadline
+        self.now = now
+    }
+
+    var hasTimeRemaining: Bool {
+        now() < deadline
+    }
+}
+
 enum PasteTreeSearchResult<Context> {
     case found(Context, detail: String)
     case noTarget(detail: String)
@@ -1359,7 +1433,8 @@ func searchPasteTree<Node, NodeKey: Hashable, Context>(
     maxNodes: Int,
     nodeKey: (Node) -> NodeKey,
     inspect: (Node) -> PasteTreeNodeObservation<Context>,
-    readChildren: (Node) -> [PasteTreeChildRead<Node>]
+    readChildren: (Node) -> [PasteTreeChildRead<Node>],
+    shouldContinue: () -> Bool = { true }
 ) -> PasteTreeSearchResult<Context> {
     var queue: [(node: Node, depth: Int)] = [(root, 0)]
     var visited = 0
@@ -1371,6 +1446,11 @@ func searchPasteTree<Node, NodeKey: Hashable, Context>(
     var depthWasTruncated = false
 
     while !queue.isEmpty, visited < maxNodes {
+        guard shouldContinue() else {
+            return .safetyIndeterminate(
+                detail: "probeDeadlineExceeded visited=\(visited)"
+            )
+        }
         let item = queue.removeFirst()
         let key = nodeKey(item.node)
         guard seenNodes.insert(key).inserted else {
@@ -1438,6 +1518,11 @@ func searchPasteTree<Node, NodeKey: Hashable, Context>(
             }
         }
 
+        guard shouldContinue() else {
+            return .safetyIndeterminate(
+                detail: "probeDeadlineExceeded visited=\(visited)"
+            )
+        }
         for children in readChildren(item.node) {
             if let failureDetail = children.failureDetail {
                 traversalIndeterminateDetail = failureDetail
@@ -1713,19 +1798,16 @@ private func hasReadableAttribute(_ element: AXUIElement, _ attribute: CFString)
     return AXUIElementCopyAttributeValue(element, attribute, &value) == .success
 }
 
-struct PasteboardRestoreToken {
-    fileprivate let previous: PasteboardSnapshot
+struct PasteboardOwnershipToken {
     fileprivate let writtenChangeCount: Int
     fileprivate let text: String
     fileprivate let attemptID: UUID
 
     fileprivate init(
-        previous: PasteboardSnapshot,
         writtenChangeCount: Int,
         text: String,
         attemptID: UUID
     ) {
-        self.previous = previous
         self.writtenChangeCount = writtenChangeCount
         self.text = text
         self.attemptID = attemptID
@@ -1733,47 +1815,11 @@ struct PasteboardRestoreToken {
 
 #if DEBUG
     init(testIdentifier: UUID = UUID()) {
-        previous = PasteboardSnapshot(items: [])
         writtenChangeCount = -1
         text = ""
         attemptID = testIdentifier
     }
 #endif
-}
-
-fileprivate struct PasteboardSnapshot {
-    private let items: [NSPasteboardItem]
-
-#if DEBUG
-    fileprivate init(items: [NSPasteboardItem]) {
-        self.items = items
-    }
-#endif
-
-    init(pasteboard: NSPasteboard) {
-        items = pasteboard.pasteboardItems?.compactMap { item in
-            let clone = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    _ = clone.setData(data, forType: type)
-                } else if let string = item.string(forType: type) {
-                    _ = clone.setString(string, forType: type)
-                }
-            }
-            return clone.types.isEmpty ? nil : clone
-        } ?? []
-    }
-
-    @discardableResult
-    func restore(
-        to pasteboard: NSPasteboard,
-        using restoreItems: (
-            NSPasteboard,
-            [NSPasteboardItem]
-        ) -> Bool
-    ) -> Bool {
-        restoreItems(pasteboard, items)
-    }
 }
 
 enum KeyboardLayoutKeyCodeResolver {
