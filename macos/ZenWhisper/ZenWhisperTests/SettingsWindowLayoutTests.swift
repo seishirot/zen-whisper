@@ -63,6 +63,10 @@ final class SettingsWindowLayoutTests: XCTestCase {
     func testVisibleWarningsExpandTheWindowWithoutCompressingGeneralSection() throws {
         let registry = try ModelRegistry.loadDefault()
         let settings = makeSettings()
+        let launchStatusIssue = String(
+            repeating: "The saved LaunchAgent could not be read and needs an explicit replacement. ",
+            count: 10
+        )
         let controller = SettingsWindowController(
             registry: registry,
             settings: settings,
@@ -73,6 +77,13 @@ final class SettingsWindowLayoutTests: XCTestCase {
               let contentView = window.contentView else {
             return XCTFail("Expected Settings window")
         }
+        controller.synchronize(
+            authoritativeSettings: settings,
+            launchAtLoginStatus: .invalid(launchStatusIssue),
+            audioInputDevices: [],
+            isBusy: true
+        )
+        contentView.layoutSubtreeIfNeeded()
         controller.synchronize(
             authoritativeSettings: settings,
             launchAtLoginStatus: .disabled,
@@ -90,12 +101,7 @@ final class SettingsWindowLayoutTests: XCTestCase {
         )
         controller.synchronize(
             authoritativeSettings: settings,
-            launchAtLoginStatus: .invalid(
-                String(
-                    repeating: "The saved LaunchAgent could not be read and needs an explicit replacement. ",
-                    count: 10
-                )
-            ),
+            launchAtLoginStatus: .invalid(launchStatusIssue),
             audioInputDevices: [],
             isBusy: true
         )
