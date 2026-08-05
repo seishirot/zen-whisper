@@ -12,25 +12,27 @@ GATE_STAMP="$REPO_ROOT/macos/build/qwen3_asr_gate.ok"
   exit 1
 }
 
-mise exec -- uv sync --project "$BACKEND_DIR" --extra mlx --extra dev
+mise exec -- uv sync --locked --project "$BACKEND_DIR" --extra mlx --extra dev
 mise exec -- uv run \
+  --locked \
   --project "$BACKEND_DIR" \
   --extra mlx \
   --extra dev \
-  --with "mlx-audio>=0.4,<0.5" \
-  --with "numba>=0.63.1" \
-  --with "llvmlite>=0.46.0" \
   env PYTHONSAFEPATH=1 python -P - "$SAMPLE" <<'PY'
 from pathlib import Path
 import sys
 
 audio = Path(sys.argv[1])
 
+from zen_whisper_mac_backend.adapters import _pinned_model_snapshot
+
 import mlx_whisper
 
+whisper_model = "mlx-community/whisper-large-v3-turbo"
+whisper_path = _pinned_model_snapshot("mlx-whisper", whisper_model)
 whisper_result = mlx_whisper.transcribe(
     str(audio),
-    path_or_hf_repo="mlx-community/whisper-large-v3-turbo",
+    path_or_hf_repo=whisper_path,
     language="ja",
 )
 whisper_text = whisper_result["text"].strip() if isinstance(whisper_result, dict) else str(whisper_result).strip()
@@ -39,7 +41,9 @@ print("mlx-whisper ok: chars=", len(whisper_text))
 
 from mlx_audio.stt import load
 
-model = load("mlx-community/Qwen3-ASR-0.6B-8bit")
+qwen_model = "mlx-community/Qwen3-ASR-0.6B-8bit"
+qwen_path = _pinned_model_snapshot("mlx-qwen3-asr", qwen_model)
+model = load(qwen_path)
 qwen_result = model.generate(str(audio), language="Japanese")
 qwen_text = getattr(qwen_result, "text", None)
 if qwen_text is None and isinstance(qwen_result, dict):

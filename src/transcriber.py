@@ -79,7 +79,7 @@ def recognition_configuration_error(cfg: RecognitionConfig) -> str:
     if cfg.engine not in available_recognition_engines():
         if cfg.engine == ENGINE_REAZON_K2:
             return (
-                "Reazon K2 が未導入です。uv sync --extra reazon を実行して"
+                "Reazon K2 が未導入です。uv sync --locked --extra reazon を実行して"
                 "ZenWhisperを再起動してください"
             )
         if cfg.engine == ENGINE_QWEN3_ASR:

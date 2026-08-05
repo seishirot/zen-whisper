@@ -10,20 +10,34 @@ import numpy as np
 
 from src.asr.base import RecognitionHints, load_with_timeout
 from src.config import ASR_SAMPLE_RATE, RecognitionConfig
+from src.model_provenance import download_verified_snapshot, resolve_model
 
 logger = logging.getLogger(__name__)
 
 _MLX_REPO_MAP: dict[str, str] = {
-    "tiny": "mlx-community/whisper-tiny",
-    "base": "mlx-community/whisper-base",
-    "small": "mlx-community/whisper-small",
-    "medium": "mlx-community/whisper-medium",
-    "large": "mlx-community/whisper-large-v3",
-    "large-v2": "mlx-community/whisper-large-v2",
-    "large-v3": "mlx-community/whisper-large-v3",
+    "tiny": "mlx-community/whisper-tiny-mlx",
+    "base": "mlx-community/whisper-base-mlx",
+    "small": "mlx-community/whisper-small-mlx",
+    "medium": "mlx-community/whisper-medium-mlx",
+    "large": "mlx-community/whisper-large-v3-mlx",
+    "large-v2": "mlx-community/whisper-large-v2-mlx",
+    "large-v3": "mlx-community/whisper-large-v3-mlx",
     "large-v3-turbo": "mlx-community/whisper-large-v3-turbo",
     "turbo": "mlx-community/whisper-large-v3-turbo",
 }
+_FASTER_WHISPER_ALIASES = {
+    "large": "large-v3",
+    "turbo": "large-v3-turbo",
+}
+_FASTER_WHISPER_FILES = (
+    "config.json",
+    "preprocessor_config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.json",
+    "vocabulary.txt",
+)
+_MLX_WHISPER_FILES = ("config.json", "weights.npz", "weights.safetensors")
 _MAX_WHISPER_HOTWORDS_CHARS = 240
 
 
@@ -49,16 +63,7 @@ def _whisper_hotwords(hints: RecognitionHints | None) -> str:
 
 def _to_mlx_repo(model_size: str) -> str:
     """Convert faster-whisper model size names to mlx-whisper repositories."""
-    repo = _MLX_REPO_MAP.get(model_size)
-    if repo is None:
-        if "/" in model_size:
-            return model_size
-        logger.warning(
-            "MLX リポジトリマッピングが見つかりません: %s → デフォルト (large-v3-turbo) を使用",
-            model_size,
-        )
-        return "mlx-community/whisper-large-v3-turbo"
-    return repo
+    return _MLX_REPO_MAP.get(model_size, model_size)
 
 
 def _cuda_available() -> bool:
@@ -99,29 +104,42 @@ class MlxWhisperBackend:
     name = "mlx"
 
     def __init__(self) -> None:
-        self._mlx_model_repo = ""
+        self._mlx_model_path = ""
 
     @property
     def is_ready(self) -> bool:
-        return bool(self._mlx_model_repo)
+        return bool(self._mlx_model_path)
 
     def load(
         self,
         cfg: RecognitionConfig,
         on_timeout: Callable[[str], None] | None = None,
     ) -> None:
-        repo = _to_mlx_repo(cfg.model_size)
-        logger.info("MLX-whisper を初期化: repo=%s", repo)
+        configured = _to_mlx_repo(cfg.model_size)
+        resolved = resolve_model(
+            "mlx_whisper",
+            configured,
+            custom_allow_patterns=_MLX_WHISPER_FILES,
+        )
+        logger.info(
+            "MLX-whisper を初期化: source=%s revision=%s",
+            resolved.source,
+            resolved.revision or "local",
+        )
 
         def _warmup() -> bool:
             import mlx_whisper
 
+            model_path = resolved.source
+            if resolved.model_source is not None:
+                model_path = download_verified_snapshot(resolved.model_source)
             dummy_audio = np.zeros(ASR_SAMPLE_RATE, dtype=np.float32)
             mlx_whisper.transcribe(
                 dummy_audio,
-                path_or_hf_repo=repo,
+                path_or_hf_repo=model_path,
                 language="en",
             )
+            self._mlx_model_path = model_path
             return True
 
         load_with_timeout(
@@ -131,7 +149,6 @@ class MlxWhisperBackend:
             on_timeout,
         )
 
-        self._mlx_model_repo = repo
         logger.info("MLX-whisper モデルのロードが完了しました")
 
     def transcribe(
@@ -144,7 +161,7 @@ class MlxWhisperBackend:
         import mlx_whisper
 
         kwargs: dict[str, object] = {
-            "path_or_hf_repo": self._mlx_model_repo,
+            "path_or_hf_repo": self._mlx_model_path,
             "language": language,
             "beam_size": cfg.beam_size,
             "no_speech_threshold": cfg.no_speech_threshold,
@@ -194,10 +211,20 @@ class FasterWhisperBackend:
             kwargs["cpu_threads"] = cfg.cpu_threads
             kwargs["num_workers"] = 1
 
+        resolved = resolve_model(
+            "faster_whisper",
+            cfg.model_size,
+            aliases=_FASTER_WHISPER_ALIASES,
+            custom_allow_patterns=_FASTER_WHISPER_FILES,
+        )
+
         def factory() -> object:
             from faster_whisper import WhisperModel
 
-            return WhisperModel(cfg.model_size, **kwargs)
+            model_path = resolved.source
+            if resolved.model_source is not None:
+                model_path = download_verified_snapshot(resolved.model_source)
+            return WhisperModel(model_path, local_files_only=True, **kwargs)
 
         model = load_with_timeout(
             factory,

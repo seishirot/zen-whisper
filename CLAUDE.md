@@ -7,14 +7,14 @@ Windows / macOS 対応の完全ローカル音声入力ツール。ホットキ�
 ## Commands
 
 ```bash
-uv sync                    # 依存インストール（WindowsはTorchなし / Python 3.11-3.13）
-uv sync --extra cuda       # Windows CUDA DLL（faster-whisper CUDA用）
-uv sync --extra reazon     # Windows CPU高速モード（Reazon K2）を有効化
-uv sync --extra qwen3      # Qwen3-ASR Transformers 5.14 + CPU PyTorch（実験用）
-uv sync --extra qwen3-cuda # Qwen3-ASR Transformers 5.14 + CUDA PyTorch
-uv run zen-whisper         # 起動（コンソール非表示）
-uv run python src/main.py  # 起動（開発用・コンソール付き）
-uv run pytest tests/       # テスト
+uv sync --locked                    # 依存インストール（WindowsはTorchなし / Python 3.11-3.13）
+uv sync --locked --extra cuda       # Windows CUDA DLL（faster-whisper CUDA用）
+uv sync --locked --extra reazon     # Windows CPU高速モード（Reazon K2）を有効化
+uv sync --locked --extra qwen3      # Qwen3-ASR Transformers 5.14 + CPU PyTorch（実験用）
+uv sync --locked --extra qwen3-cuda # Qwen3-ASR Transformers 5.14 + CUDA PyTorch
+uv run --locked zen-whisper         # 起動（コンソール非表示）
+uv run --locked python src/main.py  # 起動（開発用・コンソール付き）
+uv run --locked pytest tests/       # テスト
 ```
 
 ## Project Structure
@@ -61,7 +61,7 @@ hotkey.py → sounds.py(開始音) → recorder.py(録音+VAD) → sounds.py(停
 Whisper (GPU, CPU, MLX) / Reazon K2 / Qwen3-ASR (1.7B, 0.6B) の階層。
 
 - 自動エンジン選択はUX上採用しない。ユーザーがトレイメニューでモデル/実行先を明示的に選ぶ。
-- `reazon-k2`: Windows CPU高速モード。`uv sync --extra reazon` が必要。
+- `reazon-k2`: Windows CPU高速モード。`uv sync --locked --extra reazon` が必要。
   既定precisionは `int8-fp32` で、比較用に `int8` / `fp32` も選択可能。
   長音声は `reazon_chunk_sec` ごとに分割し、末尾に
   `reazon_trailing_silence_sec` の無音を足す。
@@ -69,12 +69,12 @@ Whisper (GPU, CPU, MLX) / Reazon K2 / Qwen3-ASR (1.7B, 0.6B) の階層。
 - `qwen3-asr`: Windowsネイティブの非ストリーミング経路。
   Transformers 5.14の `AutoProcessor` + `AutoModelForMultimodalLM` と
   末尾が `-hf` の公式checkpointを使う。
-- Windows の通常 `uv sync` は PyTorch を入れない。録音VADは同梱 Silero ONNX + `sherpa-onnx` を使う。macOS は MLX 経路の依存が PyTorch を持つ可能性がある。
+- Windows の通常 `uv sync --locked` は PyTorch を入れない。録音VADは同梱 Silero ONNX + `sherpa-onnx` を使う。macOS は MLX 経路の依存が PyTorch を持つ可能性がある。
 - Torch が壊れている環境では、PyTorch が存在するだけで CTranslate2/faster-whisper CPU も巻き添えで失敗し得る。通常環境では Torch を入れず、Qwen3 extra のみに閉じ込める。
 - `cuda` は faster-whisper CUDA DLL、`qwen3-cuda` はCUDA PyTorch +
   native Transformers、`qwen3` はCPU PyTorch実験用として分離する。
 - トレイの Qwen3-ASR 項目は CUDA 向け。CPU で Qwen3 を試す場合は
-  `uv sync --extra qwen3` を導入し、設定画面または `config.toml` で
+  `uv sync --locked --extra qwen3` を導入し、設定画面または `config.toml` で
   `device="cpu"` を選ぶ実験経路として扱う。
 
 Reazon extra は ReazonSpeech の `pkg/k2-asr` を commit

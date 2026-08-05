@@ -56,6 +56,11 @@ class TestRecognitionConfig:
         assert cfg.reazon_trailing_silence_sec == 0.5
         assert cfg.cpu_threads == 4
 
+    def test_reazon_bilingual_snapshot_is_not_a_supported_setting(self):
+        cfg = AppConfig(recognition=RecognitionConfig(reazon_language="ja-en"))
+
+        assert any("reazon_language" in warning for warning in cfg.validate())
+
     def test_default_model_size(self):
         cfg = RecognitionConfig()
         assert cfg.model_size == "large-v3-turbo"
@@ -156,6 +161,15 @@ class TestLoadConfig:
         toml_path.write_text('[recognition]\ndevice = "mlx"\n')
         cfg = load_config(toml_path)
         assert cfg.recognition.device == "mlx"
+
+    def test_load_migrates_legacy_reazon_bilingual_setting(self, tmp_path, caplog):
+        toml_path = tmp_path / "config.toml"
+        toml_path.write_text('[recognition]\nreazon_language = "ja-en"\n')
+
+        cfg = load_config(toml_path)
+
+        assert cfg.recognition.reazon_language == "ja"
+        assert "承認済みsnapshotがない" in caplog.text
 
     def test_load_submit_toggle_string(self, tmp_path):
         toml_path = tmp_path / "config.toml"

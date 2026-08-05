@@ -1,0 +1,14 @@
+[project]
+name = "zen-whisper-build-audit"
+version = "0.0.0"
+requires-python = ">=3.11"
+dependencies = ["hatchling==1.31.0"]
+
+[tool.uv]
+package = false
+required-version = "==0.11.32"
+preview-features = ["audit-command", "json-output", "malware-check"]
+exclude-newer = "1 week"
+
+[tool.uv.audit]
+malware-check = true

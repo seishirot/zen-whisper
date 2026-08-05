@@ -30,6 +30,7 @@ from typing import Iterator
 
 _HERE = Path(__file__).resolve().parent
 _ROOT = _HERE.parent
+sys.path.insert(0, str(_ROOT))
 
 DEFAULT_AUDIO = _HERE / "samples" / "bench_sample_ja.wav"
 DEFAULT_OUT_DIR = _HERE / "bench_outputs"
@@ -219,6 +220,7 @@ def transcribe_faster_whisper(
 ) -> BenchResult:
     try:
         from faster_whisper import WhisperModel
+        from src.model_provenance import download_verified_snapshot, resolve_model
     except ImportError as exc:
         return BenchResult(
             target=target,
@@ -231,12 +233,29 @@ def transcribe_faster_whisper(
     try:
         with timed_memory() as memory:
             t0 = time.perf_counter()
-            model = WhisperModel(
+            resolved = resolve_model(
+                "faster_whisper",
                 model_name,
+                aliases={"large": "large-v3", "turbo": "large-v3-turbo"},
+                custom_allow_patterns=(
+                    "config.json",
+                    "preprocessor_config.json",
+                    "model.bin",
+                    "tokenizer.json",
+                    "vocabulary.json",
+                    "vocabulary.txt",
+                ),
+            )
+            model_path = resolved.source
+            if resolved.model_source is not None:
+                model_path = download_verified_snapshot(resolved.model_source)
+            model = WhisperModel(
+                model_path,
                 device="cpu",
                 compute_type="int8",
                 cpu_threads=cpu_threads,
                 num_workers=1,
+                local_files_only=True,
             )
             load_sec = time.perf_counter() - t0
 
@@ -407,7 +426,8 @@ def transcribe_reazon_k2(
 ) -> BenchResult:
     target = "reazon-k2"
     try:
-        from reazonspeech.k2.asr import audio_from_path, load_model, transcribe
+        from reazonspeech.k2.asr import audio_from_path, transcribe
+        from src.asr.reazon import _load_pinned_reazon_model
     except ImportError as exc:
         return BenchResult(
             target=target,
@@ -420,7 +440,11 @@ def transcribe_reazon_k2(
     try:
         with timed_memory() as memory:
             t0 = time.perf_counter()
-            model = load_model(device="cpu", precision="fp32", language="ja")
+            model = _load_pinned_reazon_model(
+                device="cpu",
+                precision="fp32",
+                language="ja",
+            )
             load_sec = time.perf_counter() - t0
             speech = audio_from_path(str(audio))
 

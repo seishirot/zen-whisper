@@ -7,10 +7,12 @@ tests can run on machines without MLX or downloaded models.
 from __future__ import annotations
 
 import gc
+import hashlib
 import inspect
 import logging
 import re
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
@@ -18,6 +20,7 @@ from typing import Literal, Protocol
 import numpy as np
 
 from zen_whisper_mac_backend.enhancements import RecognitionHints
+from zen_whisper_mac_backend.registry import RegistryError, load_registry
 
 AdapterErrorKind = Literal["model_unavailable", "audio_unreadable"]
 _ADAPTER_ERROR_KINDS = {"model_unavailable", "audio_unreadable"}
@@ -106,6 +109,41 @@ _AUDIO_NAME_RE = re.compile(
 logger = logging.getLogger(__name__)
 
 
+def _pinned_model_snapshot(engine_id: str, model_id: str) -> str:
+    """Resolve a pinned snapshot and verify declared artifacts before MLX loads it."""
+    entry = load_registry().model(engine_id, model_id)
+    revision = entry.get("revision")
+    allow_patterns = entry.get("allow_patterns")
+    expected_files = entry.get("files")
+    if not isinstance(revision, str) or not isinstance(allow_patterns, tuple):
+        raise RegistryError(f"Model provenance is missing: {model_id}")
+    if not isinstance(expected_files, Mapping):
+        raise RegistryError(f"Model file manifest is missing: {model_id}")
+
+    from huggingface_hub import snapshot_download
+
+    snapshot = Path(
+        snapshot_download(
+            repo_id=model_id,
+            revision=revision,
+            allow_patterns=list(allow_patterns),
+        )
+    )
+    if snapshot.name.lower() != revision:
+        raise RegistryError(f"Resolved model commit does not match registry: {model_id}")
+    for filename, expected in expected_files.items():
+        path = snapshot / filename
+        if not path.is_file() or path.stat().st_size != expected["size"]:
+            raise RegistryError(f"Model file size mismatch: {model_id}/{filename}")
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected["sha256"]:
+            raise RegistryError(f"Model file hash mismatch: {model_id}/{filename}")
+    return str(snapshot)
+
+
 class AdapterError(RuntimeError):
     """Raised for engine/model load or transcription failures."""
 
@@ -156,19 +194,22 @@ class MlxWhisperAdapter:
 
     def __init__(self) -> None:
         self._loaded_model: str | None = None
+        self._loaded_model_path: str | None = None
 
     def preload(self, model_id: str, language: str) -> None:
         try:
             import mlx_whisper
 
+            model_path = _pinned_model_snapshot(self.engine_id, model_id)
             mlx_whisper.transcribe(
                 np.zeros(16000, dtype=np.float32),
-                path_or_hf_repo=model_id,
+                path_or_hf_repo=model_path,
                 **_language_kwargs(language),
             )
         except Exception as exc:  # pragma: no cover - depends on optional MLX/model IO
             raise AdapterError("MLX Whisper unavailable") from exc
         self._loaded_model = model_id
+        self._loaded_model_path = model_path
 
     def transcribe(self, audio_path: Path, model_id: str, language: str) -> str:
         return self._transcribe(
@@ -203,6 +244,8 @@ class MlxWhisperAdapter:
     ) -> str:
         if self._loaded_model != model_id:
             self.preload(model_id, language)
+        if self._loaded_model_path is None:
+            raise AdapterError("MLX Whisper model path is unavailable")
         try:
             audio = _load_wav_float32_mono_16k(audio_path)
         except AdapterError:
@@ -217,7 +260,7 @@ class MlxWhisperAdapter:
                 kwargs["initial_prompt"] = initial_prompt
             result = mlx_whisper.transcribe(
                 audio,
-                path_or_hf_repo=model_id,
+                path_or_hf_repo=self._loaded_model_path,
                 **kwargs,
             )
         except Exception as exc:  # pragma: no cover - depends on optional MLX/model IO
@@ -272,7 +315,8 @@ class MlxQwen3AsrAdapter:
                 self._model = None
                 self._loaded_model_id = None
                 _clear_mlx_cache()
-            self._model = load(model_id)
+            model_path = _pinned_model_snapshot(self.engine_id, model_id)
+            self._model = load(model_path)
         except Exception as exc:  # pragma: no cover - depends on optional MLX/model IO
             raise AdapterError("Qwen3-ASR unavailable") from exc
         self._loaded_model_id = model_id

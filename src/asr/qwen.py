@@ -17,6 +17,7 @@ from src.config import (
     QWEN3_LEGACY_MODELS,
     RecognitionConfig,
 )
+from src.model_provenance import download_verified_snapshot, resolve_model
 
 logger = logging.getLogger(__name__)
 
@@ -370,6 +371,17 @@ class Qwen3Backend:
                 "旧qwen-asr形式のモデルは使用できません。"
                 "末尾が -hf のモデルを選んでください"
             )
+        resolved_model = resolve_model(
+            "qwen3_hf",
+            cfg.qwen3_model,
+            custom_allow_patterns=(
+                "*.json",
+                "*.jinja",
+                "*.model",
+                "*.safetensors",
+                "*.txt",
+            ),
+        )
 
         resolved = _resolve_device(cfg)
         if resolved not in ("cuda", "cpu"):
@@ -398,11 +410,22 @@ class Qwen3Backend:
             )
             import torch
 
-            processor = AutoProcessor.from_pretrained(cfg.qwen3_model)
+            model_path = resolved_model.source
+            if resolved_model.model_source is not None:
+                model_path = download_verified_snapshot(
+                    resolved_model.model_source
+                )
+            processor = AutoProcessor.from_pretrained(
+                model_path,
+                local_files_only=True,
+                trust_remote_code=False,
+            )
             model = AutoModelForMultimodalLM.from_pretrained(
-                cfg.qwen3_model,
+                model_path,
                 dtype=torch.bfloat16,
                 attn_implementation=attn_impl,
+                local_files_only=True,
+                trust_remote_code=False,
             )
             model = model.to(resolved).eval()
             compile_config = (

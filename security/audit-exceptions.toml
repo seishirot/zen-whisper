@@ -1,0 +1,23 @@
+schema_version = 1
+
+[[exceptions]]
+id = "GHSA-rrmf-rvhw-rf47"
+package = "torch"
+locked_versions = ["2.10.0", "2.10.0+cu126"]
+profiles = ["qwen3", "qwen3-cuda", "macos-python-mlx"]
+disposition = "temporarily_accepted"
+reason = "The affected torch.jit.script API is not used by ZenWhisper; the root lock also supplies Torch transitively to mlx-whisper on macOS, and Transformers 5.14 compatibility is currently validated only with the 2.10 series, while the advisory lists 2.13.0 as the first fix."
+owner = "@seishirot"
+expires = 2026-11-01
+fix_available = true
+
+[[exceptions]]
+id = "PYSEC-2026-139"
+package = "torch"
+locked_versions = ["2.10.0", "2.10.0+cu126"]
+profiles = ["qwen3", "qwen3-cuda", "macos-python-mlx"]
+disposition = "ignore_until_fixed"
+reason = "The reported pt2 package-loading path is not used by ZenWhisper; the exception covers both Qwen extras and the root lock's transitive macOS mlx-whisper Torch dependency, and the advisory currently has no fixed release."
+owner = "@seishirot"
+expires = 2026-11-01
+fix_available = false

@@ -1039,7 +1039,8 @@ class SettingsWindow:
             0,
             "言語モデル",
             "recognition.reazon_language",
-            ("ja", "ja-en"),
+            ("ja",),
+            help_text="ja-en は非対応。既存設定は起動時に ja へ移行",
         )
         self._combo_row(
             reazon,

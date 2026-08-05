@@ -23,7 +23,7 @@ If fso.FileExists(venvExe) Then
     LogStart "launching venv executable: " & venvExe
     shell.Run command, 0, False
 Else
-    command = "uv run zen-whisper"
+    command = "uv run --locked zen-whisper"
     LogStart "venv executable not found; falling back to: " & command
 
     cmdExe = shell.ExpandEnvironmentStrings("%ComSpec%")

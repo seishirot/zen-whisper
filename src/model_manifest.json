@@ -1,0 +1,172 @@
+{
+  "version": 1,
+  "groups": {
+    "faster_whisper": {
+      "tiny": {
+        "repo_id": "Systran/faster-whisper-tiny",
+        "revision": "d90ca5fe260221311c53c58e660288d3deb8d356",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+        "files": {"model.bin": {"sha256": "dcb76c6586fc06cbdac6dd21f14cfd129cc4cdd9dce19bf4ffa62e59cbe6e6d1", "size": 75538270}},
+        "license": "MIT"
+      },
+      "base": {
+        "repo_id": "Systran/faster-whisper-base",
+        "revision": "ebe41f70d5b6dfa9166e2c581c45c9c0cfc57b66",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+        "files": {"model.bin": {"sha256": "d01c3014881c9c6f3133c182f3d2887eb6ca1c789a7538c5c007196857a0a6a9", "size": 145217532}},
+        "license": "MIT"
+      },
+      "small": {
+        "repo_id": "Systran/faster-whisper-small",
+        "revision": "536b0662742c02347bc0e980a01041f333bce120",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+        "files": {"model.bin": {"sha256": "3e305921506d8872816023e4c273e75d2419fb89b24da97b4fe7bce14170d671", "size": 483546902}},
+        "license": "MIT"
+      },
+      "medium": {
+        "repo_id": "Systran/faster-whisper-medium",
+        "revision": "08e178d48790749d25932bbc082711ddcfdfbc4f",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+        "files": {"model.bin": {"sha256": "9b45e1009dcc4ab601eff815b61d80e60ce3fd8c74c1a14f4a282258286b51ae", "size": 1527906378}},
+        "license": "MIT"
+      },
+      "large-v2": {
+        "repo_id": "Systran/faster-whisper-large-v2",
+        "revision": "f0fe81560cb8b68660e564f55dd99207059c092e",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.txt"],
+        "files": {"model.bin": {"sha256": "bf2a9746382e1aa7ffff6b3a0d137ed9edbd9670c3b87e5d35f5e85e70d0333a", "size": 3086912962}},
+        "license": "MIT"
+      },
+      "large-v3": {
+        "repo_id": "Systran/faster-whisper-large-v3",
+        "revision": "edaa852ec7e145841d8ffdb056a99866b5f0a478",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.json"],
+        "files": {"model.bin": {"sha256": "69f74147e3334731bc3a76048724833325d2ec74642fb52620eda87352e3d4f1", "size": 3087284237}},
+        "license": "MIT"
+      },
+      "large-v3-turbo": {
+        "repo_id": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+        "revision": "0a363e9161cbc7ed1431c9597a8ceaf0c4f78fcf",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.json"],
+        "files": {"model.bin": {"sha256": "e76620f83d5f5b69efd3d87e3dc180c1bd21df9fbebacfd4335e5e1efcc018da", "size": 1617884929}},
+        "license": "MIT"
+      },
+      "kotoba-tech/kotoba-whisper-v2.0-faster": {
+        "repo_id": "kotoba-tech/kotoba-whisper-v2.0-faster",
+        "revision": "f44edd35eaeb2274e85ac7b31fb2c6f59ff1c4bc",
+        "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.json"],
+        "files": {"model.bin": {"sha256": "60d2bc2e33de9d43f2745be09caefe1161acab670f6796d4a750d8d848382b36", "size": 1512927867}},
+        "license": "Apache-2.0"
+      }
+    },
+    "mlx_whisper": {
+      "mlx-community/whisper-tiny-mlx": {
+        "repo_id": "mlx-community/whisper-tiny-mlx",
+        "revision": "6caf9c55601caafbe6508a8b0d216bdf4783c4e8",
+        "allow_patterns": ["config.json", "weights.npz"],
+        "files": {"weights.npz": {"sha256": "0e03a5993d6eea43b07ee2dcc772b0e4cef5bb227257dacc24bf289387d49186", "size": 74418540}},
+        "license": "MIT"
+      },
+      "mlx-community/whisper-base-mlx": {
+        "repo_id": "mlx-community/whisper-base-mlx",
+        "revision": "1e3e249fb8d01c655324bd6841b1deadffd6d04c",
+        "allow_patterns": ["config.json", "weights.npz"],
+        "files": {"weights.npz": {"sha256": "2f57d5f3ef473054c638961f90716f4ee415e8108de81313eccb2c5fd62eff0b", "size": 143724204}},
+        "license": "MIT"
+      },
+      "mlx-community/whisper-small-mlx": {
+        "repo_id": "mlx-community/whisper-small-mlx",
+        "revision": "45f3915923c7a79a5a5b5a7d909d39aeb0e5630e",
+        "allow_patterns": ["config.json", "weights.npz"],
+        "files": {"weights.npz": {"sha256": "55b6674c9b339702d486e2b1573839a66f8ec8f821ed2886993ef717a86b09f5", "size": 481307592}},
+        "license": "MIT"
+      },
+      "mlx-community/whisper-medium-mlx": {
+        "repo_id": "mlx-community/whisper-medium-mlx",
+        "revision": "7fc08c4eac4c316526498f147dfdee6f6303f975",
+        "allow_patterns": ["config.json", "weights.npz"],
+        "files": {"weights.npz": {"sha256": "10b597c2bcb1bcc38b2d3d24cd4f0885f461a7cd70e8444d6ad5a763ece549ea", "size": 1524924912}},
+        "license": "MIT"
+      },
+      "mlx-community/whisper-large-v2-mlx": {
+        "repo_id": "mlx-community/whisper-large-v2-mlx",
+        "revision": "cce86229e2765266197fef869ce9f7e2550067ab",
+        "allow_patterns": ["config.json", "weights.npz"],
+        "files": {"weights.npz": {"sha256": "c9888a2d03b4e9906c2864151f56dc21e58d617938da0eb818152e3f99adc3f1", "size": 3083149424}},
+        "license": "MIT"
+      },
+      "mlx-community/whisper-large-v3-mlx": {
+        "repo_id": "mlx-community/whisper-large-v3-mlx",
+        "revision": "49e6aa286ad60c14352c404340ded53710378a11",
+        "allow_patterns": ["config.json", "weights.npz"],
+        "files": {"weights.npz": {"sha256": "05ff791ce3630fae47e7c51004e9666204d786246ec07cac6110af768099b40d", "size": 3083520416}},
+        "license": "MIT"
+      },
+      "mlx-community/whisper-large-v3-turbo": {
+        "repo_id": "mlx-community/whisper-large-v3-turbo",
+        "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+        "allow_patterns": ["config.json", "weights.safetensors"],
+        "files": {"weights.safetensors": {"sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6", "size": 1613977612}},
+        "license": "MIT"
+      }
+    },
+    "qwen3_hf": {
+      "Qwen/Qwen3-ASR-0.6B-hf": {
+        "repo_id": "Qwen/Qwen3-ASR-0.6B-hf",
+        "revision": "7f1569a48a89f3e3f4dc3a5c9d28bddd903bc76c",
+        "allow_patterns": ["chat_template.jinja", "config.json", "generation_config.json", "model.safetensors", "processor_config.json", "tokenizer.json", "tokenizer_config.json"],
+        "files": {
+          "model.safetensors": {"sha256": "d3f212dd20abecd315d830bc54ae3865e56ebfc3276484e57b771288ba27fd35", "size": 1564928088},
+          "tokenizer.json": {"sha256": "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05", "size": 11429653}
+        },
+        "license": "Apache-2.0"
+      },
+      "Qwen/Qwen3-ASR-1.7B-hf": {
+        "repo_id": "Qwen/Qwen3-ASR-1.7B-hf",
+        "revision": "bcd2b5b7f32b480ab5790554cfa8347f246a14f3",
+        "allow_patterns": ["chat_template.jinja", "config.json", "generation_config.json", "model.safetensors", "processor_config.json", "tokenizer.json", "tokenizer_config.json"],
+        "files": {
+          "model.safetensors": {"sha256": "2db53c7d81bd9b8cbc6a074e89be2c968a0d373fb4ee68bb1b1e14f7042dfee1", "size": 4076193080},
+          "tokenizer.json": {"sha256": "fe1fad59be22a41ee293363fcf95fdedbc7c93f3b49270b1d2e18bd1399a7a05", "size": 11429653}
+        },
+        "license": "Apache-2.0"
+      }
+    },
+    "qwen3_legacy": {
+      "Qwen/Qwen3-ASR-0.6B": {
+        "repo_id": "Qwen/Qwen3-ASR-0.6B",
+        "revision": "5eb144179a02acc5e5ba31e748d22b0cf3e303b0",
+        "allow_patterns": ["*.json", "*.jinja", "*.model", "*.safetensors", "*.txt"],
+        "files": {"model.safetensors": {"sha256": "79d6cbd4c98c7bbffe9db2edac07f56cd6637d0d5944b27f6c2b8353840323ea", "size": 1876091704}},
+        "license": "Apache-2.0"
+      },
+      "Qwen/Qwen3-ASR-1.7B": {
+        "repo_id": "Qwen/Qwen3-ASR-1.7B",
+        "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+        "allow_patterns": ["*.json", "*.jinja", "*.model", "*.safetensors", "*.txt"],
+        "files": {
+          "model-00001-of-00002.safetensors": {"sha256": "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6", "size": 4220320824},
+          "model-00002-of-00002.safetensors": {"sha256": "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc", "size": 478200688}
+        },
+        "license": "Apache-2.0"
+      }
+    },
+    "reazon_k2": {
+      "ja": {
+        "repo_id": "reazon-research/reazonspeech-k2-v2",
+        "revision": "291488c8151be24d7da4bf7af26e533fad96e407",
+        "allow_patterns": ["tokens.txt", "decoder-epoch-99-avg-1.int8.onnx", "decoder-epoch-99-avg-1.onnx", "encoder-epoch-99-avg-1.int8.onnx", "encoder-epoch-99-avg-1.onnx", "joiner-epoch-99-avg-1.int8.onnx", "joiner-epoch-99-avg-1.onnx"],
+        "files": {
+          "tokens.txt": {"sha256": "2c3ac659818a48a0c04010e0593bbc4d7c8a24a054340b01131499c05fd52def", "size": 45754},
+          "decoder-epoch-99-avg-1.int8.onnx": {"sha256": "8f0bff94d38797b03b762634ed03211a8e303d06cc4603cdd0cf4199d6eb1485", "size": 2959337},
+          "decoder-epoch-99-avg-1.onnx": {"sha256": "58b18211ae06265466bfa17172dab574df94f76c8bcb61a3640c28ba860e4124", "size": 11767836},
+          "encoder-epoch-99-avg-1.int8.onnx": {"sha256": "2c7bd08a8a99f9ddd0d9e458456577b1f6279214e51426f114f9eced44c54e1d", "size": 154670139},
+          "encoder-epoch-99-avg-1.onnx": {"sha256": "ecdb0b771e16104aaf8e579cb3c1e32fbd589eb641c5946d82b615bd366c5f96", "size": 592347848},
+          "joiner-epoch-99-avg-1.int8.onnx": {"sha256": "49cc7ea1d3d35a40a27442db5e89996da64bf0e683a903dce76e99e57a12e4de", "size": 2696970},
+          "joiner-epoch-99-avg-1.onnx": {"sha256": "d38a81d1191c9ed6de6a1719503692e07e3e973e2364adde0abae5eaaded1174", "size": 10720115}
+        },
+        "license": "Apache-2.0"
+      }
+    }
+  }
+}

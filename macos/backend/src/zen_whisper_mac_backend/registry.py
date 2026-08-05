@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from importlib.resources import files
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -34,6 +37,12 @@ class ModelRegistry:
     def model_ids(self, engine_id: str) -> set[str]:
         engine = self.engine(engine_id)
         return {_require_non_empty_string(model.get("id"), f"{engine_id} model id") for model in engine["models"]}
+
+    def model(self, engine_id: str, model_id: str) -> Mapping[str, Any]:
+        for model in self.engine(engine_id)["models"]:
+            if model["id"] == model_id:
+                return model
+        raise RegistryError(f"Unknown model for {engine_id}: {model_id}")
 
     def default_model(self, engine_id: str) -> str:
         return _require_non_empty_string(
@@ -77,20 +86,26 @@ def _registry_bytes() -> bytes:
 def load_registry() -> ModelRegistry:
     raw = _registry_bytes()
     data = json.loads(raw.decode("utf-8"))
+    if not isinstance(data, dict):
+        raise RegistryError("registry root must be an object")
     registry = ModelRegistry(data=_freeze(data), sha256=hashlib.sha256(raw).hexdigest())
     _validate_registry(registry)
     return registry
 
 
 def _validate_registry(registry: ModelRegistry) -> None:
-    if registry.data.get("version") != 1:
+    if not isinstance(registry.data, Mapping):
+        raise RegistryError("registry root must be an object")
+    version = registry.data.get("version")
+    if type(version) is not int or version != 1:
         raise RegistryError("unsupported registry version")
-    _require_unique_ids(registry.data["engines"], "engine")
+    engines = registry.data.get("engines")
+    _require_unique_ids(engines, "engine")
     if registry.default_engine not in registry.engine_ids():
         raise RegistryError("default_engine is not listed in engines")
     if registry.default_language not in registry.data.get("languages", {}):
         raise RegistryError("default_language is not listed in languages")
-    for engine in registry.data["engines"]:
+    for engine in engines:
         engine_id = _require_non_empty_string(engine.get("id"), "engine id")
         _require_non_empty_string(engine.get("label"), f"{engine_id} label")
         _require_unique_ids(engine["models"], f"{engine_id} model")
@@ -100,6 +115,8 @@ def _validate_registry(registry: ModelRegistry) -> None:
         )
         if default_model not in registry.model_ids(engine_id):
             raise RegistryError(f"default_model is not listed for {engine_id}")
+        for model in engine["models"]:
+            _validate_model_provenance(model, engine_id)
     engine_ids = registry.engine_ids()
     languages = registry.data.get("languages", {})
     if not isinstance(languages, Mapping):
@@ -146,6 +163,41 @@ def _require_unique_ids(items: object, label: str) -> None:
         if item_id in seen:
             raise RegistryError(f"duplicate {label} id: {item_id}")
         seen.add(item_id)
+
+
+def _validate_model_provenance(model: Mapping[str, Any], engine_id: str) -> None:
+    """Validate immutable fields when a registry entry declares provenance."""
+    revision = model.get("revision")
+    allow_patterns = model.get("allow_patterns")
+    expected_files = model.get("files")
+    if revision is None and allow_patterns is None and expected_files is None:
+        return
+    model_id = _require_non_empty_string(model.get("id"), f"{engine_id} model id")
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise RegistryError(f"model revision must be a full commit: {model_id}")
+    if not isinstance(allow_patterns, tuple) or not allow_patterns:
+        raise RegistryError(f"model allow_patterns must be a non-empty array: {model_id}")
+    for pattern in allow_patterns:
+        _require_non_empty_string(pattern, f"{model_id} allow pattern")
+    if not isinstance(expected_files, Mapping) or not expected_files:
+        raise RegistryError(f"model files must be a non-empty object: {model_id}")
+    for filename, expected in expected_files.items():
+        filename = _require_non_empty_string(filename, f"{model_id} filename")
+        if (
+            "\\" in filename
+            or Path(filename).is_absolute()
+            or ".." in Path(filename).parts
+            or not any(fnmatchcase(filename, pattern) for pattern in allow_patterns)
+        ):
+            raise RegistryError(f"model filename is not allowed: {model_id}/{filename}")
+        if not isinstance(expected, Mapping):
+            raise RegistryError(f"model file metadata must be an object: {model_id}")
+        sha256 = expected.get("sha256")
+        size = expected.get("size")
+        if not isinstance(sha256, str) or re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+            raise RegistryError(f"model file hash is invalid: {model_id}/{filename}")
+        if not isinstance(size, int) or isinstance(size, bool) or size <= 0:
+            raise RegistryError(f"model file size is invalid: {model_id}/{filename}")
 
 
 def _require_non_empty_string(value: object, label: str) -> str:

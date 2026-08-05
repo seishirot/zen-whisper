@@ -260,21 +260,21 @@ class TestToMlxRepo:
         assert _to_mlx_repo("turbo") == "mlx-community/whisper-large-v3-turbo"
 
     def test_common_sizes(self):
-        assert _to_mlx_repo("tiny") == "mlx-community/whisper-tiny"
-        assert _to_mlx_repo("base") == "mlx-community/whisper-base"
-        assert _to_mlx_repo("small") == "mlx-community/whisper-small"
-        assert _to_mlx_repo("medium") == "mlx-community/whisper-medium"
-        assert _to_mlx_repo("large") == "mlx-community/whisper-large-v3"
-        assert _to_mlx_repo("large-v2") == "mlx-community/whisper-large-v2"
-        assert _to_mlx_repo("large-v3") == "mlx-community/whisper-large-v3"
+        assert _to_mlx_repo("tiny") == "mlx-community/whisper-tiny-mlx"
+        assert _to_mlx_repo("base") == "mlx-community/whisper-base-mlx"
+        assert _to_mlx_repo("small") == "mlx-community/whisper-small-mlx"
+        assert _to_mlx_repo("medium") == "mlx-community/whisper-medium-mlx"
+        assert _to_mlx_repo("large") == "mlx-community/whisper-large-v3-mlx"
+        assert _to_mlx_repo("large-v2") == "mlx-community/whisper-large-v2-mlx"
+        assert _to_mlx_repo("large-v3") == "mlx-community/whisper-large-v3-mlx"
 
     def test_already_repo_name(self):
         repo = "mlx-community/whisper-large-v3-turbo"
         assert _to_mlx_repo(repo) == repo
 
-    def test_unknown_falls_back(self):
+    def test_unknown_is_preserved_for_strict_source_validation(self):
         result = _to_mlx_repo("nonexistent-model")
-        assert result == "mlx-community/whisper-large-v3-turbo"
+        assert result == "nonexistent-model"
 
 
 class TestTranscriber:

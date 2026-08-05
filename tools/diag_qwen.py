@@ -1,7 +1,7 @@
 """Diagnose Qwen3-ASR native model placement and inference timing.
 
 Run from the repository root:
-    mise exec -- uv run --extra qwen3-cuda python tools\\diag_qwen.py
+    mise exec -- uv run --locked --extra qwen3-cuda python tools\\diag_qwen.py
 """
 
 from __future__ import annotations
