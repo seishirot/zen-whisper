@@ -17,6 +17,7 @@ import hashlib
 import importlib.metadata
 import json
 import statistics
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,8 @@ import soundfile as sf
 import torch
 
 _HERE = Path(__file__).resolve().parent
+_ROOT = _HERE.parent
+sys.path.insert(0, str(_ROOT))
 _DEFAULT_AUDIO = _HERE / "samples" / "bench_sample_ja.wav"
 _MODEL_IDS = {
     ("legacy", "0.6B"): "Qwen/Qwen3-ASR-0.6B",
@@ -33,6 +36,21 @@ _MODEL_IDS = {
     ("native", "0.6B"): "Qwen/Qwen3-ASR-0.6B-hf",
     ("native", "1.7B"): "Qwen/Qwen3-ASR-1.7B-hf",
 }
+
+
+def _verified_model_path(
+    backend: str,
+    model_id: str,
+    *,
+    local_files_only: bool,
+) -> str:
+    from src.model_provenance import download_verified_snapshot, model_source
+
+    group = "qwen3_legacy" if backend == "legacy" else "qwen3_hf"
+    return download_verified_snapshot(
+        model_source(group, model_id),
+        local_files_only=local_files_only,
+    )
 
 
 def _package_version(name: str) -> str | None:
@@ -106,12 +124,14 @@ def _build_native(model_id: str, local_files_only: bool) -> tuple[Any, Any]:
     processor = AutoProcessor.from_pretrained(
         model_id,
         local_files_only=local_files_only,
+        trust_remote_code=False,
     )
     model = AutoModelForMultimodalLM.from_pretrained(
         model_id,
         dtype=torch.bfloat16,
         attn_implementation="sdpa",
         local_files_only=local_files_only,
+        trust_remote_code=False,
     )
     model = model.to("cuda").eval()
     return model, processor
@@ -187,6 +207,11 @@ def main() -> int:
 
     audio, duration_sec, audio_sha256 = _load_audio(args.audio)
     model_id = _MODEL_IDS[(args.backend, args.model_size)]
+    model_path = _verified_model_path(
+        args.backend,
+        model_id,
+        local_files_only=args.local_files_only,
+    )
 
     torch.cuda.empty_cache()
     torch.cuda.reset_peak_memory_stats()
@@ -195,12 +220,12 @@ def main() -> int:
     processor = None
     if args.backend == "legacy":
         model = _build_legacy(
-            model_id,
-            args.local_files_only,
+            model_path,
+            True,
             args.max_new_tokens,
         )
     else:
-        model, processor = _build_native(model_id, args.local_files_only)
+        model, processor = _build_native(model_path, True)
     torch.cuda.synchronize()
     load_sec = time.perf_counter() - load_started
 

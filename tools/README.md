@@ -15,15 +15,15 @@ Qwen3-ASR や CPU 向け ASR の推論速度・精度を調査するための使
 | `verify_qwen_integration.py` | `Transcriber` 経由のnativeロード／推論と、triton不在時のcompile自動無効化を確認 |
 | `samples/*.wav` | 計測用の 16kHz mono 合成音声（Windows SAPI 生成） |
 
-```bash
+```powershell
 # 例（リポジトリルートで）
-mise exec -- uv run --extra qwen3-cuda python tools\bench_compare.py
-mise exec -- uv run --extra qwen3-cuda python tools\bench_qwen.py sdpa
-mise exec -- uv run --extra qwen3-cuda python tools\diag_qwen.py
-mise exec -- uv run --extra qwen3-cuda python tools\verify_qwen_integration.py
-mise exec -- uv run python tools\bench_cpu_asr.py --audio tools\samples\bench_sample_ja.wav
-mise exec -- uv run --no-sync python tools\bench_reazon_hotwords.py --term mise --term uv --term Python
-mise exec -- uv run python tools\bench_cpu_asr.py --targets faster-whisper,kotoba
+mise exec -- uv run --locked --extra qwen3-cuda python tools\bench_compare.py
+mise exec -- uv run --locked --extra qwen3-cuda python tools\bench_qwen.py sdpa
+mise exec -- uv run --locked --extra qwen3-cuda python tools\diag_qwen.py
+mise exec -- uv run --locked --extra qwen3-cuda python tools\verify_qwen_integration.py
+mise exec -- uv run --locked python tools\bench_cpu_asr.py --audio tools\samples\bench_sample_ja.wav
+mise exec -- uv run --locked --no-sync python tools\bench_reazon_hotwords.py --term mise --term uv --term Python
+mise exec -- uv run --locked python tools\bench_cpu_asr.py --targets faster-whisper,kotoba
 ```
 
 `bench_reazon_hotwords.py` は本体設定を変えず、現在の Reazon と同じ greedy、
@@ -41,28 +41,19 @@ mise exec -- uv run python tools\bench_cpu_asr.py --targets faster-whisper,kotob
 whisper.cpp は Python ライブラリではなく外部実行ファイルを呼び出すため、実行するには
 `whisper-cli.exe` と量子化モデルファイルを指定する。
 
-```bash
-mise exec -- uv run python tools\bench_cpu_asr.py ^
-  --targets whisper-cpp ^
-  --whisper-cpp-exe tools\bin\whisper-cli.exe ^
+```powershell
+mise exec -- uv run --locked python tools\bench_cpu_asr.py `
+  --targets whisper-cpp `
+  --whisper-cpp-exe tools\bin\whisper-cli.exe `
   --whisper-cpp-model tools\models\ggml-large-v3-turbo-q5_0.bin
 ```
 
 Kotoba-Whisper v2.0 は `fast-kotoba` target で `faster-whisper` 経由の
 `kotoba-tech/kotoba-whisper-v2.0-faster` を試す。ReazonSpeech K2 はパッケージが
 入っている場合だけ実行し、未導入なら SKIP する。通常はリポジトリのロック済み依存で
-`mise exec -- uv sync --extra reazon` を使う。
-
-プロジェクト依存を変更せずに一時依存で試す場合は、検証済みの commit と
-Windows 互換の sherpa 依存を合わせて指定する。
-
-```bash
-mise exec -- uv run ^
-  --with "reazonspeech-k2-asr @ git+https://github.com/reazon-research/ReazonSpeech@2d4d4762e7ee294ac8e47a177ac2e9b0e8d0d43f#subdirectory=pkg/k2-asr" ^
-  --with "sherpa-onnx==1.13.1" ^
-  --with "sherpa-onnx-core==1.13.1" ^
-  python tools\bench_cpu_asr.py --targets reazon-k2
-```
+`mise exec -- uv sync --locked --extra reazon` を使う。`uv run --with` は、
+プロジェクト設定が発見される場合でも追加依存をcommit済みlockfileの外で一時解決し、
+結果をレビュー・再現できないため、このリポジトリの検証手順には使用しない。
 
 `bench_cpu_asr.py` の Reazon target はベンチ確認用にファイル全体をそのまま渡すため、
 長い音声では Reazon/K2 側の long audio warning が出ることがある。本体の

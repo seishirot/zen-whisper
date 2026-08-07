@@ -6,7 +6,7 @@
   - torch_compile=True でも triton 無し環境（Windows）で安全に無効化され、クラッシュしない
 
 使い方（リポジトリルートから）:
-    mise exec -- uv run --extra qwen3-cuda python tools\\verify_qwen_integration.py
+    mise exec -- uv run --locked --extra qwen3-cuda python tools\\verify_qwen_integration.py
 """
 
 from __future__ import annotations

@@ -36,7 +36,15 @@
           "label": "Whisper large-v3-turbo",
           "source": "https://huggingface.co/mlx-community/whisper-large-v3-turbo",
           "upstream": "https://huggingface.co/openai/whisper-large-v3-turbo",
-          "license": "MIT"
+          "license": "MIT",
+          "revision": "a4aaeec0636e6fef84abdcbe3544cb2bf7e9f6fb",
+          "allow_patterns": ["config.json", "weights.safetensors"],
+          "files": {
+            "weights.safetensors": {
+              "sha256": "951ed3fc1203e6a62467abb2144a96ce7eafca8fa77e3704fdb8635ff3e7f8a6",
+              "size": 1613977612
+            }
+          }
         }
       ]
     },
@@ -50,14 +58,30 @@
           "label": "Qwen3-ASR 0.6B 8-bit",
           "source": "https://huggingface.co/mlx-community/Qwen3-ASR-0.6B-8bit",
           "upstream": "https://huggingface.co/Qwen/Qwen3-ASR-0.6B",
-          "license": "Apache-2.0"
+          "license": "Apache-2.0",
+          "revision": "89e96d92ba34aca20b3e29fb10cc284097d1219f",
+          "allow_patterns": ["chat_template.json", "config.json", "generation_config.json", "merges.txt", "model.safetensors", "model.safetensors.index.json", "preprocessor_config.json", "tokenizer_config.json", "vocab.json"],
+          "files": {
+            "model.safetensors": {
+              "sha256": "b5bfe4abc1b4c6e58b633096682ec2b6297298add1527119936107d211adf0e8",
+              "size": 1006229426
+            }
+          }
         },
         {
           "id": "mlx-community/Qwen3-ASR-1.7B-8bit",
           "label": "Qwen3-ASR 1.7B 8-bit",
           "source": "https://huggingface.co/mlx-community/Qwen3-ASR-1.7B-8bit",
           "upstream": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
-          "license": "Apache-2.0"
+          "license": "Apache-2.0",
+          "revision": "a8379a2e2f9e313c9292cdf1af4055ab56d50d55",
+          "allow_patterns": ["chat_template.json", "config.json", "generation_config.json", "merges.txt", "model.safetensors", "model.safetensors.index.json", "preprocessor_config.json", "tokenizer_config.json", "vocab.json"],
+          "files": {
+            "model.safetensors": {
+              "sha256": "bf304b009cc7eca79283056f787b44c952d24ac22cec787b39732bba3c23c13c",
+              "size": 2463307541
+            }
+          }
         }
       ]
     }

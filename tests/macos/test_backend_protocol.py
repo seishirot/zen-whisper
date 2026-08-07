@@ -45,6 +45,8 @@ from zen_whisper_mac_backend.registry import (  # noqa: E402
 )
 from zen_whisper_mac_backend.service import BackendService  # noqa: E402
 
+_REAL_PINNED_MODEL_SNAPSHOT = adapters_module._pinned_model_snapshot
+
 
 @pytest.fixture(autouse=True)
 def _close_backend_services(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
@@ -57,6 +59,11 @@ def _close_backend_services(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         return service
 
     monkeypatch.setattr(sys.modules[__name__], "BackendService", make_service)
+    monkeypatch.setattr(
+        adapters_module,
+        "_pinned_model_snapshot",
+        lambda _engine_id, model_id: model_id,
+    )
     yield
     for service in reversed(created):
         service.close(wait=False)
@@ -2523,6 +2530,7 @@ def test_audio_read_error_is_not_reported_as_model_unavailable(tmp_path: Path) -
     audio.write_bytes(b"not a wav")
     adapter = MlxWhisperAdapter()
     adapter._loaded_model = "mlx-community/whisper-large-v3-turbo"  # noqa: SLF001
+    adapter._loaded_model_path = "verified-model"  # noqa: SLF001
     service = BackendService(adapters={"mlx-whisper": adapter})
 
     result = service.handle(
@@ -2548,6 +2556,7 @@ def test_wrong_sample_rate_audio_is_not_reported_as_model_unavailable(tmp_path: 
     sf.write(audio, np.zeros(800, dtype=np.float32), 8000)
     adapter = MlxWhisperAdapter()
     adapter._loaded_model = "mlx-community/whisper-large-v3-turbo"  # noqa: SLF001
+    adapter._loaded_model_path = "verified-model"  # noqa: SLF001
     service = BackendService(adapters={"mlx-whisper": adapter})
 
     result = service.handle(
@@ -2700,6 +2709,7 @@ def test_mlx_dependency_error_does_not_return_or_log_audio_path(
     )
     adapter = MlxWhisperAdapter()
     adapter._loaded_model = "mlx-community/whisper-large-v3-turbo"  # noqa: SLF001
+    adapter._loaded_model_path = "verified-model"  # noqa: SLF001
     service = BackendService(adapters={"mlx-whisper": adapter})
     with caplog.at_level(logging.INFO, logger="zen_whisper_mac_backend.service"):
         result = service.handle(

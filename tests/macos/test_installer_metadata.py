@@ -198,7 +198,14 @@ def test_backend_install_cleans_staging_before_critical_swap() -> None:
     assert "trap 'handle_signal TERM' TERM" in install_backend
     assert "terminate_active_child()" in install_backend
     assert 'run_child "$UV_PATH" venv --relocatable --python "$PYTHON_PATH" "$STAGING"' in install_backend
-    assert 'run_child "$UV_PATH" pip install --python "$STAGING/bin/python" -r "$REQUIREMENTS" "$WHEEL"' in install_backend
+    assert (
+        'run_child "$UV_PATH" pip install --no-config --python "$STAGING/bin/python" '
+        '--require-hashes -r "$REQUIREMENTS"'
+    ) in install_backend
+    assert (
+        'run_child "$UV_PATH" pip install --no-config --python "$STAGING/bin/python" '
+        '--no-deps "$WHEEL"'
+    ) in install_backend
     assert install_backend.index("trap cleanup_staging_and_lock EXIT") < install_backend.index("CRITICAL_SWAP=1")
     assert 'rollback_note()' in install_backend
     assert 'rollback warning' in install_backend

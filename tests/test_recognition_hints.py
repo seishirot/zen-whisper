@@ -48,7 +48,7 @@ def test_mlx_whisper_receives_profile_terms_as_initial_prompt(monkeypatch):
         types.SimpleNamespace(transcribe=fake_transcribe),
     )
     backend = MlxWhisperBackend()
-    backend._mlx_model_repo = "test-repo"
+    backend._mlx_model_path = "test-repo"
 
     text = backend.transcribe(
         np.zeros(1600, dtype=np.float32),
@@ -74,7 +74,7 @@ def test_mlx_whisper_receives_structured_whisper_settings(monkeypatch):
         types.SimpleNamespace(transcribe=fake_transcribe),
     )
     backend = MlxWhisperBackend()
-    backend._mlx_model_repo = "test-repo"
+    backend._mlx_model_path = "test-repo"
     cfg = RecognitionConfig(
         beam_size=3,
         no_speech_threshold=0.75,
@@ -98,3 +98,68 @@ def test_mlx_whisper_receives_structured_whisper_settings(monkeypatch):
         "hallucination_silence_threshold": 1.25,
         "word_timestamps": True,
     }
+
+
+def test_faster_whisper_loads_only_the_verified_local_snapshot(monkeypatch):
+    constructor_calls: list[tuple[str, dict[str, object]]] = []
+    model = object()
+
+    def fake_whisper_model(path: str, **kwargs: object) -> object:
+        constructor_calls.append((path, kwargs))
+        return model
+
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        types.SimpleNamespace(WhisperModel=fake_whisper_model),
+    )
+    monkeypatch.setattr(
+        "src.asr.whisper.download_verified_snapshot",
+        lambda _source: "/verified/faster-whisper",
+    )
+    backend = FasterWhisperBackend("cpu")
+
+    backend.load(RecognitionConfig(model_size="large-v3-turbo"))
+
+    assert backend._model is model
+    assert constructor_calls == [
+        (
+            "/verified/faster-whisper",
+            {
+                "local_files_only": True,
+                "device": "cpu",
+                "compute_type": "int8",
+                "cpu_threads": 4,
+                "num_workers": 1,
+            },
+        )
+    ]
+
+
+def test_mlx_whisper_loads_only_the_verified_local_snapshot(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_transcribe(audio: object, **kwargs: object) -> dict[str, str]:
+        calls.append(dict(kwargs))
+        return {"text": "warm"}
+
+    monkeypatch.setitem(
+        sys.modules,
+        "mlx_whisper",
+        types.SimpleNamespace(transcribe=fake_transcribe),
+    )
+    monkeypatch.setattr(
+        "src.asr.whisper.download_verified_snapshot",
+        lambda _source: "/verified/mlx-whisper",
+    )
+    backend = MlxWhisperBackend()
+
+    backend.load(RecognitionConfig(model_size="large-v3-turbo"))
+
+    assert backend._mlx_model_path == "/verified/mlx-whisper"
+    assert calls == [
+        {
+            "path_or_hf_repo": "/verified/mlx-whisper",
+            "language": "en",
+        }
+    ]

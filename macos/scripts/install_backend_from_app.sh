@@ -403,7 +403,8 @@ trap 'handle_signal INT' INT
 trap 'handle_signal TERM' TERM
 
 run_child "$UV_PATH" venv --relocatable --python "$PYTHON_PATH" "$STAGING"
-run_child "$UV_PATH" pip install --python "$STAGING/bin/python" -r "$REQUIREMENTS" "$WHEEL"
+run_child "$UV_PATH" pip install --no-config --python "$STAGING/bin/python" --require-hashes -r "$REQUIREMENTS"
+run_child "$UV_PATH" pip install --no-config --python "$STAGING/bin/python" --no-deps "$WHEEL"
 
 PROBE_JSON="$(PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1 "$STAGING/bin/python" -P -m zen_whisper_mac_backend.probe runtime-probe)"
 PROBE_ARCH="$(PYTHONDONTWRITEBYTECODE=1 PYTHONSAFEPATH=1 "$STAGING/bin/python" -P - "$PROBE_JSON" python_arch <<'PY'

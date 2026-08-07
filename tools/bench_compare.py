@@ -4,7 +4,7 @@
 精度は SAPI 合成音声の入力テキストを正解 (reference) として計測する。
 
 使い方（リポジトリルートから）:
-    mise exec -- uv run --extra qwen3-cuda python tools\\bench_compare.py
+    mise exec -- uv run --locked --extra qwen3-cuda python tools\\bench_compare.py
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ from src.config import (  # noqa: E402
     QWEN3_MODEL_LARGE,
     QWEN3_MODEL_SMALL,
     RecognitionConfig,
+)
+from src.model_provenance import (  # noqa: E402
+    download_verified_snapshot,
+    model_source,
 )
 
 WAV = _HERE / "samples" / "bench_sample_ja.wav"
@@ -83,10 +87,11 @@ def _cleanup(model) -> None:
     torch.cuda.empty_cache()
 
 
-def bench_qwen(label: str, model_name: str, audio: np.ndarray) -> None:
+def bench_qwen(label: str, model_name: str, audio: np.ndarray) -> bool:
     print(f"\n{'='*70}\n[{label}]  ({model_name})\n{'='*70}")
     dur = len(audio) / 16000
     backend = None
+    succeeded = False
     try:
         cfg = RecognitionConfig(
             engine=ENGINE_QWEN3_ASR,
@@ -118,6 +123,7 @@ def bench_qwen(label: str, model_name: str, audio: np.ndarray) -> None:
         )
         print(f"  CER={cer(text, REFERENCE):.1%}  chars={len(text)}")
         print(f"  text: {text}")
+        succeeded = True
     except Exception:
         print("  !!! FAILED:")
         traceback.print_exc()
@@ -125,17 +131,27 @@ def bench_qwen(label: str, model_name: str, audio: np.ndarray) -> None:
         if backend is not None:
             backend.unload()
         _cleanup(backend)
+    return succeeded
 
 
-def bench_faster_whisper(audio: np.ndarray) -> None:
+def bench_faster_whisper(audio: np.ndarray) -> bool:
     print(f"\n{'='*70}\n[faster-whisper large-v3-turbo]  (float16, beam=5, vad_filter)\n{'='*70}")
     dur = len(audio) / 16000
     model = None
+    succeeded = False
     try:
         from faster_whisper import WhisperModel
 
         t0 = time.perf_counter()
-        model = WhisperModel("large-v3-turbo", device="cuda", compute_type="float16")
+        model_path = download_verified_snapshot(
+            model_source("faster_whisper", "large-v3-turbo")
+        )
+        model = WhisperModel(
+            model_path,
+            device="cuda",
+            compute_type="float16",
+            local_files_only=True,
+        )
         print(f"  load: {time.perf_counter()-t0:.1f}s")
 
         def run() -> str:
@@ -156,11 +172,13 @@ def bench_faster_whisper(audio: np.ndarray) -> None:
               f"proc(min)={arr.min():.2f}s  audio={dur:.1f}s")
         print(f"  CER={cer(text, REFERENCE):.1%}  chars={len(text)}")
         print(f"  text: {text}")
+        succeeded = True
     except Exception:
         print("  !!! FAILED:")
         traceback.print_exc()
     finally:
         _cleanup(model)
+    return succeeded
 
 
 def main() -> None:
@@ -170,9 +188,13 @@ def main() -> None:
     print(f"audio: {WAV.name}  {len(audio)/16000:.1f}s")
     print(f"reference ({len(_normalize(REFERENCE))} chars): {REFERENCE}")
 
-    bench_faster_whisper(audio)
-    bench_qwen("Qwen3-ASR 1.7B", QWEN3_MODEL_LARGE, audio)
-    bench_qwen("Qwen3-ASR 0.6B", QWEN3_MODEL_SMALL, audio)
+    outcomes = [
+        bench_faster_whisper(audio),
+        bench_qwen("Qwen3-ASR 1.7B", QWEN3_MODEL_LARGE, audio),
+        bench_qwen("Qwen3-ASR 0.6B", QWEN3_MODEL_SMALL, audio),
+    ]
+    if not all(outcomes):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

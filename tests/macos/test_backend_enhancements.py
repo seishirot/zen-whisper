@@ -18,6 +18,7 @@ BACKEND_SRC = REPO_ROOT / "macos/backend/src"
 sys.path.insert(0, str(BACKEND_SRC))
 
 import zen_whisper_mac_backend.enhancements as enhancements_module  # noqa: E402
+import zen_whisper_mac_backend.adapters as adapters_module  # noqa: E402
 import zen_whisper_mac_backend.service as service_module  # noqa: E402
 from zen_whisper_mac_backend.adapters import (  # noqa: E402
     DummyAdapter,
@@ -39,6 +40,15 @@ from zen_whisper_mac_backend.service import (  # noqa: E402
     BackendService,
     ProgressDeliveryError,
 )
+
+
+@pytest.fixture(autouse=True)
+def _use_verified_test_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        adapters_module,
+        "_pinned_model_snapshot",
+        lambda _engine_id, model_id: model_id,
+    )
 
 
 def _profile_payload() -> dict[str, object]:
@@ -995,6 +1005,7 @@ def test_hinted_adapter_failure_never_logs_profile_contents(
     audio = _audio_file(tmp_path)
     adapter = MlxWhisperAdapter()
     adapter._loaded_model = "mlx-community/whisper-large-v3-turbo"  # noqa: SLF001
+    adapter._loaded_model_path = "verified-model"  # noqa: SLF001
     service = BackendService(adapters={"mlx-whisper": adapter})
     request = _transcribe_request(audio)
     request["profile"] = _profile_payload()

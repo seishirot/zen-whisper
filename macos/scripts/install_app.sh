@@ -207,7 +207,8 @@ fi
 /bin/rm -rf "$BUILD_DIR"
 /bin/mkdir -p "$BUILD_DIR/backend-dist" "$APP_STAGING/Contents/MacOS" "$APP_STAGING/Contents/Resources/backend"
 
-"$MISE_PATH" exec -- uv build --project "$BACKEND_DIR" --wheel --out-dir "$BUILD_DIR/backend-dist"
+"$MISE_PATH" exec -- uv build --project "$BACKEND_DIR" --wheel --out-dir "$BUILD_DIR/backend-dist" \
+  --build-constraint "$REPO_ROOT/security/build-constraints.txt" --require-hashes
 "$MISE_PATH" exec -- uv export --project "$BACKEND_DIR" --locked --extra mlx --no-dev --no-emit-project --format requirements.txt --output-file "$BUILD_DIR/requirements-mlx.txt"
 read_backend_constant() {
   local name="$1"

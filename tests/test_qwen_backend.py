@@ -24,6 +24,14 @@ from src.config import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _use_verified_test_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "src.asr.qwen.download_verified_snapshot",
+        lambda _source: "/verified/qwen3-asr",
+    )
+
+
 class _FakeInputs(dict):
     def __init__(self) -> None:
         super().__init__(input_ids=np.asarray([[1, 2, 3]], dtype=np.int64))
@@ -513,11 +521,21 @@ def test_load_uses_native_auto_classes_and_wires_compile_to_generation(
 
     backend.load(cfg)
 
-    assert ProcessorFactory.calls == [((QWEN3_MODEL_LARGE,), {})]
+    assert ProcessorFactory.calls == [
+        (
+            ("/verified/qwen3-asr",),
+            {"local_files_only": True, "trust_remote_code": False},
+        )
+    ]
     assert ModelFactory.calls == [
         (
-            (QWEN3_MODEL_LARGE,),
-            {"dtype": "bf16", "attn_implementation": "sdpa"},
+            ("/verified/qwen3-asr",),
+            {
+                "dtype": "bf16",
+                "attn_implementation": "sdpa",
+                "local_files_only": True,
+                "trust_remote_code": False,
+            },
         )
     ]
     assert loaded_model.to_calls == ["cuda"]

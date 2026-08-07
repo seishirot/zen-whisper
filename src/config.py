@@ -230,8 +230,8 @@ class AppConfig:
                 f"device '{self.recognition.device}' は無効です"
                 f"（有効値: {', '.join(VALID_DEVICES)}）"
             )
-        if self.recognition.reazon_language not in ("ja", "ja-en"):
-            warnings.append("reazon_language は 'ja' または 'ja-en' を指定してください")
+        if self.recognition.reazon_language != "ja":
+            warnings.append("reazon_language は承認済みの 'ja' を指定してください")
         if self.recognition.reazon_precision not in ("fp32", "int8", "int8-fp32"):
             warnings.append(
                 "reazon_precision は 'fp32', 'int8', 'int8-fp32' のいずれかを指定してください"
@@ -395,6 +395,15 @@ def _normalize_optional_recognition_values(cfg: AppConfig) -> None:
         cfg.recognition.hallucination_silence_threshold = None
 
 
+def _normalize_legacy_reazon_language(cfg: AppConfig) -> None:
+    """Migrate the formerly exposed bilingual model to the approved snapshot."""
+    if cfg.recognition.reazon_language == "ja-en":
+        logger.warning(
+            "reazon_language='ja-en' は承認済みsnapshotがないため、'ja' として扱います"
+        )
+        cfg.recognition.reazon_language = "ja"
+
+
 def _normalize_enhancement(cfg: AppConfig) -> None:
     """Keep malformed enhancement selections from breaking the tray at startup."""
     if not isinstance(cfg.enhancement.profile, str):
@@ -448,6 +457,7 @@ def load_config(path: Path | None = None) -> AppConfig:
     _normalize_legacy_auto(cfg)
     _normalize_recording_sample_rate(cfg)
     _normalize_optional_recognition_values(cfg)
+    _normalize_legacy_reazon_language(cfg)
     _normalize_enhancement(cfg)
 
     # バリデーション

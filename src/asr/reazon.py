@@ -14,10 +14,70 @@ import soundfile as sf
 
 from src.asr.base import RecognitionHints, load_with_timeout
 from src.config import ASR_SAMPLE_RATE, RecognitionConfig
+from src.model_provenance import download_verified_snapshot, model_source
 
 logger = logging.getLogger(__name__)
 
 _reazon_k2_available: bool | None = None
+
+
+def _reazon_model_files(precision: str) -> dict[str, str]:
+    base = "epoch-99-avg-1"
+    if precision == "fp32":
+        return {
+            "tokens": "tokens.txt",
+            "encoder": f"encoder-{base}.onnx",
+            "decoder": f"decoder-{base}.onnx",
+            "joiner": f"joiner-{base}.onnx",
+        }
+    if precision == "int8":
+        return {
+            "tokens": "tokens.txt",
+            "encoder": f"encoder-{base}.int8.onnx",
+            "decoder": f"decoder-{base}.int8.onnx",
+            "joiner": f"joiner-{base}.int8.onnx",
+        }
+    if precision == "int8-fp32":
+        return {
+            "tokens": "tokens.txt",
+            "encoder": f"encoder-{base}.int8.onnx",
+            "decoder": f"decoder-{base}.onnx",
+            "joiner": f"joiner-{base}.int8.onnx",
+        }
+    raise ValueError(f"Unknown precision: {precision}")
+
+
+def _load_pinned_reazon_model(
+    *,
+    device: str,
+    precision: str,
+    language: str,
+) -> object:
+    """Load the public Reazon K2 model from its reviewed immutable snapshot."""
+    if language != "ja":
+        raise ValueError(f"No approved Reazon snapshot for language: {language}")
+    source = model_source("reazon_k2", language)
+    files = _reazon_model_files(precision)
+    snapshot = Path(
+        download_verified_snapshot(
+            source,
+            required_files=tuple(files.values()),
+        )
+    )
+
+    import sherpa_onnx
+
+    return sherpa_onnx.OfflineRecognizer.from_transducer(
+        tokens=str(snapshot / files["tokens"]),
+        encoder=str(snapshot / files["encoder"]),
+        decoder=str(snapshot / files["decoder"]),
+        joiner=str(snapshot / files["joiner"]),
+        num_threads=1,
+        sample_rate=ASR_SAMPLE_RATE,
+        feature_dim=80,
+        decoding_method="greedy_search",
+        provider=device,
+    )
 
 
 def is_reazon_k2_available() -> bool:
@@ -81,10 +141,10 @@ class ReazonK2Backend:
         cfg: RecognitionConfig,
         on_timeout: Callable[[str], None] | None = None,
     ) -> None:
-        from reazonspeech.k2.asr import audio_from_path, load_model, transcribe
+        from reazonspeech.k2.asr import audio_from_path, transcribe
 
         model = load_with_timeout(
-            lambda: self._load_reazon_model(load_model, cfg),
+            lambda: self._load_reazon_model(_load_pinned_reazon_model, cfg),
             cfg.model_load_timeout_sec,
             "ReazonSpeech K2",
             on_timeout,
@@ -101,25 +161,11 @@ class ReazonK2Backend:
         )
 
     def _load_reazon_model(self, load_model: Callable[..., Any], cfg: RecognitionConfig):
-        try:
-            return load_model(
-                device="cpu",
-                precision=cfg.reazon_precision,
-                language=cfg.reazon_language,
-            )
-        except Exception:
-            if cfg.reazon_language == "ja":
-                raise
-            logger.warning(
-                "ReazonSpeech K2 の language=%s ロードに失敗したため ja にフォールバックします",
-                cfg.reazon_language,
-                exc_info=True,
-            )
-            return load_model(
-                device="cpu",
-                precision=cfg.reazon_precision,
-                language="ja",
-            )
+        return load_model(
+            device="cpu",
+            precision=cfg.reazon_precision,
+            language=cfg.reazon_language,
+        )
 
     def transcribe(
         self,

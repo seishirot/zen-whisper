@@ -1,7 +1,7 @@
 """Qwen3-ASR native Transformers backend benchmark.
 
 Run from the repository root:
-    mise exec -- uv run --extra qwen3-cuda python tools\\bench_qwen.py [sdpa|eager|compile|fa2|all]
+    mise exec -- uv run --locked --extra qwen3-cuda python tools\\bench_qwen.py [sdpa|eager|compile|fa2|all]
 """
 
 from __future__ import annotations
@@ -59,10 +59,11 @@ def bench(
     attn: str,
     compile_enabled: bool,
     audio: np.ndarray,
-) -> None:
+) -> bool:
     print(f"\n{'=' * 70}\n[{label}]\n{'=' * 70}")
     duration = len(audio) / 16000
     backend = None
+    succeeded = False
     try:
         torch.cuda.empty_cache()
         torch.cuda.reset_peak_memory_stats()
@@ -98,6 +99,7 @@ def bench(
             f"  audio={duration:.1f}s  chars={len(text)}  "
             f"peak_vram={torch.cuda.max_memory_allocated() / (1024**2):.0f} MiB"
         )
+        succeeded = True
     except Exception:
         print("  !!! FAILED:")
         traceback.print_exc()
@@ -107,6 +109,7 @@ def bench(
         del backend
         gc.collect()
         torch.cuda.empty_cache()
+    return succeeded
 
 
 def main() -> None:
@@ -131,11 +134,14 @@ def main() -> None:
         ),
     }
     order = ["sdpa", "compile"] if selected == "all" else selected.split(",")
+    outcomes: list[bool] = []
     for key in order:
         if key not in builders:
             raise SystemExit(f"unknown mode: {key}")
         label, attn, compile_enabled = builders[key]
-        bench(label, attn, compile_enabled, audio)
+        outcomes.append(bench(label, attn, compile_enabled, audio))
+    if not all(outcomes):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

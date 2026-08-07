@@ -29,29 +29,32 @@ Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe
 Install `uv`:
 
 ```bash
-powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+winget install --id=astral-sh.uv -e --version 0.11.32
 ```
+
+This avoids piping downloaded text into PowerShell. The project rejects other
+uv versions so dependency and audit behavior stays reproducible.
 
 Clone and install dependencies:
 
 ```bash
 git clone https://github.com/seishirot/zen-whisper.git
 cd zen-whisper
-uv sync
+uv sync --locked
 ```
 
-`uv sync` creates the local `.venv` environment and the launcher used by
-`start.vbs` on Windows.
+`uv sync --locked` requires the checked-out lockfile to exist and be up to date
+with `pyproject.toml` without changing it, checks known-malware advisories before
+installation, and creates the local `.venv` environment used by `start.vbs` on
+Windows.
 
 ### macOS Native App
 
-Install `mise` with an official method for your environment, then use the
-repo-managed Python/uv toolchain. If you use the shell installer, inspect it
-before running it.
+Install `mise` through a package manager that verifies downloaded artifacts,
+then use the repo-managed Python/uv toolchain.
 
 ```bash
-# Example only; review the installer first.
-curl https://mise.run | sh
+brew install mise
 git clone https://github.com/seishirot/zen-whisper.git
 cd zen-whisper
 mise trust .mise.toml
@@ -67,36 +70,56 @@ does not list the identity as valid, either use an existing identity with
 `ZEN_WHISPER_TRUST_LOCAL_CERT=1` after reviewing the local Code Signing trust
 change.
 
-On Windows, plain `uv sync` does not install PyTorch. The default recording VAD
+On Windows, plain `uv sync --locked` does not install PyTorch. The default recording VAD
 uses a bundled Silero ONNX model through `sherpa-onnx`, so Windows CPU-only
 installs avoid Torch DLL initialization issues.
 
 For Windows NVIDIA CUDA support with faster-whisper:
 
 ```bash
-uv sync --extra cuda
+uv sync --locked --extra cuda
 ```
 
 For the Windows fast CPU backend powered by ReazonSpeech K2:
 
 ```bash
-uv sync --extra reazon
+uv sync --locked --extra reazon
 ```
 
 This extra pins the tested ReazonSpeech K2 commit and a Windows-compatible
 Sherpa ONNX ASR path. The first Reazon run downloads the ASR model from Hugging
-Face.
+Face at a reviewed full commit and verifies the selected ONNX files against the
+repository's SHA-256 manifest before loading them.
+
+This release approves only the Japanese (`ja`) Reazon snapshot. The settings UI
+rejects new `ja-en` selections; an existing `reazon_language = "ja-en"` value is
+migrated to pinned `ja` at startup with a warning instead of loading an
+unapproved remote snapshot.
 
 For Windows-native, non-streaming Qwen3-ASR:
 
 ```bash
-uv sync --extra qwen3       # CPU PyTorch for settings/config experiments
-uv sync --extra qwen3-cuda  # CUDA 12.6 PyTorch for the Windows tray path
+uv sync --locked --extra qwen3       # CPU PyTorch for settings/config experiments
+uv sync --locked --extra qwen3-cuda  # CUDA 12.6 PyTorch for the Windows tray path
 ```
 
 This installs Transformers 5.14 and uses the official `-hf` checkpoints.
 Recording is transcribed after it stops; WSL, Docker, and vLLM are not required.
-The first run downloads the selected model from Hugging Face.
+The first run downloads the selected model from a reviewed full commit and
+verifies its weights against the repository's SHA-256 manifest. Built-in
+Whisper, Reazon, and Qwen model IDs are immutable in the same way on Windows and
+macOS, and remote-code loading is disabled for the Transformers path.
+
+For advanced Python configuration, `model_size` and `qwen3_model` also accept an
+existing local model directory. A custom Hugging Face repository must include a
+full lowercase hexadecimal commit as `owner/model@40-character-commit`; a branch,
+tag, bare repository ID, or unknown short model name is rejected instead of
+resolving mutable content. Custom local directories and remote repositories are
+explicitly user-managed. Remote custom repositories are revision-pinned, but
+their artifacts are not compared with ZenWhisper's built-in SHA-256 manifest.
+If a local directory name collides with a built-in alias such as `tiny`, use an
+explicit path such as `./tiny` (or an absolute path); reviewed built-ins take
+precedence over ambiguous relative names.
 
 ### Python CLI Config File
 
@@ -114,9 +137,9 @@ setups.
 
 **Windows** (no console window):
 - Double-click `start.vbs` (uses `.venv\Scripts\zen-whisper.exe` after
-  `uv sync`, with `uv run zen-whisper` as a fallback), or:
+  `uv sync --locked`, with `uv run --locked zen-whisper` as a fallback), or:
   ```bash
-  uv run zen-whisper
+  uv run --locked zen-whisper
   ```
 
 **macOS**:
@@ -134,10 +157,10 @@ for development and does not auto-copy or auto-paste on macOS.
 **Development** (with console output):
 ```bash
 # Windows / Python CLI
-uv run python src/main.py
+uv run --locked python src/main.py
 
 # macOS development
-mise exec -- uv run python src/main.py
+mise exec -- uv run --locked python src/main.py
 ```
 
 ### Basic workflow
@@ -531,10 +554,10 @@ To use custom start/stop sounds instead of generated tones:
 
 ### Windows
 
-- **CPU-only install**: plain `uv sync` does not install PyTorch, Transformers, or CUDA DLL packages. Select `Whisper > CPU (int8)` or set `device = "cpu"` for faster-whisper CPU, or install `uv sync --extra reazon` for the Torch-free Reazon K2 backend. Qwen dependencies stay inside the `qwen3` extras.
+- **CPU-only install**: plain `uv sync --locked` does not install PyTorch, Transformers, or CUDA DLL packages. Select `Whisper > CPU (int8)` or set `device = "cpu"` for faster-whisper CPU, or install `uv sync --locked --extra reazon` for the Torch-free Reazon K2 backend. Qwen dependencies stay inside the `qwen3` extras.
 - **Torch DLL errors (`WinError 1114`)**: plain `uv sync --locked` should remove PyTorch from the base environment. If you install `--extra qwen3` or `--extra qwen3-cuda`, a broken PyTorch install can also break faster-whisper because CTranslate2 imports PyTorch when it is present.
-- **CUDA errors**: use `uv sync --extra cuda` for faster-whisper CUDA or `uv sync --extra qwen3-cuda` for Qwen3-ASR CUDA. Ensure the NVIDIA driver is current and confirm `torch.cuda.is_available()` for the Qwen path.
-- **Reazon K2 is disabled**: run `uv sync --extra reazon`, then restart ZenWhisper. The Windows/Python tray menu disables Reazon when the optional extra is unavailable.
+- **CUDA errors**: use `uv sync --locked --extra cuda` for faster-whisper CUDA or `uv sync --locked --extra qwen3-cuda` for Qwen3-ASR CUDA. Ensure the NVIDIA driver is current and confirm `torch.cuda.is_available()` for the Qwen path.
+- **Reazon K2 is disabled**: run `uv sync --locked --extra reazon`, then restart ZenWhisper. The Windows/Python tray menu disables Reazon when the optional extra is unavailable.
 - **ONNX Runtime API mismatch with Reazon**: use the locked dependencies from this repo. In particular, do not upgrade `sherpa-onnx` independently unless the Reazon path is re-tested on Windows.
 - **No audio input**: Check that your microphone is set as the default recording device, or select it from the tray `マイク` menu.
 - **NVIDIA Broadcast is not being used**: Select `マイク (NVIDIA Broadcast)` from the Windows/Python tray menu, then check the next recording start line in `zen-whisper.log` for the actual device name and host API.

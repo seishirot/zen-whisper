@@ -6,18 +6,25 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
 
       - name: Set up Python ${{ matrix.python-version }}
         run: uv python install ${{ matrix.python-version }}
@@ -28,34 +35,186 @@ jobs:
           sudo apt-get install --yes libportaudio2
 
       - name: Install dependencies
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
 
       - name: Run tests
-        run: uv run pytest tests/ -v
+        run: uv run --locked pytest tests/ -v
 
   macos-swift-test:
     runs-on: macos-14
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Run Swift tests
         run: swift test --package-path macos/ZenWhisper
+
+  macos-python-backend-test:
+    runs-on: macos-14
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Sync locked macOS backend with MLX and test dependencies
+        run: uv sync --project macos/backend --locked --extra mlx --extra dev
+
+      - name: Run macOS backend tests
+        run: >-
+          uv run --project macos/backend --locked --extra mlx --extra dev
+          pytest tests/macos -v
+
+      - name: Export and install the hashed macOS runtime closure
+        shell: bash
+        run: |
+          uv export --project macos/backend --locked --extra mlx --no-dev \
+            --no-emit-project --format requirements.txt \
+            --output-file "$RUNNER_TEMP/requirements-mlx.txt"
+          uv venv --python 3.12 "$RUNNER_TEMP/backend-venv"
+          uv pip install --no-config \
+            --python "$RUNNER_TEMP/backend-venv/bin/python" \
+            --require-hashes -r "$RUNNER_TEMP/requirements-mlx.txt"
+          uv build --wheel --project macos/backend \
+            --out-dir "$RUNNER_TEMP/dist" \
+            --build-constraint security/build-constraints.txt --require-hashes
+          wheel="$(find "$RUNNER_TEMP/dist" -maxdepth 1 -name '*.whl' -print -quit)"
+          test -n "$wheel"
+          unzip -Z1 "$wheel" | grep -Fx \
+            'zen_whisper_mac_backend/resources/model_registry.json'
+          uv pip install --no-config \
+            --python "$RUNNER_TEMP/backend-venv/bin/python" --no-deps "$wheel"
+          "$RUNNER_TEMP/backend-venv/bin/python" -c \
+            'import mlx_audio, mlx_whisper, zen_whisper_mac_backend'
 
   windows-postprocessor-test:
     runs-on: windows-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v4
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
 
       - name: Set up Python 3.12
         run: uv python install 3.12
 
+      - name: Install locked dependencies
+        run: uv sync --locked --group dev
+
       - name: Run Windows postprocessor tests
+        run: uv run --locked python -m pytest tests/test_postprocessing.py -q
+
+  distribution-build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Build root wheel with hashed build requirements
         run: >-
-          uv run --no-project --with pytest --with tomli-w --with numpy
-          --with pywin32
-          python -m pytest tests/test_postprocessing.py -q
+          uv build --wheel --project . --out-dir dist/root
+          --build-constraint security/build-constraints.txt --require-hashes
+
+      - name: Build macOS backend wheel with hashed build requirements
+        run: >-
+          uv build --wheel --project macos/backend --out-dir dist/macos-backend
+          --build-constraint security/build-constraints.txt --require-hashes
+
+      - name: Verify security manifests are packaged
+        run: |
+          unzip -Z1 dist/root/*.whl | grep -Fx 'src/model_manifest.json'
+          unzip -Z1 dist/macos-backend/*.whl | grep -Fx 'zen_whisper_mac_backend/resources/model_registry.json'
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: root-windows-py311
+            project: .
+            python-version: "3.11"
+            python-platform: windows
+          - name: root-windows-py312
+            project: .
+            python-version: "3.12"
+            python-platform: windows
+          - name: root-windows-py313
+            project: .
+            python-version: "3.13"
+            python-platform: windows
+          - name: root-macos-py311
+            project: .
+            python-version: "3.11"
+            python-platform: macos
+          - name: root-macos-py312
+            project: .
+            python-version: "3.12"
+            python-platform: macos
+          - name: root-macos-py313
+            project: .
+            python-version: "3.13"
+            python-platform: macos
+          - name: macos-backend
+            project: macos/backend
+            python-version: "3.12"
+            python-platform: macos
+          - name: build-tools
+            project: security/build-audit
+            python-version: "3.12"
+            python-platform: linux
+
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+
+      - name: Verify lockfile
+        run: uv lock --check --project "${{ matrix.project }}"
+
+      - name: Audit locked dependency graph
+        run: >-
+          uv audit --project "${{ matrix.project }}" --locked
+          --python-version "${{ matrix.python-version }}"
+          --python-platform "${{ matrix.python-platform }}"
+          --output-format json
+          > "audit-${{ matrix.name }}.json"
+
+      - name: Upload audit evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dependency-audit-${{ matrix.name }}
+          path: audit-${{ matrix.name }}.json
+          if-no-files-found: error
+          retention-days: 30

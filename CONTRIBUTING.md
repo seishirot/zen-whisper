@@ -10,7 +10,7 @@ git clone https://github.com/seishirot/zen-whisper.git
 cd zen-whisper
 
 # Install dependencies (including dev)
-uv sync --group dev
+uv sync --locked --group dev
 
 # Create your config
 cp config.example.toml config.toml
@@ -20,16 +20,16 @@ cp config.example.toml config.toml
 
 ```bash
 # Development mode (with console output)
-uv run python src/main.py
+uv run --locked python src/main.py
 
 # Production mode (no console)
-uv run zen-whisper
+uv run --locked zen-whisper
 ```
 
 ## Running Tests
 
 ```bash
-uv run pytest tests/
+uv run --locked pytest tests/
 ```
 
 ## Project Structure
@@ -51,7 +51,7 @@ uv run pytest tests/
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/my-feature`)
 3. Make your changes
-4. Run the tests (`uv run pytest tests/`)
+4. Run the tests (`uv run --locked pytest tests/`)
 5. Commit your changes with a clear message
 6. Push to your fork and open a Pull Request
 

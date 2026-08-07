@@ -14,7 +14,10 @@ switch_lang = "shift+alt+space"
 language = "ja"
 # Engine: "whisper", "reazon-k2", or "qwen3-asr"
 engine = "whisper"
-# Whisper model size (e.g., "large-v3-turbo", "medium", "small", "base", "tiny")
+# Whisper model size (e.g., "large-v3-turbo", "medium", "small", "base", "tiny").
+# Built-ins resolve to reviewed full commits. A custom model must be an existing
+# local directory or owner/model@40-lowercase-hex-commit; mutable remote IDs fail.
+# Custom sources are user-managed and do not use ZenWhisper's artifact hashes.
 model_size = "large-v3-turbo"
 # Compute type ("float16", "int8", etc.)
 compute_type = "float16"
@@ -24,17 +27,20 @@ cpu_threads = 4
 # Warn after this many seconds. Native model loads cannot be cancelled safely,
 # so ZenWhisper keeps waiting and serializes later model changes.
 model_load_timeout_sec = 300
-# ReazonSpeech K2 fast mode (requires: uv sync --extra reazon)
+# ReazonSpeech K2 fast mode (requires: uv sync --locked --extra reazon)
+# Only "ja" has an approved snapshot. Legacy "ja-en" is migrated to pinned "ja".
 reazon_language = "ja"
 reazon_precision = "int8-fp32"
 reazon_chunk_sec = 25.0
 reazon_trailing_silence_sec = 0.5
-# Qwen3-ASR model name (tray path requires: uv sync --extra qwen3-cuda)
-# Use uv sync --extra qwen3 only for manual CPU config experiments with device = "cpu".
+# Qwen3-ASR model name (tray path requires: uv sync --locked --extra qwen3-cuda)
+# Use uv sync --locked --extra qwen3 only for manual CPU config experiments with device = "cpu".
 # Windows native Transformers 5.14 + CUDA で末尾が "-hf" のモデルを使用します。
 # 旧 qwen-asr 用の "-hf" なしモデルIDは自動変換せず、選び直しを要求します。
 # "Qwen/Qwen3-ASR-1.7B-hf" - 大規模・既定
 # "Qwen/Qwen3-ASR-0.6B-hf" - 軽量（速度は音声や出力長に依存）
+# A custom model follows the same user-managed local-directory or lowercase
+# owner/model@full-commit rule and does not use ZenWhisper's artifact hashes.
 # qwen3_model = "Qwen/Qwen3-ASR-1.7B-hf"
 # Max tokens to generate. 256 avoids truncation observed on a 72.5-second sample.
 # qwen3_max_new_tokens = 256
@@ -54,7 +60,7 @@ no_speech_threshold = 0.6
 condition_on_previous_text = false
 
 [recording]
-# Recording VAD uses a bundled Silero ONNX model through sherpa-onnx; Windows plain uv sync does not require PyTorch.
+# Recording VAD uses a bundled Silero ONNX model through sherpa-onnx; Windows plain uv sync --locked does not require PyTorch.
 # Microphone device name (empty string = system default).
 # You can also select this from the tray menu. If the selected mic disappears,
 # ZenWhisper keeps this value and falls back to the system default at runtime.

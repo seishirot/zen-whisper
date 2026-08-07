@@ -10,11 +10,11 @@ Only the selected model files are downloaded from Hugging Face. This avoids the
 upstream ``snapshot_download()`` behavior, which downloads every precision in
 the model repository.
 
-Examples:
-    mise exec -- uv run --no-sync python tools\bench_reazon_hotwords.py ^
-      --audio tools\bench_outputs\recording_16k.wav ^
-      --audio tools\samples\bench_sample_ja.wav ^
-      --term mise --term uv --term Python ^
+PowerShell example:
+    mise exec -- uv run --locked --no-sync python tools\bench_reazon_hotwords.py `
+      --audio tools\bench_outputs\recording_16k.wav `
+      --audio tools\samples\bench_sample_ja.wav `
+      --term mise --term uv --term Python `
       --term faster-whisper --term Whisper.cpp
 """
 
@@ -43,8 +43,7 @@ DEFAULT_OUTPUT = _HERE / "bench_outputs" / "reazon_hotwords.json"
 DEFAULT_SCORES = (0.5, 1.0, 1.5, 2.0)
 
 _MODEL_LAYOUT = {
-    "ja": ("reazon-research/reazonspeech-k2-v2", 99),
-    "ja-en": ("reazon-research/reazonspeech-k2-v2-ja-en", 35),
+    "ja": 99,
 }
 
 
@@ -85,7 +84,7 @@ class _PerStreamHotwordRecognizer:
 def model_filenames(language: str, precision: str) -> dict[str, str]:
     """Return the pinned ReazonSpeech v2 Hugging Face file layout."""
     try:
-        _repo_id, epoch = _MODEL_LAYOUT[language]
+        epoch = _MODEL_LAYOUT[language]
     except KeyError as exc:
         raise ValueError(f"unsupported language: {language}") from exc
 
@@ -116,14 +115,18 @@ def model_filenames(language: str, precision: str) -> dict[str, str]:
 
 def download_model_files(language: str, precision: str) -> ModelFiles:
     """Download only the files needed by one Reazon model configuration."""
-    from huggingface_hub import hf_hub_download
+    from src.model_provenance import download_verified_snapshot, model_source
 
-    repo_id, _epoch = _MODEL_LAYOUT[language]
     filenames = model_filenames(language, precision)
-    paths: dict[str, Path] = {}
-    for role, filename in filenames.items():
-        print(f"model file: {role} ({filename})")
-        paths[role] = Path(hf_hub_download(repo_id=repo_id, filename=filename))
+    snapshot = Path(
+        download_verified_snapshot(
+            model_source("reazon_k2", language),
+            required_files=tuple(filenames.values()),
+        )
+    )
+    paths: dict[str, Path] = {
+        role: snapshot / filename for role, filename in filenames.items()
+    }
     return ModelFiles(**paths)
 
 
