@@ -109,6 +109,18 @@ final class EnhancementCatalogStoreTests: XCTestCase {
         )
         XCTAssertFalse(claude.arguments.joined(separator: " ").contains("{{transcript}}"))
 
+        let kiro = try XCTUnwrap(snapshot.postprocessors["kiro"])
+        XCTAssertEqual(kiro.executable, "kiro-cli")
+        XCTAssertEqual(kiro.destination, .remote)
+        XCTAssertEqual(kiro.inputMode, .stdin)
+        XCTAssertEqual(kiro.adapter, .kiro)
+        XCTAssertEqual(kiro.model, "gpt-5.6-luna")
+        XCTAssertEqual(kiro.preflightExecutable, "")
+        XCTAssertEqual(kiro.preflightArguments, [])
+        XCTAssertTrue(kiro.arguments.contains("{{agent}}"))
+        XCTAssertTrue(kiro.arguments.contains("--no-interactive"))
+        XCTAssertTrue(kiro.arguments.contains("--effort"))
+
         let ollama = try XCTUnwrap(snapshot.postprocessors["ollama"])
         XCTAssertEqual(ollama.executable, "ollama")
         XCTAssertEqual(ollama.destination, .local)
@@ -129,8 +141,9 @@ final class EnhancementCatalogStoreTests: XCTestCase {
         XCTAssertFalse(ollama.arguments.contains("pull"))
 
         XCTAssertEqual(codex.systemPrompt, claude.systemPrompt)
+        XCTAssertEqual(codex.systemPrompt, kiro.systemPrompt)
         XCTAssertFalse(codex.systemPrompt.isEmpty)
-        for preset in [codex, claude] {
+        for preset in [codex, claude, kiro] {
             XCTAssertTrue(preset.systemPrompt.contains("音声認識結果の校正器"))
             XCTAssertTrue(preset.systemPrompt.contains("未信頼の参照データ"))
             XCTAssertTrue(
@@ -142,9 +155,10 @@ final class EnhancementCatalogStoreTests: XCTestCase {
             XCTAssertFalse(preset.promptTemplate.contains("音声認識結果の校正器"))
         }
         XCTAssertEqual(codex.promptTemplate, claude.promptTemplate)
+        XCTAssertEqual(codex.promptTemplate, kiro.promptTemplate)
         XCTAssertTrue(ollama.systemPrompt.isEmpty)
         XCTAssertTrue(ollama.promptTemplate.contains("音声認識結果の校正器"))
-        for preset in [codex, claude, ollama] {
+        for preset in [codex, claude, kiro, ollama] {
             XCTAssertTrue(
                 preset.promptTemplate.contains(
                     "<transcript_{{boundary}}>\n{{transcript}}\n"
@@ -449,6 +463,36 @@ final class EnhancementCatalogStoreTests: XCTestCase {
         XCTAssertTrue(snapshot.blockedPostprocessorIDs.contains("invalid"))
     }
 
+    func testGenericPresetNormalizesWhitespaceOnlyModel() throws {
+        let fixture = try Fixture()
+        defer { fixture.cleanup() }
+        try """
+        {
+          "version": 1,
+          "postprocessors": {
+            "custom": {
+              "display_name": "Custom",
+              "executable": "custom-cli",
+              "arguments": [],
+              "input_mode": "stdin",
+              "model": "   ",
+              "timeout_sec": 30,
+              "prompt_template": "{{transcript}}",
+              "environment": {}
+            }
+          }
+        }
+        """.write(
+            to: fixture.paths.postprocessorsFile,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let snapshot = fixture.store().load()
+
+        XCTAssertEqual(snapshot.postprocessors["custom"]?.model, "")
+    }
+
     func testEveryCommandTransportEditResetsInheritedLocalDestination() throws {
         let overrideFragments = [
             #""executable": "different-cli""#,
@@ -456,7 +500,8 @@ final class EnhancementCatalogStoreTests: XCTestCase {
             #""environment": {"TOKEN": "different"}"#,
             #""preflight_executable": "different-cli""#,
             #""preflight_arguments": ["--different"]"#,
-            #""input_mode": "argument", "arguments": ["{{prompt}}"]"#
+            #""input_mode": "argument", "arguments": ["{{prompt}}"]"#,
+            #""adapter": "kiro", "model": "gpt-5.6-luna", "executable": "kiro-cli", "arguments": ["chat", "--agent", "{{agent}}"], "system_prompt": "Dedicated""#
         ]
 
         for fragment in overrideFragments {

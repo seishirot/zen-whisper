@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -85,6 +86,8 @@ def _preset_payload(
     preflight_arguments: list[str] | None = None,
     preflight_failure_message: str = "",
     environment: dict[str, str] | None = None,
+    adapter: str = "generic",
+    model: str = "",
 ) -> dict[str, object]:
     payload: dict[str, object] = {
         "id": "test-cli",
@@ -100,6 +103,8 @@ def _preset_payload(
         "system_prompt": system_prompt,
         "prompt_template": prompt_template,
         "environment": environment or {},
+        "adapter": adapter,
+        "model": model,
     }
     if preflight_executable is not None:
         payload["preflight_executable"] = preflight_executable
@@ -307,6 +312,421 @@ def test_preset_defaults_destination_and_caps_timeout() -> None:
     assert selection.preset.data_destination == "unknown"
     with pytest.raises(EnhancementValidationError, match="at most 300"):
         _selection(timeout_sec=300.01)
+
+
+def test_kiro_adapter_requires_isolated_agent_contract(tmp_path: Path) -> None:
+    selection = _selection(
+        executable="kiro-cli",
+        arguments=[
+            "chat",
+            "--no-interactive",
+            "--agent",
+            "{{agent}}",
+            "Process stdin",
+        ],
+        adapter="kiro",
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+    )
+    preset = selection.preset
+    assert preset is not None
+    assert preset.adapter == "kiro"
+    assert preset.model == "gpt-5.6-luna"
+
+    agent_name, kiro_home = enhancements_module._prepare_kiro_agent(
+        str(tmp_path),
+        preset,
+    )
+    agent = json.loads(
+        (Path(kiro_home) / "agents" / f"{agent_name}.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert agent["prompt"] == "Dedicated"
+    assert agent["model"] == "gpt-5.6-luna"
+    assert agent["tools"] == []
+    assert agent["allowedTools"] == []
+    assert agent["mcpServers"] == {}
+    assert agent["includeMcpJson"] is False
+    settings = json.loads(
+        (Path(kiro_home) / "settings" / "cli.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert settings == {"chat.disableInheritingDefaultResources": True}
+
+
+def test_kiro_adapter_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("KIRO_API_KEY", raising=False)
+    selection = _selection(
+        executable="kiro-cli",
+        arguments=[
+            "chat",
+            "--no-interactive",
+            "--agent",
+            "{{agent}}",
+            "Process stdin",
+        ],
+        adapter="kiro",
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        preflight_failure_message="Kiro needs KIRO_API_KEY",
+    )
+
+    result = process_transcript("secret transcript", None, selection, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert result.warning_code == "KIRO_API_KEY_MISSING"
+    assert result.error == "Kiro needs KIRO_API_KEY"
+
+
+def test_kiro_success_path_checks_model_and_renders_agent_in_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invocations: list[tuple[list[str], dict[str, object]]] = []
+    inputs: list[bytes | None] = []
+    captured_home: Path | None = None
+
+    class FakeProcess:
+        returncode = 0
+        stdin = None
+        stdout = None
+        stderr = None
+
+        def __init__(self, argv: list[str]):
+            self.argv = argv
+
+        def wait(self, timeout: float) -> int:
+            assert self.argv[1:3] == ["agent", "validate"]
+            return 0
+
+    def fake_popen(argv: list[str], **kwargs: object) -> FakeProcess:
+        nonlocal captured_home
+        invocations.append((argv, kwargs))
+        environment = kwargs["env"]
+        assert isinstance(environment, dict)
+        captured_home = Path(str(environment["KIRO_HOME"]))
+        assert str(environment["KIRO_LOG_NO_COLOR"]) == "1"
+        assert str(environment["NO_COLOR"]) == "1"
+        assert str(environment["KIRO_API_KEY"]) == "test-key"
+        agent = json.loads(
+            (
+                captured_home
+                / "agents"
+                / "zen-whisper-postprocessor.json"
+            ).read_text(encoding="utf-8")
+        )
+        assert agent["prompt"] == "Dedicated"
+        assert agent["model"] == "gpt-5.6-luna"
+        return FakeProcess(argv)
+
+    def fake_communicate(
+        process: FakeProcess,
+        input_data: bytes | None,
+        timeout_sec: float,
+    ) -> enhancements_module._CommandResult:
+        inputs.append(input_data)
+        if "--list-models" in process.argv:
+            return enhancements_module._CommandResult(
+                status="completed",
+                returncode=0,
+                stdout=json.dumps(
+                    {"models": [{"id": "gpt-5.6-luna"}]}
+                ),
+                stdout_bytes=48,
+                stderr_bytes=0,
+            )
+        return enhancements_module._CommandResult(
+            status="completed",
+            returncode=0,
+            stdout="corrected",
+            stdout_bytes=9,
+            stderr_bytes=0,
+        )
+
+    monkeypatch.setattr(enhancements_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        enhancements_module,
+        "_communicate_bounded",
+        fake_communicate,
+    )
+    selection = _selection(
+        executable="kiro-cli",
+        arguments=[
+            "chat",
+            "--no-interactive",
+            "--agent",
+            "{{agent}}",
+            "Process stdin",
+        ],
+        adapter="kiro",
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        prompt_template="{{agent}}|{{transcript}}",
+        environment={
+            "KIRO_API_KEY": "test-key",
+            "KIRO_HOME": "must-not-win",
+            "KIRO_LOG_NO_COLOR": "0",
+            "NO_COLOR": "",
+        },
+    )
+
+    result = process_transcript("secret transcript", None, selection, "ja")
+
+    assert result.succeeded is True
+    assert result.text == "corrected"
+    assert len(invocations) == 3
+    assert invocations[0][0] == [
+        "kiro-cli",
+        "agent",
+        "validate",
+        str(
+            captured_home
+            / "agents"
+            / "zen-whisper-postprocessor.json"
+        ),
+    ]
+    assert invocations[1][0] == [
+        "kiro-cli",
+        "chat",
+        "--list-models",
+        "--format",
+        "json",
+    ]
+    assert invocations[2][0][0:5] == [
+        "kiro-cli",
+        "chat",
+        "--no-interactive",
+        "--agent",
+        "zen-whisper-postprocessor",
+    ]
+    assert inputs == [None, b"zen-whisper-postprocessor|secret transcript"]
+    assert captured_home is not None
+    assert not captured_home.exists()
+
+
+def test_kiro_fallback_warning_detection_is_specific() -> None:
+    assert enhancements_module._kiro_stderr_reports_fallback(
+        "Requested model unavailable; fallback to default model"
+    )
+    assert enhancements_module._kiro_stderr_reports_fallback(
+        "Agent invalid; fall back to default agent"
+    )
+    assert enhancements_module._kiro_stderr_reports_fallback(
+        "Agent invalid; using default agent"
+    )
+    assert not enhancements_module._kiro_stderr_reports_fallback(
+        "Warning: a newer Kiro CLI version is available"
+    )
+
+
+def test_kiro_runner_discards_output_when_cli_reports_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        returncode = 0
+        stdin = None
+        stdout = None
+        stderr = None
+
+    monkeypatch.setattr(
+        enhancements_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: FakeProcess(),
+    )
+    monkeypatch.setattr(
+        enhancements_module,
+        "_run_kiro_agent_validation",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        enhancements_module,
+        "_run_kiro_model_check",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        enhancements_module,
+        "_communicate_bounded",
+        lambda *args, **kwargs: enhancements_module._CommandResult(
+            status="completed",
+            returncode=0,
+            stdout="plausible but wrong output",
+            stdout_bytes=26,
+            stderr_bytes=43,
+            stderr="Custom agent not found; using default agent",
+        ),
+    )
+    selection = _selection(
+        executable="kiro-cli",
+        arguments=[
+            "chat",
+            "--no-interactive",
+            "--agent",
+            "{{agent}}",
+            "Process stdin",
+        ],
+        adapter="kiro",
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        environment={"KIRO_API_KEY": "test-key"},
+    )
+
+    result = process_transcript("secret transcript", None, selection, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert result.warning_code == "KIRO_AGENT_OR_MODEL_FALLBACK"
+
+
+def test_generic_runner_accepts_stderr_that_mentions_kiro_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        returncode = 0
+        stdin = None
+        stdout = None
+        stderr = None
+
+    monkeypatch.setattr(
+        enhancements_module.subprocess,
+        "Popen",
+        lambda *args, **kwargs: FakeProcess(),
+    )
+    monkeypatch.setattr(
+        enhancements_module,
+        "_communicate_bounded",
+        lambda *args, **kwargs: enhancements_module._CommandResult(
+            status="completed",
+            returncode=0,
+            stdout="corrected",
+            stdout_bytes=9,
+            stderr_bytes=43,
+            stderr="Custom agent not found; using default agent",
+        ),
+    )
+
+    result = process_transcript(
+        "raw",
+        None,
+        _selection(),
+        "ja",
+    )
+
+    assert result.succeeded is True
+    assert result.text == "corrected"
+
+
+def test_kiro_runner_rejects_unavailable_model_before_chat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launches: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 0
+        stdin = None
+        stdout = None
+        stderr = None
+
+        def __init__(self, argv: list[str]):
+            self.argv = argv
+
+        def wait(self, timeout: float) -> int:
+            return 0
+
+    def fake_popen(argv: list[str], **kwargs: object) -> FakeProcess:
+        launches.append(argv)
+        return FakeProcess(argv)
+
+    def fake_communicate(
+        process: FakeProcess,
+        input_data: bytes | None,
+        timeout_sec: float,
+    ) -> enhancements_module._CommandResult:
+        assert "--list-models" in process.argv
+        return enhancements_module._CommandResult(
+            status="completed",
+            returncode=0,
+            stdout=json.dumps({"models": [{"id": "other-model"}]}),
+            stdout_bytes=42,
+            stderr_bytes=0,
+        )
+
+    monkeypatch.setattr(enhancements_module.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(
+        enhancements_module,
+        "_communicate_bounded",
+        fake_communicate,
+    )
+    selection = _selection(
+        executable="kiro-cli",
+        arguments=[
+            "chat",
+            "--no-interactive",
+            "--agent",
+            "{{agent}}",
+            "Process stdin",
+        ],
+        adapter="kiro",
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        environment={"KIRO_API_KEY": "test-key"},
+    )
+
+    result = process_transcript("secret transcript", None, selection, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert result.warning_code == "KIRO_MODEL_UNAVAILABLE"
+    assert len(launches) == 2
+    assert launches[0][1:3] == ["agent", "validate"]
+    assert "--list-models" in launches[1]
+
+
+def test_kiro_runner_rejects_invalid_agent_before_model_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launches: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 1
+        stdin = None
+        stdout = None
+        stderr = None
+
+        def __init__(self, argv: list[str]):
+            self.argv = argv
+
+        def wait(self, timeout: float) -> int:
+            return 1
+
+    def fake_popen(argv: list[str], **kwargs: object) -> FakeProcess:
+        launches.append(argv)
+        return FakeProcess(argv)
+
+    monkeypatch.setattr(enhancements_module.subprocess, "Popen", fake_popen)
+    selection = _selection(
+        executable="kiro-cli",
+        arguments=[
+            "chat",
+            "--no-interactive",
+            "--agent",
+            "{{agent}}",
+            "Process stdin",
+        ],
+        adapter="kiro",
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        environment={"KIRO_API_KEY": "test-key"},
+    )
+
+    result = process_transcript("secret transcript", None, selection, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert result.warning_code == "KIRO_AGENT_INVALID"
+    assert len(launches) == 1
+    assert launches[0][1:3] == ["agent", "validate"]
 
 
 def test_stdin_cli_receives_prompt_and_uses_empty_working_directory(

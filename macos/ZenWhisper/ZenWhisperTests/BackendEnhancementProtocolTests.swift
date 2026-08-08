@@ -867,5 +867,25 @@ final class BackendEnhancementProtocolTests: XCTestCase {
         XCTAssertTrue(consentMessage.contains("inactive"))
         XCTAssertTrue(consentMessage.contains("Settings"))
         XCTAssertTrue(consentMessage.contains("dictionary fallback"))
+        XCTAssertTrue(
+            AppDelegate.visibleEnhancementWarningMessage(
+                code: "KIRO_API_KEY_MISSING"
+            ).contains("KIRO_API_KEY")
+        )
+        XCTAssertTrue(
+            AppDelegate.visibleEnhancementWarningMessage(
+                code: "KIRO_AGENT_INVALID"
+            ).contains("temporary Kiro agent")
+        )
+        XCTAssertTrue(
+            AppDelegate.visibleEnhancementWarningMessage(
+                code: "KIRO_MODEL_UNAVAILABLE"
+            ).contains("Kiro model")
+        )
+        XCTAssertTrue(
+            AppDelegate.visibleEnhancementWarningMessage(
+                code: "KIRO_AGENT_OR_MODEL_FALLBACK"
+            ).contains("selected agent and model")
+        )
     }
 }

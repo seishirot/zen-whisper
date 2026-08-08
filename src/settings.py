@@ -23,6 +23,8 @@ from src.config import (
 )
 from src.hotkey import validate_hotkey_config
 from src.postprocessing import (
+    ADAPTER_GENERIC,
+    ADAPTER_KIRO,
     DATA_DESTINATION_LOCAL,
     DATA_DESTINATION_REMOTE,
     DATA_DESTINATION_UNKNOWN,
@@ -73,6 +75,11 @@ POSTPROCESSOR_PLACEHOLDER_HELP = (
         "boundary",
         "prompt",
         "実行ごとに生成する未信頼データ境界用のランダム識別子",
+    ),
+    (
+        "agent",
+        "command",
+        "Kiro adapterが実行ごとに生成する専用エージェント名",
     ),
     (
         "prompt",
@@ -441,6 +448,8 @@ def local_transport_changed(
         and (
             original.command != updated.command
             or original.environment != updated.environment
+            or original.adapter != updated.adapter
+            or original.model != updated.model
         )
     )
 
@@ -451,12 +460,17 @@ def reclassify_changed_local_preset(
 ) -> tuple[PostprocessorPreset, tuple[str, ...]]:
     """Mark an edited local transport unknown without discarding new inputs."""
     command_changed = original.command != updated.command
+    launch_contract_changed = (
+        command_changed
+        or original.adapter != updated.adapter
+        or original.model != updated.model
+    )
     cleared: list[str] = []
     preflight_command = updated.preflight_command
     preflight_failure_message = updated.preflight_failure_message
     environment = updated.environment
 
-    if command_changed:
+    if launch_contract_changed:
         if updated.preflight_command == original.preflight_command:
             preflight_command = ""
             if preflight_command != updated.preflight_command:
@@ -1449,6 +1463,31 @@ class SettingsWindow:
             textvariable=self._new_string_var("postprocessor.timeout"),
             width=8,
         ).grid(row=0, column=5, sticky="w", padx=(8, 0))
+        ttk.Label(options, text="Adapter").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        ttk.Combobox(
+            options,
+            textvariable=self._new_string_var("postprocessor.adapter"),
+            values=(ADAPTER_GENERIC, ADAPTER_KIRO),
+            state="readonly",
+            width=18,
+        ).grid(row=1, column=1, sticky="w", padx=(8, 20), pady=(6, 0))
+        ttk.Label(options, text="専用モデル").grid(
+            row=1,
+            column=2,
+            sticky="w",
+            pady=(6, 0),
+        )
+        ttk.Entry(
+            options,
+            textvariable=self._new_string_var("postprocessor.model"),
+        ).grid(
+            row=1,
+            column=3,
+            columnspan=3,
+            sticky="ew",
+            padx=(8, 0),
+            pady=(6, 0),
+        )
 
         ttk.Label(
             tab,
@@ -1467,8 +1506,8 @@ class SettingsWindow:
         ttk.Label(
             command_frame,
             text=(
-                "モデル指定など、そのCLIが受け取る任意の引数もここへ入力します。"
-                "例: custom-cleaner --model small ..."
+                "genericではモデル指定など任意のCLI引数をここへ入力します。"
+                "Kiroでは専用モデル欄と {{agent}} を使用します。"
             ),
             foreground="#555555",
         ).pack(anchor="w", pady=(3, 0))
@@ -1519,8 +1558,9 @@ class SettingsWindow:
         ttk.Label(
             tab,
             text=(
-                "CLI組み込みsystem promptの置換内容。指定する場合はコマンドに"
-                " {{system_prompt_file}} が必要です。テンプレート変数は使えません。"
+                "CLI組み込みsystem promptの置換内容。genericではコマンドに"
+                " {{system_prompt_file}} が必要です。Kiroでは実行ごとの専用"
+                "エージェントへ設定します。テンプレート変数は使えません。"
             ),
             foreground="#555555",
             wraplength=680,
@@ -1758,11 +1798,17 @@ class SettingsWindow:
         def text_value(widget: tk.Text | None) -> str:
             return widget.get("1.0", "end").strip() if widget is not None else ""
 
+        def variable_value(key: str, default: str) -> str:
+            variable = self._vars.get(key)
+            return str(variable.get()) if variable is not None else default
+
         return (
             str(self._vars["postprocessor.id"].get()).strip(),
             str(self._vars["postprocessor.name"].get()).strip(),
             str(self._vars["postprocessor.destination"].get()),
             str(self._vars["postprocessor.input_mode"].get()),
+            variable_value("postprocessor.adapter", ADAPTER_GENERIC),
+            variable_value("postprocessor.model", "").strip(),
             str(self._vars["postprocessor.timeout"].get()).strip(),
             str(self._vars["postprocessor.preflight"].get()).strip(),
             str(
@@ -2915,6 +2961,12 @@ class SettingsWindow:
         self._vars["postprocessor.input_mode"].set(
             preset.input_mode if preset else "stdin"
         )
+        self._vars["postprocessor.adapter"].set(
+            preset.adapter if preset else ADAPTER_GENERIC
+        )
+        self._vars["postprocessor.model"].set(
+            preset.model if preset else ""
+        )
         self._vars["postprocessor.timeout"].set(
             str(preset.timeout_sec if preset else 30)
         )
@@ -2992,6 +3044,8 @@ class SettingsWindow:
             data_destination=str(
                 self._vars["postprocessor.destination"].get()
             ),
+            adapter=str(self._vars["postprocessor.adapter"].get()),
+            model=str(self._vars["postprocessor.model"].get()).strip(),
             system_prompt=(
                 self._system_prompt_text.get("1.0", "end").strip()
                 if self._system_prompt_text is not None

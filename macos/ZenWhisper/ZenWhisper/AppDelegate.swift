@@ -1860,6 +1860,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let allowedWarningCodes: Set<String> = [
             "PREFLIGHT_FAILED",
             "PREFLIGHT_TIMEOUT",
+            "KIRO_API_KEY_MISSING",
+            "KIRO_AGENT_INVALID",
+            "KIRO_MODEL_UNAVAILABLE",
+            "KIRO_AGENT_OR_MODEL_FALLBACK",
             "EXECUTABLE_NOT_FOUND",
             "CLI_LAUNCH_FAILED",
             "CLI_CANCELLED",
@@ -1957,6 +1961,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return "Enhancement configuration was too large; safe fallback was used."
         case "PREFLIGHT_FAILED", "PREFLIGHT_TIMEOUT":
             return "Post-processor readiness check failed; dictionary fallback was used."
+        case "KIRO_API_KEY_MISSING":
+            return "Kiro CLI requires KIRO_API_KEY; dictionary fallback was used."
+        case "KIRO_AGENT_INVALID":
+            return "The temporary Kiro agent was invalid; dictionary fallback was used."
+        case "KIRO_MODEL_UNAVAILABLE":
+            return "The selected Kiro model is unavailable; dictionary fallback was used."
+        case "KIRO_AGENT_OR_MODEL_FALLBACK":
+            return "Kiro could not confirm the selected agent and model; dictionary fallback was used."
         case "EXECUTABLE_NOT_FOUND", "CLI_LAUNCH_FAILED":
             return "Post-processor could not start; dictionary fallback was used."
         case "CLI_TIMEOUT":

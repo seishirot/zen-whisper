@@ -37,9 +37,12 @@ ALLOWED_FIELDS = {
     "system_prompt",
     "prompt_template",
     "environment",
+    "adapter",
+    "model",
     "enabled",
 }
 ALLOWED_PLACEHOLDERS = {
+    "agent",
     "prompt",
     "system_prompt_file",
     "transcript",
@@ -149,6 +152,8 @@ def _validate_backend_payload(
         "output_mode": "stdout",
         "timeout_sec": preset["timeout_sec"],
         "data_destination": preset["data_destination"],
+        "adapter": preset["adapter"],
+        "model": preset["model"],
         "system_prompt": preset["system_prompt"],
         "prompt_template": preset["prompt_template"],
         "environment": preset["environment"],
@@ -204,6 +209,8 @@ def _native_preset(
     input_mode = _string_field(raw, "input_mode", "stdin")
     output_mode = _string_field(raw, "output_mode", "stdout")
     data_destination = _string_field(raw, "data_destination", "unknown")
+    adapter = _string_field(raw, "adapter", "generic")
+    model = _validate_string(_string_field(raw, "model", "").strip(), "model")
     system_prompt = _validate_string(
         _string_field(raw, "system_prompt", ""),
         "system_prompt",
@@ -222,6 +229,8 @@ def _native_preset(
         raise CatalogGenerationError(
             "data_destination は local、remote、unknown のいずれかで指定してください"
         )
+    if adapter not in {"generic", "kiro"}:
+        raise CatalogGenerationError("adapter は generic または kiro で指定してください")
 
     timeout_value = raw.get("timeout_sec", 30)
     if (
@@ -268,20 +277,40 @@ def _native_preset(
         )
     if "transcript" not in prompt_placeholders:
         raise CatalogGenerationError("prompt_template には {{transcript}} が必要です")
-    if bool(system_prompt) != ("system_prompt_file" in command_placeholders):
-        raise CatalogGenerationError(
-            "system_prompt と command の {{system_prompt_file}} は"
-            "両方を指定するか両方を省略してください"
-        )
-    if input_mode == "stdin" and command_placeholders - {"system_prompt_file"}:
-        raise CatalogGenerationError(
-            "stdin モードの command では {{system_prompt_file}} 以外の"
-            "プレースホルダーを使用できません"
-        )
-    if input_mode == "argument" and "prompt" not in command_placeholders:
-        raise CatalogGenerationError(
-            "argument モードでは command に {{prompt}} が必要です"
-        )
+    if adapter == "generic":
+        if model:
+            raise CatalogGenerationError(
+                "generic adapter のモデルは command のCLI引数で指定してください"
+            )
+        if bool(system_prompt) != ("system_prompt_file" in command_placeholders):
+            raise CatalogGenerationError(
+                "system_prompt と command の {{system_prompt_file}} は"
+                "両方を指定するか両方を省略してください"
+            )
+        if input_mode == "stdin" and command_placeholders - {"system_prompt_file"}:
+            raise CatalogGenerationError(
+                "stdin モードの command では {{system_prompt_file}} 以外の"
+                "プレースホルダーを使用できません"
+            )
+        if input_mode == "argument" and "prompt" not in command_placeholders:
+            raise CatalogGenerationError(
+                "argument モードでは command に {{prompt}} が必要です"
+            )
+    else:
+        if not model:
+            raise CatalogGenerationError("kiro adapter では model を指定してください")
+        if not system_prompt.strip():
+            raise CatalogGenerationError(
+                "kiro adapter では system_prompt を指定してください"
+            )
+        if input_mode != "stdin":
+            raise CatalogGenerationError(
+                "kiro adapter の input_mode は stdin にしてください"
+            )
+        if command_placeholders != {"agent"}:
+            raise CatalogGenerationError(
+                "kiro adapter の command では {{agent}} だけを使用してください"
+            )
     if PLACEHOLDER_RE.search(preflight_text):
         raise CatalogGenerationError(
             "preflight_command ではプレースホルダーを使用できません"
@@ -303,6 +332,10 @@ def _native_preset(
     if "{{" in executable or "}}" in executable:
         raise CatalogGenerationError(
             "実行ファイル名にはテンプレート構文を使用できません"
+        )
+    if adapter == "kiro" and Path(executable).name.lower() != "kiro-cli":
+        raise CatalogGenerationError(
+            "kiro adapter の実行ファイルは kiro-cli で指定してください"
         )
     preflight = (
         _split_posix_command(preflight_text)
@@ -340,6 +373,8 @@ def _native_preset(
         "preflight_failure_message": preflight_failure_message,
         "input_mode": input_mode,
         "data_destination": data_destination,
+        "adapter": adapter,
+        "model": model,
         "timeout_sec": timeout,
         "system_prompt": system_prompt,
         "prompt_template": prompt_template,
