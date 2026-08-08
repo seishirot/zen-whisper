@@ -47,6 +47,8 @@ final class PostprocessorEditorWindowController: NSWindowController,
         static let arguments = "postprocessorEditor.arguments"
         static let argumentsHelp = "postprocessorEditor.argumentsHelp"
         static let inputMode = "postprocessorEditor.inputMode"
+        static let adapter = "postprocessorEditor.adapter"
+        static let model = "postprocessorEditor.model"
         static let destination = "postprocessorEditor.destination"
         static let timeout = "postprocessorEditor.timeout"
         static let preflightExecutable = "postprocessorEditor.preflightExecutable"
@@ -76,6 +78,8 @@ final class PostprocessorEditorWindowController: NSWindowController,
         let executable: String
         let argumentsJSON: String
         let inputMode: String
+        let adapter: String
+        let model: String
         let destination: String
         let timeout: String
         let preflightExecutable: String
@@ -120,6 +124,8 @@ final class PostprocessorEditorWindowController: NSWindowController,
     private let argumentsTextView = NSTextView()
     private let argumentsHelpLabel = NSTextField(wrappingLabelWithString: "")
     private let inputModePopup = NSPopUpButton()
+    private let adapterPopup = NSPopUpButton()
+    private let modelField = NSTextField()
     private let destinationPopup = NSPopUpButton()
     private let timeoutField = NSTextField()
     private let preflightExecutableField = NSTextField()
@@ -238,6 +244,12 @@ final class PostprocessorEditorWindowController: NSWindowController,
             label: "Post-processor timeout in seconds"
         )
         configureTextField(
+            modelField,
+            placeholder: "Kiro model ID (for example gpt-5.6-luna)",
+            identifier: AccessibilityIdentifier.model,
+            label: "Adapter-specific model"
+        )
+        configureTextField(
             preflightExecutableField,
             placeholder: "Optional executable",
             identifier: AccessibilityIdentifier.preflightExecutable,
@@ -303,6 +315,13 @@ final class PostprocessorEditorWindowController: NSWindowController,
             identifier: AccessibilityIdentifier.inputMode,
             label: "Post-processor input mode",
             values: EnhancementPostprocessorInputMode.allCases.map(\.rawValue),
+            action: #selector(popupChanged)
+        )
+        configurePopup(
+            adapterPopup,
+            identifier: AccessibilityIdentifier.adapter,
+            label: "Post-processor adapter",
+            values: EnhancementPostprocessorAdapter.allCases.map(\.rawValue),
             action: #selector(popupChanged)
         )
         refreshPromptHelp()
@@ -423,6 +442,14 @@ final class PostprocessorEditorWindowController: NSWindowController,
         modeControls.alignment = .centerY
         modeControls.spacing = 8
         timeoutField.widthAnchor.constraint(equalToConstant: 72).isActive = true
+        let adapterControls = NSStackView(views: [
+            adapterPopup,
+            NSTextField(labelWithString: "Model:"),
+            modelField
+        ])
+        adapterControls.orientation = .horizontal
+        adapterControls.alignment = .centerY
+        adapterControls.spacing = 8
 
         let argumentsScroll = makeTextScrollView(
             argumentsTextView,
@@ -451,10 +478,11 @@ final class PostprocessorEditorWindowController: NSWindowController,
         )
         let systemPromptHelp = makeHelpLabel(
             "Static policy only; the actual transcript, profile context, terms, "
-                + "and language are not inserted here. When set, add "
+                + "and language are not inserted here. For generic adapters, add "
                 + "{{system_prompt_file}} to the argument that accepts a "
                 + "system-prompt file. ZenWhisper writes it to a private per-run "
-                + "temporary file. Placeholders are not allowed here."
+                + "temporary file. For Kiro, it becomes the prompt of an isolated "
+                + "per-run custom agent. Placeholders are not allowed here."
         )
         let securityHelp = makeHelpLabel(
             "CLI definitions are trusted executable configuration. Changing an "
@@ -475,6 +503,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             makeLabeledRow(title: "Display name:", control: displayNameField),
             makeLabeledRow(title: "Executable:", control: executableField),
             makeLabeledRow(title: "Execution:", control: modeControls),
+            makeLabeledRow(title: "Adapter:", control: adapterControls),
             makeLabeledRow(
                 title: "Arguments (JSON):",
                 control: makeVerticalGroup(
@@ -678,6 +707,8 @@ final class PostprocessorEditorWindowController: NSWindowController,
         executableField.stringValue = preset.executable
         argumentsTextView.string = Self.formattedJSON(preset.arguments)
         inputModePopup.selectItem(withTitle: preset.inputMode.rawValue)
+        adapterPopup.selectItem(withTitle: preset.adapter.rawValue)
+        modelField.stringValue = preset.model
         destinationPopup.selectItem(withTitle: preset.destination.rawValue)
         timeoutField.stringValue = Self.formattedTimeout(preset.timeoutSeconds)
         preflightExecutableField.stringValue = preset.preflightExecutable
@@ -731,6 +762,12 @@ final class PostprocessorEditorWindowController: NSWindowController,
                     general
                     + "Ollama model selection normally follows the “run” item."
             }
+        case "kiro-cli":
+            argumentsHelpLabel.stringValue =
+                general
+                + "Kiro model selection uses the Adapter model field. "
+                + "Keep {{agent}} in the argument array; ZenWhisper creates "
+                + "that tool-less custom agent for each run."
         default:
             argumentsHelpLabel.stringValue =
                 general
@@ -780,7 +817,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
         promptHelpLabel.stringValue =
             transportGuidance
             + "The prompt must include {{transcript}}. Supported placeholders: "
-            + "{{prompt}}, {{transcript}}, {{context}}, {{terms}}, "
+            + "{{agent}}, {{prompt}}, {{transcript}}, {{context}}, {{terms}}, "
             + "{{profile_name}}, {{language}}, and {{boundary}}. Use "
             + "{{boundary}} in delimiter names when separating untrusted data. "
             + "Output is always stdout."
@@ -949,6 +986,9 @@ final class PostprocessorEditorWindowController: NSWindowController,
             argumentsJSON: argumentsTextView.string,
             inputMode: inputModePopup.selectedItem?.representedObject as? String
                 ?? EnhancementPostprocessorInputMode.stdin.rawValue,
+            adapter: adapterPopup.selectedItem?.representedObject as? String
+                ?? EnhancementPostprocessorAdapter.generic.rawValue,
+            model: modelField.stringValue,
             destination:
                 destinationPopup.selectedItem?.representedObject as? String
                 ?? EnhancementDataDestination.unknown.rawValue,
@@ -1094,6 +1134,16 @@ final class PostprocessorEditorWindowController: NSWindowController,
               ) else {
             throw DraftValidationError(message: "Choose a data destination.")
         }
+        guard let adapterRaw =
+                adapterPopup.selectedItem?.representedObject as? String,
+              let adapter = EnhancementPostprocessorAdapter(
+                rawValue: adapterRaw
+              ) else {
+            throw DraftValidationError(message: "Choose an adapter.")
+        }
+        let model = modelField.stringValue.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
         let timeoutText = timeoutField.stringValue.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
@@ -1122,32 +1172,61 @@ final class PostprocessorEditorWindowController: NSWindowController,
         let hasSystemPromptFile = arguments.contains {
             $0.contains("{{system_prompt_file}}")
         }
-        guard systemPrompt.isEmpty != hasSystemPromptFile else {
-            throw DraftValidationError(
-                message: "Set both the system prompt and "
-                    + "{{system_prompt_file}} argument, or leave both empty."
-            )
-        }
-        switch inputMode {
-        case .stdin:
-            guard arguments.allSatisfy({
-                let withoutSystemPromptFile = $0.replacingOccurrences(
-                    of: "{{system_prompt_file}}",
-                    with: ""
-                )
-                return !withoutSystemPromptFile.contains("{{")
-                    && !withoutSystemPromptFile.contains("}}")
-            }) else {
+        switch adapter {
+        case .generic:
+            guard model.isEmpty else {
                 throw DraftValidationError(
-                    message: "stdin arguments may only use "
-                        + "{{system_prompt_file}}. Put transcript placeholders "
-                        + "in the prompt template."
+                    message: "Set generic CLI models in the argument array, not the Adapter model field."
                 )
             }
-        case .argument:
-            guard arguments.contains(where: { $0.contains("{{prompt}}") }) else {
+            guard systemPrompt.isEmpty != hasSystemPromptFile else {
                 throw DraftValidationError(
-                    message: "argument mode requires {{prompt}} in an argument."
+                    message: "Set both the system prompt and "
+                        + "{{system_prompt_file}} argument, or leave both empty."
+                )
+            }
+            switch inputMode {
+            case .stdin:
+                guard arguments.allSatisfy({
+                    let withoutSystemPromptFile = $0.replacingOccurrences(
+                        of: "{{system_prompt_file}}",
+                        with: ""
+                    )
+                    return !withoutSystemPromptFile.contains("{{")
+                        && !withoutSystemPromptFile.contains("}}")
+                }) else {
+                    throw DraftValidationError(
+                        message: "stdin arguments may only use "
+                            + "{{system_prompt_file}}. Put transcript placeholders "
+                            + "in the prompt template."
+                    )
+                }
+            case .argument:
+                guard arguments.contains(where: { $0.contains("{{prompt}}") }) else {
+                    throw DraftValidationError(
+                        message: "argument mode requires {{prompt}} in an argument."
+                    )
+                }
+            }
+        case .kiro:
+            let executableName = (executable as NSString).lastPathComponent.lowercased()
+            let hasAgent = arguments.contains { $0.contains("{{agent}}") }
+            let usesOnlyAgent = arguments.allSatisfy {
+                let withoutAgent = $0.replacingOccurrences(
+                    of: "{{agent}}",
+                    with: ""
+                )
+                return !withoutAgent.contains("{{") && !withoutAgent.contains("}}")
+            }
+            guard executableName == "kiro-cli",
+                  inputMode == .stdin,
+                  !model.isEmpty,
+                  !systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  hasAgent,
+                  usesOnlyAgent else {
+                throw DraftValidationError(
+                    message: "Kiro requires executable kiro-cli, stdin, a model, "
+                        + "a system prompt, and only {{agent}} in arguments."
                 )
             }
         }
@@ -1173,6 +1252,8 @@ final class PostprocessorEditorWindowController: NSWindowController,
             inputMode: inputMode,
             destination: destination,
             timeoutSeconds: timeout,
+            adapter: adapter,
+            model: model,
             systemPrompt: systemPrompt,
             promptTemplate: promptTemplate,
             environment: environment,
@@ -1315,6 +1396,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             displayNameField,
             executableField,
             timeoutField,
+            modelField,
             preflightExecutableField,
             preflightFailureMessageField
         ] {
@@ -1330,6 +1412,7 @@ final class PostprocessorEditorWindowController: NSWindowController,
             textView.isEditable = enabled
         }
         inputModePopup.isEnabled = enabled
+        adapterPopup.isEnabled = enabled
         destinationPopup.isEnabled = enabled
         cancelButton.isEnabled = enabled
         saveButton.isEnabled = enabled && isDirty && onSave != nil

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import math
 import os
 import re
 import secrets
+import shutil
 import subprocess
 import tempfile
 import tomllib
 from collections.abc import Callable
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ContextManager
@@ -47,11 +49,16 @@ VALID_DATA_DESTINATIONS = (
 )
 VALID_INPUT_MODES = ("stdin", "argument")
 VALID_OUTPUT_MODES = ("stdout",)
+ADAPTER_GENERIC = "generic"
+ADAPTER_KIRO = "kiro"
+VALID_ADAPTERS = (ADAPTER_GENERIC, ADAPTER_KIRO)
+_KIRO_AGENT_ID = "zen-whisper-postprocessor"
 
 StateGuard = Callable[[], ContextManager[bool]]
 ProcessCallback = Callable[[subprocess.Popen[str]], None]
 
 SUPPORTED_TEMPLATE_PLACEHOLDERS = (
+    "agent",
     "prompt",
     "system_prompt_file",
     "transcript",
@@ -79,6 +86,8 @@ _PRESET_FIELDS = {
     "system_prompt",
     "prompt_template",
     "environment",
+    "adapter",
+    "model",
     "enabled",
 }
 
@@ -96,6 +105,8 @@ class PostprocessorPreset:
     output_mode: str = "stdout"
     timeout_sec: float = 30.0
     data_destination: str = DATA_DESTINATION_UNKNOWN
+    adapter: str = ADAPTER_GENERIC
+    model: str = ""
     system_prompt: str = ""
     prompt_template: str = "{{transcript}}"
     preflight_command: str = ""
@@ -188,6 +199,8 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
     input_mode = raw.get("input_mode", "stdin")
     output_mode = raw.get("output_mode", "stdout")
     data_destination = raw.get("data_destination", DATA_DESTINATION_UNKNOWN)
+    adapter = raw.get("adapter", ADAPTER_GENERIC)
+    model = raw.get("model", "")
     system_prompt = raw.get("system_prompt", "")
     prompt_template = raw.get("prompt_template", "{{transcript}}")
     preflight_command = raw.get("preflight_command", "")
@@ -201,6 +214,8 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
         "input_mode": input_mode,
         "output_mode": output_mode,
         "data_destination": data_destination,
+        "adapter": adapter,
+        "model": model,
         "system_prompt": system_prompt,
         "prompt_template": prompt_template,
         "preflight_command": preflight_command,
@@ -209,6 +224,7 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
     for field_name, value in string_fields.items():
         if not isinstance(value, str):
             raise PostprocessorConfigError(f"{field_name} は文字列で指定してください")
+    normalized_model = model.strip()
     if not display_name.strip() or not command.strip():
         raise PostprocessorConfigError("display_name と command は空にできません")
     if input_mode not in VALID_INPUT_MODES:
@@ -222,6 +238,10 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
     if data_destination not in VALID_DATA_DESTINATIONS:
         raise PostprocessorConfigError(
             f"data_destination は {', '.join(VALID_DATA_DESTINATIONS)} から選んでください"
+        )
+    if adapter not in VALID_ADAPTERS:
+        raise PostprocessorConfigError(
+            f"adapter は {', '.join(VALID_ADAPTERS)} から選んでください"
         )
     if (
         not isinstance(timeout_sec, (int, float))
@@ -258,20 +278,6 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
         raise PostprocessorConfigError("prompt_template には {{transcript}} が必要です")
     command_placeholders = set(_PLACEHOLDER_RE.findall(command))
     has_system_prompt_file = "system_prompt_file" in command_placeholders
-    if bool(system_prompt) != has_system_prompt_file:
-        raise PostprocessorConfigError(
-            "system_prompt と command の {{system_prompt_file}} は"
-            "両方を指定するか両方を省略してください"
-        )
-    if input_mode == "stdin" and command_placeholders - {"system_prompt_file"}:
-        raise PostprocessorConfigError(
-            "stdin モードの command では {{system_prompt_file}} 以外の"
-            "プレースホルダーを使用できません"
-        )
-    if input_mode == "argument" and "{{prompt}}" not in command:
-        raise PostprocessorConfigError(
-            "argument モードでは command に {{prompt}} が必要です"
-        )
     if _PLACEHOLDER_RE.search(preflight_command):
         raise PostprocessorConfigError("preflight_command ではプレースホルダーを使用できません")
 
@@ -288,6 +294,49 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
         raise PostprocessorConfigError(
             "実行ファイル名にはプレースホルダーを使用できません"
         )
+    if adapter == ADAPTER_GENERIC:
+        if normalized_model:
+            raise PostprocessorConfigError(
+                "generic adapter のモデルは command のCLI引数で指定してください"
+            )
+        if bool(system_prompt) != has_system_prompt_file:
+            raise PostprocessorConfigError(
+                "system_prompt と command の {{system_prompt_file}} は"
+                "両方を指定するか両方を省略してください"
+            )
+        if input_mode == "stdin" and command_placeholders - {
+            "system_prompt_file"
+        }:
+            raise PostprocessorConfigError(
+                "stdin モードの command では {{system_prompt_file}} 以外の"
+                "プレースホルダーを使用できません"
+            )
+        if input_mode == "argument" and "{{prompt}}" not in command:
+            raise PostprocessorConfigError(
+                "argument モードでは command に {{prompt}} が必要です"
+            )
+    else:
+        executable_name = Path(command_argv[0]).name.lower()
+        if executable_name not in {"kiro-cli", "kiro-cli.exe"}:
+            raise PostprocessorConfigError(
+                "kiro adapter の実行ファイルは kiro-cli で指定してください"
+            )
+        if not normalized_model:
+            raise PostprocessorConfigError(
+                "kiro adapter では model を指定してください"
+            )
+        if not system_prompt.strip():
+            raise PostprocessorConfigError(
+                "kiro adapter では system_prompt を指定してください"
+            )
+        if input_mode != "stdin":
+            raise PostprocessorConfigError(
+                "kiro adapter の input_mode は stdin にしてください"
+            )
+        if has_system_prompt_file or command_placeholders != {"agent"}:
+            raise PostprocessorConfigError(
+                "kiro adapter の command では {{agent}} だけを使用してください"
+            )
 
     return PostprocessorPreset(
         preset_id=preset_id,
@@ -297,6 +346,8 @@ def _parse_preset(preset_id: str, raw: dict[str, object]) -> PostprocessorPreset
         output_mode=output_mode,
         timeout_sec=float(timeout_sec),
         data_destination=data_destination,
+        adapter=adapter,
+        model=normalized_model,
         system_prompt=system_prompt,
         prompt_template=prompt_template,
         preflight_command=preflight_command,
@@ -324,6 +375,14 @@ def load_postprocessors(
             "environment" in safe_override
             and safe_override["environment"] != bundled.get("environment")
         )
+        adapter_changed = (
+            "adapter" in safe_override
+            and safe_override["adapter"] != bundled.get("adapter", ADAPTER_GENERIC)
+        )
+        model_changed = (
+            "model" in safe_override
+            and safe_override["model"] != bundled.get("model", "")
+        )
         if command_changed and bundled:
             # These fields describe or constrain a specific executable. Carrying
             # them over to a replacement command can incorrectly label a remote
@@ -332,9 +391,19 @@ def load_postprocessors(
             safe_override.setdefault("preflight_command", "")
             safe_override.setdefault("preflight_failure_message", "")
             safe_override.setdefault("environment", {})
-            if "{{system_prompt_file}}" not in str(safe_override["command"]):
+            safe_override.setdefault("adapter", ADAPTER_GENERIC)
+            safe_override.setdefault("model", "")
+            if (
+                "{{system_prompt_file}}" not in str(safe_override["command"])
+                and "{{agent}}" not in str(safe_override["command"])
+            ):
                 safe_override.setdefault("system_prompt", "")
-        if bundled and (command_changed or environment_changed):
+        if bundled and (
+            command_changed
+            or environment_changed
+            or adapter_changed
+            or model_changed
+        ):
             if "data_destination" not in override:
                 safe_override["data_destination"] = DATA_DESTINATION_UNKNOWN
                 logger.warning(
@@ -375,6 +444,8 @@ def _preset_data(preset: PostprocessorPreset) -> dict[str, object]:
         "output_mode": preset.output_mode,
         "timeout_sec": preset.timeout_sec,
         "data_destination": preset.data_destination,
+        "adapter": preset.adapter,
+        "model": preset.model,
         "system_prompt": preset.system_prompt,
         "prompt_template": preset.prompt_template,
         "preflight_command": preset.preflight_command,
@@ -459,9 +530,11 @@ def _template_values(
     profile: Profile | None,
     language: str,
     system_prompt_file: str,
+    agent: str,
 ) -> dict[str, str]:
     context = profile.context.strip() if profile and profile.context.strip() else "（なし）"
     values = {
+        "agent": agent,
         "transcript": transcript,
         "context": context,
         "terms": render_terms(profile),
@@ -481,12 +554,14 @@ def _build_invocation(
     language: str,
     *,
     system_prompt_file: str = "",
+    agent: str = "",
 ) -> tuple[list[str], str]:
     values = _template_values(
         transcript,
         profile,
         language,
         system_prompt_file,
+        agent,
     )
     prompt = _render(preset.prompt_template, values)
     values["prompt"] = prompt
@@ -513,9 +588,84 @@ def _write_system_prompt_file(temp_dir: str, system_prompt: str) -> str:
     return str(path)
 
 
-def _process_environment(preset: PostprocessorPreset) -> dict[str, str]:
+def _write_private_json(path: Path, value: object) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
+            json.dump(value, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+
+
+def _prepare_kiro_agent(
+    temp_dir: str,
+    preset: PostprocessorPreset,
+) -> tuple[str, str]:
+    """Create a tool-less, per-run Kiro home and custom agent."""
+    kiro_home = Path(temp_dir) / "kiro-home"
+    agents_dir = kiro_home / "agents"
+    settings_dir = kiro_home / "settings"
+    agents_dir.mkdir(parents=True, mode=0o700)
+    settings_dir.mkdir(mode=0o700)
+    _write_private_json(
+        settings_dir / "cli.json",
+        {"chat.disableInheritingDefaultResources": True},
+    )
+    _write_private_json(
+        agents_dir / f"{_KIRO_AGENT_ID}.json",
+        {
+            "name": _KIRO_AGENT_ID,
+            "description": "Ephemeral ZenWhisper transcript proofreader",
+            "prompt": preset.system_prompt,
+            "model": preset.model,
+            "tools": [],
+            "allowedTools": [],
+            "resources": [],
+            "mcpServers": {},
+            "includeMcpJson": False,
+        },
+    )
+    return _KIRO_AGENT_ID, str(kiro_home)
+
+
+@contextmanager
+def _temporary_postprocess_directory(preset_id: str):
+    temp_dir = tempfile.mkdtemp(prefix="zen_whisper_postprocess_")
+    try:
+        yield temp_dir
+    finally:
+        try:
+            shutil.rmtree(temp_dir)
+        except OSError as exc:
+            logger.warning(
+                "後処理の一時ディレクトリを削除できませんでした: "
+                "preset=%s type=%s",
+                preset_id,
+                type(exc).__name__,
+            )
+
+
+def _process_environment(
+    preset: PostprocessorPreset,
+    *,
+    kiro_home: str = "",
+) -> dict[str, str]:
     environment = os.environ.copy()
     environment.update(preset.environment)
+    if preset.adapter == ADAPTER_KIRO:
+        # Adapter-owned isolation cannot be overridden by a preset environment.
+        environment["KIRO_HOME"] = kiro_home
+        environment["KIRO_LOG_NO_COLOR"] = "1"
+        environment["NO_COLOR"] = "1"
     return environment
 
 
@@ -625,6 +775,190 @@ def _run_preflight(
     return ""
 
 
+def _collect_kiro_model_ids(value: object) -> set[str]:
+    model_ids: set[str] = set()
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                model_ids.add(item)
+            else:
+                model_ids.update(_collect_kiro_model_ids(item))
+        return model_ids
+    if not isinstance(value, dict):
+        return model_ids
+    for key, item in value.items():
+        normalized_key = str(key).replace("_", "").lower()
+        if normalized_key in {"id", "modelid"} and isinstance(item, str):
+            model_ids.add(item)
+        elif isinstance(item, (dict, list)):
+            model_ids.update(_collect_kiro_model_ids(item))
+    return model_ids
+
+
+def _kiro_stderr_reports_fallback(stderr: str) -> bool:
+    normalized = " ".join(stderr.lower().split())
+    fallback_mentioned = any(
+        phrase in normalized
+        for phrase in ("fallback", "fall back", "falling back", "fell back")
+    )
+    default_agent_selected = "default agent" in normalized and any(
+        phrase in normalized
+        for phrase in (
+            "using default agent",
+            "use default agent",
+            "selected default agent",
+            "switching to default agent",
+            "switched to default agent",
+        )
+    )
+    return default_agent_selected or (
+        fallback_mentioned
+        and ("model" in normalized or "agent" in normalized)
+    )
+
+
+def _run_kiro_agent_validation(
+    preset: PostprocessorPreset,
+    cwd: str,
+    environment: dict[str, str],
+    agent_path: str,
+    start_guard: StateGuard | None = None,
+    on_process_started: ProcessCallback | None = None,
+    on_process_finished: ProcessCallback | None = None,
+) -> str:
+    executable = split_command(preset.command)[0]
+    process: subprocess.Popen[str] | None = None
+    guard = start_guard() if start_guard is not None else nullcontext(True)
+    with guard as authorized:
+        if not authorized:
+            return "後処理設定が変更されたためCLI実行をキャンセルしました"
+        try:
+            process = subprocess.Popen(
+                [executable, "agent", "validate", agent_path],
+                shell=False,
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                **subprocess_run_options(),
+            )
+        except FileNotFoundError:
+            return f"{preset.display_name} の実行ファイルが見つかりません"
+        except Exception as exc:
+            logger.warning(
+                "Kiro agent検証を開始できませんでした: preset=%s type=%s",
+                preset.preset_id,
+                type(exc).__name__,
+            )
+            return f"{preset.display_name} のagent検証に失敗しました"
+        if on_process_started is not None:
+            on_process_started(process)
+
+    try:
+        try:
+            returncode = process.wait(timeout=min(preset.timeout_sec, 10.0))
+        except subprocess.TimeoutExpired:
+            _finish_timed_out_process(process, preset.preset_id)
+            return f"{preset.display_name} のagent検証がタイムアウトしました"
+    finally:
+        if on_process_finished is not None:
+            on_process_finished(process)
+
+    if returncode != 0:
+        return f"{preset.display_name} の一時agent設定を検証できませんでした"
+    return ""
+
+
+def _run_kiro_model_check(
+    preset: PostprocessorPreset,
+    cwd: str,
+    environment: dict[str, str],
+    start_guard: StateGuard | None = None,
+    on_process_started: ProcessCallback | None = None,
+    on_process_finished: ProcessCallback | None = None,
+) -> str:
+    executable = split_command(preset.command)[0]
+    process: subprocess.Popen[str] | None = None
+    guard = start_guard() if start_guard is not None else nullcontext(True)
+    with guard as authorized:
+        if not authorized:
+            return "後処理設定が変更されたためCLI実行をキャンセルしました"
+        try:
+            process = subprocess.Popen(
+                [executable, "chat", "--list-models", "--format", "json"],
+                shell=False,
+                cwd=cwd,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                **subprocess_run_options(),
+            )
+        except FileNotFoundError:
+            return f"{preset.display_name} の実行ファイルが見つかりません"
+        except Exception as exc:
+            logger.warning(
+                "Kiroモデル一覧の取得を開始できませんでした: "
+                "preset=%s type=%s",
+                preset.preset_id,
+                type(exc).__name__,
+            )
+            return f"{preset.display_name} のモデル確認に失敗しました"
+        if on_process_started is not None:
+            on_process_started(process)
+
+    try:
+        try:
+            stdout, stderr = process.communicate(
+                timeout=min(preset.timeout_sec, 10.0),
+            )
+        except subprocess.TimeoutExpired:
+            _finish_timed_out_process(process, preset.preset_id)
+            return f"{preset.display_name} のモデル確認がタイムアウトしました"
+        except Exception as exc:
+            logger.warning(
+                "Kiroモデル一覧の取得に失敗しました: preset=%s type=%s",
+                preset.preset_id,
+                type(exc).__name__,
+            )
+            return f"{preset.display_name} のモデル確認に失敗しました"
+    finally:
+        if on_process_finished is not None:
+            on_process_finished(process)
+
+    if process.returncode != 0:
+        logger.warning(
+            "Kiroモデル一覧の取得が失敗しました: "
+            "preset=%s returncode=%d stderr_chars=%d",
+            preset.preset_id,
+            process.returncode,
+            len(stderr),
+        )
+        return preset.preflight_failure_message or (
+            f"{preset.display_name} のモデル確認に失敗しました"
+        )
+    try:
+        available_models = _collect_kiro_model_ids(json.loads(stdout))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        logger.warning(
+            "Kiroモデル一覧をJSONとして解釈できませんでした: preset=%s",
+            preset.preset_id,
+        )
+        return f"{preset.display_name} のモデル確認に失敗しました"
+    if preset.model not in available_models:
+        logger.warning(
+            "指定Kiroモデルを利用できません: preset=%s model=%s",
+            preset.preset_id,
+            preset.model,
+        )
+        return f"Kiroモデル {preset.model} を現在のアカウントで利用できません"
+    return ""
+
+
 def run_postprocessor(
     preset: PostprocessorPreset,
     transcript: str,
@@ -636,18 +970,18 @@ def run_postprocessor(
     on_process_finished: ProcessCallback | None = None,
 ) -> PostprocessResult:
     """Run one trusted preset without a shell and return stdout as corrected text."""
-    environment = _process_environment(preset)
-
-    with tempfile.TemporaryDirectory(
-        prefix="zen_whisper_postprocess_",
-        ignore_cleanup_errors=True,
-    ) as temp_dir:
+    with _temporary_postprocess_directory(preset.preset_id) as temp_dir:
+        system_prompt_file = ""
+        agent = ""
+        kiro_home = ""
         try:
-            system_prompt_file = (
-                _write_system_prompt_file(temp_dir, preset.system_prompt)
-                if preset.system_prompt
-                else ""
-            )
+            if preset.adapter == ADAPTER_KIRO:
+                agent, kiro_home = _prepare_kiro_agent(temp_dir, preset)
+            elif preset.system_prompt:
+                system_prompt_file = _write_system_prompt_file(
+                    temp_dir,
+                    preset.system_prompt,
+                )
         except OSError as exc:
             logger.warning(
                 "後処理system promptの準備に失敗しました: "
@@ -661,12 +995,27 @@ def run_postprocessor(
                 applied=True,
                 error=f"{preset.display_name} の実行準備に失敗しました",
             )
+        environment = _process_environment(preset, kiro_home=kiro_home)
+        if (
+            preset.adapter == ADAPTER_KIRO
+            and not environment.get("KIRO_API_KEY", "").strip()
+        ):
+            return PostprocessResult(
+                text=transcript,
+                succeeded=False,
+                applied=True,
+                error=(
+                    preset.preflight_failure_message
+                    or "Kiro CLI の非対話実行には KIRO_API_KEY が必要です"
+                ),
+            )
         argv, prompt = _build_invocation(
             preset,
             transcript,
             profile,
             language,
             system_prompt_file=system_prompt_file,
+            agent=agent,
         )
         if (
             preset.input_mode == "argument"
@@ -697,6 +1046,46 @@ def run_postprocessor(
                 applied=True,
                 error=preflight_error,
             )
+        if preset.adapter == ADAPTER_KIRO:
+            agent_error = _run_kiro_agent_validation(
+                preset,
+                temp_dir,
+                environment,
+                str(Path(kiro_home) / "agents" / f"{agent}.json"),
+                start_guard=start_guard,
+                on_process_started=on_process_started,
+                on_process_finished=on_process_finished,
+            )
+            if agent_error:
+                logger.warning(
+                    "Kiro agent検証に失敗しました: preset=%s",
+                    preset.preset_id,
+                )
+                return PostprocessResult(
+                    text=transcript,
+                    succeeded=False,
+                    applied=True,
+                    error=agent_error,
+                )
+            model_error = _run_kiro_model_check(
+                preset,
+                temp_dir,
+                environment,
+                start_guard=start_guard,
+                on_process_started=on_process_started,
+                on_process_finished=on_process_finished,
+            )
+            if model_error:
+                logger.warning(
+                    "Kiroモデル確認に失敗しました: preset=%s",
+                    preset.preset_id,
+                )
+                return PostprocessResult(
+                    text=transcript,
+                    succeeded=False,
+                    applied=True,
+                    error=model_error,
+                )
 
         process: subprocess.Popen[str] | None = None
         guard = start_guard() if start_guard is not None else nullcontext(True)
@@ -774,6 +1163,20 @@ def run_postprocessor(
                         error = (
                             f"{preset.display_name} が終了コード "
                             f"{process.returncode} で失敗しました"
+                        )
+                    elif (
+                        preset.adapter == ADAPTER_KIRO
+                        and _kiro_stderr_reports_fallback(stderr)
+                    ):
+                        logger.warning(
+                            "Kiro CLIが警告を出力したため結果を破棄しました: "
+                            "preset=%s stderr_chars=%d",
+                            preset.preset_id,
+                            len(stderr),
+                        )
+                        error = (
+                            "Kiro CLIが指定したagentまたはモデルを"
+                            "使用できなかった可能性があります"
                         )
                     else:
                         output = _UNSAFE_OUTPUT_CONTROL_RE.sub(

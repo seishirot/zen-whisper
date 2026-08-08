@@ -16,6 +16,7 @@ private struct RawPostprocessorDocument {
 
 final class EnhancementCatalogStore {
     private static let supportedPlaceholders: Set<String> = [
+        "agent",
         "prompt",
         "system_prompt_file",
         "transcript",
@@ -54,6 +55,8 @@ final class EnhancementCatalogStore {
         "system_prompt",
         "prompt_template",
         "environment",
+        "adapter",
+        "model",
         "destination_review_revision",
         "enabled"
     ]
@@ -921,6 +924,12 @@ final class EnhancementCatalogStore {
             let inputModeChanged = local["input_mode"].map {
                 $0 != bundled?["input_mode"]
             } ?? false
+            let adapterChanged = local["adapter"].map {
+                $0 != (bundled?["adapter"] ?? .string("generic"))
+            } ?? false
+            let modelChanged = local["model"].map {
+                $0 != (bundled?["model"] ?? .string(""))
+            } ?? false
             let commandDefinitionChanged =
                 executableChanged
                 || argumentsChanged
@@ -928,6 +937,8 @@ final class EnhancementCatalogStore {
                 || preflightExecutableChanged
                 || preflightArgumentsChanged
                 || inputModeChanged
+                || adapterChanged
+                || modelChanged
 
             if executableChanged, bundled != nil {
                 if local["arguments"] == nil {
@@ -948,6 +959,12 @@ final class EnhancementCatalogStore {
                 if local["environment"] == nil {
                     local["environment"] = .object([:])
                 }
+                if local["adapter"] == nil {
+                    local["adapter"] = .string("generic")
+                }
+                if local["model"] == nil {
+                    local["model"] = .string("")
+                }
             }
             if commandDefinitionChanged,
                local["system_prompt"] == nil {
@@ -957,7 +974,10 @@ final class EnhancementCatalogStore {
                 let usesSystemPromptFile = effectiveArguments.contains {
                     $0.stringValue?.contains("{{system_prompt_file}}") == true
                 }
-                if !usesSystemPromptFile {
+                let usesAgent = effectiveArguments.contains {
+                    $0.stringValue?.contains("{{agent}}") == true
+                }
+                if !usesSystemPromptFile && !usesAgent {
                     local["system_prompt"] = .string("")
                 }
             }
@@ -1074,6 +1094,27 @@ final class EnhancementCatalogStore {
             raw["environment"],
             field: "environment"
         )
+        let adapter: EnhancementPostprocessorAdapter
+        if let value = raw["adapter"] {
+            guard let rawAdapter = value.stringValue,
+                  let parsed = EnhancementPostprocessorAdapter(
+                      rawValue: rawAdapter
+                  ) else {
+                throw EnhancementValidationFailure.invalidField("adapter")
+            }
+            adapter = parsed
+        } else {
+            adapter = .generic
+        }
+        let model: String
+        if let value = raw["model"] {
+            guard let parsed = value.stringValue else {
+                throw EnhancementValidationFailure.invalidField("model")
+            }
+            model = parsed
+        } else {
+            model = ""
+        }
         let destinationReviewRevision: String?
         if let value = raw["destination_review_revision"] {
             guard let revision = value.stringValue else {
@@ -1098,6 +1139,8 @@ final class EnhancementCatalogStore {
                 inputMode: inputMode,
                 destination: destination,
                 timeoutSeconds: timeoutSeconds,
+                adapter: adapter,
+                model: model,
                 systemPrompt: systemPrompt,
                 promptTemplate: promptTemplate,
                 environment: environment,
@@ -1122,6 +1165,7 @@ final class EnhancementCatalogStore {
         let executable = preset.executable.trimmingCharacters(
             in: .whitespacesAndNewlines
         )
+        let model = preset.model.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !displayName.isEmpty,
               hasAcceptableStringSize(displayName) else {
             throw EnhancementValidationFailure.invalidField("display_name")
@@ -1150,6 +1194,10 @@ final class EnhancementCatalogStore {
               !containsTemplateSyntax(preset.systemPrompt) else {
             throw EnhancementValidationFailure.invalidField("system_prompt")
         }
+        guard hasAcceptableStringSize(model),
+              !containsNUL(model) else {
+            throw EnhancementValidationFailure.invalidField("model")
+        }
         let promptPlaceholders = Set(placeholders(in: preset.promptTemplate))
         guard !containsUnknownPlaceholders(preset.promptTemplate),
               promptPlaceholders.isSubset(of: supportedPlaceholders),
@@ -1169,18 +1217,33 @@ final class EnhancementCatalogStore {
               argumentPlaceholders.isSubset(of: supportedPlaceholders) else {
             throw EnhancementValidationFailure.invalidField("arguments")
         }
-        guard preset.systemPrompt.isEmpty
-                != argumentPlaceholders.contains("system_prompt_file") else {
-            throw EnhancementValidationFailure.invalidField("system_prompt")
-        }
-        switch preset.inputMode {
-        case .stdin:
-            guard argumentPlaceholders.subtracting(["system_prompt_file"]).isEmpty else {
-                throw EnhancementValidationFailure.invalidField("arguments")
+        switch preset.adapter {
+        case .generic:
+            guard model.isEmpty else {
+                throw EnhancementValidationFailure.invalidField("model")
             }
-        case .argument:
-            guard argumentPlaceholders.contains("prompt") else {
-                throw EnhancementValidationFailure.invalidField("arguments")
+            guard preset.systemPrompt.isEmpty
+                    != argumentPlaceholders.contains("system_prompt_file") else {
+                throw EnhancementValidationFailure.invalidField("system_prompt")
+            }
+            switch preset.inputMode {
+            case .stdin:
+                guard argumentPlaceholders.subtracting(["system_prompt_file"]).isEmpty else {
+                    throw EnhancementValidationFailure.invalidField("arguments")
+                }
+            case .argument:
+                guard argumentPlaceholders.contains("prompt") else {
+                    throw EnhancementValidationFailure.invalidField("arguments")
+                }
+            }
+        case .kiro:
+            guard URL(fileURLWithPath: executable).lastPathComponent.lowercased()
+                    == "kiro-cli",
+                  !model.isEmpty,
+                  !preset.systemPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  preset.inputMode == .stdin,
+                  argumentPlaceholders == Set(["agent"]) else {
+                throw EnhancementValidationFailure.invalidField("adapter")
             }
         }
 
@@ -1243,6 +1306,8 @@ final class EnhancementCatalogStore {
             inputMode: preset.inputMode,
             destination: preset.destination,
             timeoutSeconds: preset.timeoutSeconds,
+            adapter: preset.adapter,
+            model: model,
             systemPrompt: preset.systemPrompt,
             promptTemplate: preset.promptTemplate,
             environment: preset.environment,
@@ -1275,6 +1340,8 @@ final class EnhancementCatalogStore {
         raw["input_mode"] = .string(preset.inputMode.rawValue)
         raw["data_destination"] = .string(preset.destination.rawValue)
         raw["timeout_sec"] = .number(preset.timeoutSeconds)
+        raw["adapter"] = .string(preset.adapter.rawValue)
+        raw["model"] = .string(preset.model)
         raw["system_prompt"] = .string(preset.systemPrompt)
         raw["prompt_template"] = .string(preset.promptTemplate)
         raw["environment"] = .object(

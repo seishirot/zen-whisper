@@ -87,13 +87,17 @@ ORT API不整合を避けるため、通常依存で `sherpa-onnx==1.13.1` と `
 `postprocessors.default.toml` とローカルの `postprocessors.toml` から汎用
 `shell=False` コマンドとして読み込む。外部送信／送信先不明のプリセットを
 有効にすると、認識結果・文脈・辞書データが指定 CLI に渡る旨を表示する。
-組み込みは Codex／Claude Code（外部送信）と Ollama（ローカル）。Codex は
+組み込みは Codex／Claude Code／Kiro CLI（外部送信）と Ollama（ローカル）。Codex は
 `gpt-5.6-luna`／low reasoning を使い、approval・extensions・agent delegation・
 shell tools・web searchを無効化する。Claude Code はsafe mode・tools無効・
 session非保存の stdin 一回実行にし、`haiku` を校正用の軽量既定として明示する。
+Kiro CLI は一時 `KIRO_HOME` にツール／MCPなしのcustom agentを生成し、system
+promptを置換して`gpt-5.6-luna`／low effortを指定したstdin一回実行にする。実行前に
+一時agentを検証して利用可能モデル一覧の完全一致を確認し、既知のagent／model
+fallback警告をstderrで検出した場合は結果を採用しない。
 プロンプト内のプロファイルと文字起こしは未信頼データとして実行ごとの
 ランダム識別子付きタグで区切り、CLIにはMarkdownなしの校正本文だけを返させる。
-任意のモデル指定はCLIコマンド引数で上書きする。
+汎用プリセットのモデル指定はCLIコマンド引数、Kiroは専用modelフィールドで上書きする。
 後処理失敗時は辞書置換までの結果へフォールバックし、送信付きホットキーの
 Enter はキャンセルする。CLI後処理が成功した場合も生成／外部変換結果を
 確認せず送信しないようEnterをキャンセルする（辞書置換のみは送信可）。

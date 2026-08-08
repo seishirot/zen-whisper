@@ -50,6 +50,7 @@ _STREAM_READ_CHUNK_BYTES = 64 * 1024
 _PROCESS_CLEANUP_TIMEOUT_SEC = 1.0
 _ALLOWED_PLACEHOLDERS = frozenset(
     {
+        "agent",
         "prompt",
         "system_prompt_file",
         "transcript",
@@ -81,8 +82,11 @@ _PRESET_FIELDS = frozenset(
         "system_prompt",
         "prompt_template",
         "environment",
+        "adapter",
+        "model",
     }
 )
+_KIRO_AGENT_ID = "zen-whisper-postprocessor"
 
 
 class EnhancementValidationError(ValueError):
@@ -136,6 +140,8 @@ class PostprocessorPreset:
     system_prompt: str
     prompt_template: str
     environment: tuple[tuple[str, str], ...]
+    adapter: Literal["generic", "kiro"] = "generic"
+    model: str = ""
 
 
 @dataclass(frozen=True)
@@ -184,6 +190,7 @@ class _CommandResult:
     stdout: str
     stdout_bytes: int
     stderr_bytes: int
+    stderr: str = ""
     exception_type: str | None = None
 
 
@@ -448,6 +455,8 @@ def _parse_preset(value: object) -> PostprocessorPreset:
     required_fields = _PRESET_FIELDS - {
         "preflight_executable",
         "data_destination",
+        "adapter",
+        "model",
         "system_prompt",
     }
     _require_fields(raw, required_fields, "postprocessor.preset")
@@ -520,6 +529,18 @@ def _parse_preset(value: object) -> PostprocessorPreset:
         raise EnhancementValidationError(
             "postprocessor.preset.data_destination must be local, remote, or unknown"
         )
+    adapter = _string(
+        raw.get("adapter", "generic"),
+        "postprocessor.preset.adapter",
+    )
+    if adapter not in {"generic", "kiro"}:
+        raise EnhancementValidationError(
+            "postprocessor.preset.adapter must be generic or kiro"
+        )
+    model = _string(
+        raw.get("model", ""),
+        "postprocessor.preset.model",
+    ).strip()
     prompt_template = _string(
         raw["prompt_template"], "postprocessor.preset.prompt_template"
     )
@@ -542,6 +563,7 @@ def _parse_preset(value: object) -> PostprocessorPreset:
             f"postprocessor.preset.preflight_arguments[{index}]",
         )
     _validate_no_nul(system_prompt, "postprocessor.preset.system_prompt")
+    _validate_no_nul(model, "postprocessor.preset.model")
 
     _validate_template(system_prompt, "postprocessor.preset.system_prompt")
     if _contains_placeholder(system_prompt):
@@ -573,22 +595,50 @@ def _parse_preset(value: object) -> PostprocessorPreset:
     )
     for index, argument in enumerate(arguments):
         _validate_template(argument, f"postprocessor.preset.arguments[{index}]")
-    if bool(system_prompt) != ("system_prompt_file" in invocation_placeholders):
-        raise EnhancementValidationError(
-            "postprocessor.preset.system_prompt and {{system_prompt_file}} "
-            "must either both be configured or both be omitted"
-        )
-    if input_mode == "stdin" and invocation_placeholders - {
-        "system_prompt_file"
-    }:
-        raise EnhancementValidationError(
-            "postprocessor.preset stdin arguments can only contain "
-            "{{system_prompt_file}}"
-        )
-    if input_mode == "argument" and "prompt" not in invocation_placeholders:
-        raise EnhancementValidationError(
-            "postprocessor.preset argument mode requires {{prompt}} in arguments"
-        )
+    if adapter == "generic":
+        if model:
+            raise EnhancementValidationError(
+                "postprocessor.preset generic adapter model must be empty"
+            )
+        if bool(system_prompt) != (
+            "system_prompt_file" in invocation_placeholders
+        ):
+            raise EnhancementValidationError(
+                "postprocessor.preset.system_prompt and {{system_prompt_file}} "
+                "must either both be configured or both be omitted"
+            )
+        if input_mode == "stdin" and invocation_placeholders - {
+            "system_prompt_file"
+        }:
+            raise EnhancementValidationError(
+                "postprocessor.preset stdin arguments can only contain "
+                "{{system_prompt_file}}"
+            )
+        if input_mode == "argument" and "prompt" not in invocation_placeholders:
+            raise EnhancementValidationError(
+                "postprocessor.preset argument mode requires {{prompt}} in arguments"
+            )
+    else:
+        if os.path.basename(executable).lower() != "kiro-cli":
+            raise EnhancementValidationError(
+                "postprocessor.preset kiro adapter executable must be kiro-cli"
+            )
+        if not model:
+            raise EnhancementValidationError(
+                "postprocessor.preset kiro adapter requires model"
+            )
+        if not system_prompt.strip():
+            raise EnhancementValidationError(
+                "postprocessor.preset kiro adapter requires system_prompt"
+            )
+        if input_mode != "stdin":
+            raise EnhancementValidationError(
+                "postprocessor.preset kiro adapter requires stdin"
+            )
+        if invocation_placeholders != {"agent"}:
+            raise EnhancementValidationError(
+                "postprocessor.preset kiro arguments require only {{agent}}"
+            )
 
     return PostprocessorPreset(
         preset_id=preset_id,
@@ -602,6 +652,8 @@ def _parse_preset(value: object) -> PostprocessorPreset:
         output_mode=output_mode,  # type: ignore[arg-type]
         timeout_sec=timeout_sec,
         data_destination=data_destination,  # type: ignore[arg-type]
+        adapter=adapter,  # type: ignore[arg-type]
+        model=model,
         system_prompt=system_prompt,
         prompt_template=prompt_template,
         environment=environment,
@@ -652,25 +704,67 @@ def _run_postprocessor_impl(
     on_process_finished: ProcessFinishedCallback | None,
 ) -> PostprocessResult:
     values = _template_values(transcript, profile, language)
-    prompt = _render(preset.prompt_template, values)
-    values["prompt"] = prompt
-    environment = os.environ.copy()
-    cli_path = os.environ.get("ZEN_WHISPER_CLI_PATH")
-    environment["PATH"] = cli_path or os.environ.get("PATH") or os.defpath
-    environment.pop("ZEN_WHISPER_CLI_PATH", None)
-    environment.update(dict(preset.environment))
 
     with tempfile.TemporaryDirectory(prefix="zen_whisper_postprocess_") as temp_dir:
-        values["system_prompt_file"] = (
-            _write_system_prompt_file(temp_dir, preset.system_prompt)
-            if preset.system_prompt
-            else ""
-        )
+        kiro_home = ""
+        if preset.adapter == "kiro":
+            values["agent"], kiro_home = _prepare_kiro_agent(temp_dir, preset)
+        else:
+            values["system_prompt_file"] = (
+                _write_system_prompt_file(temp_dir, preset.system_prompt)
+                if preset.system_prompt
+                else ""
+            )
+        prompt = _render(preset.prompt_template, values)
+        values["prompt"] = prompt
+        environment = os.environ.copy()
+        cli_path = os.environ.get("ZEN_WHISPER_CLI_PATH")
+        environment["PATH"] = cli_path or os.environ.get("PATH") or os.defpath
+        environment.pop("ZEN_WHISPER_CLI_PATH", None)
+        environment.update(dict(preset.environment))
+        if preset.adapter == "kiro":
+            environment["KIRO_HOME"] = kiro_home
+            environment["KIRO_LOG_NO_COLOR"] = "1"
+            environment["NO_COLOR"] = "1"
+            if not environment.get("KIRO_API_KEY", "").strip():
+                _log_failure(preset, "missing_kiro_api_key", transcript)
+                return _fallback(
+                    transcript,
+                    (
+                        "KIRO_API_KEY_MISSING",
+                        preset.preflight_failure_message
+                        or "Kiro CLI の非対話実行には KIRO_API_KEY が必要です",
+                    ),
+                )
         arguments = tuple(
             _render(argument, values) for argument in preset.arguments
         )
         if preset.preflight_executable is not None:
             failure = _run_preflight(
+                preset,
+                temp_dir,
+                environment,
+                on_process_started=on_process_started,
+                on_process_finished=on_process_finished,
+            )
+            if failure is not None:
+                return _fallback(transcript, failure)
+        if preset.adapter == "kiro":
+            failure = _run_kiro_agent_validation(
+                preset,
+                temp_dir,
+                environment,
+                os.path.join(
+                    kiro_home,
+                    "agents",
+                    f"{values['agent']}.json",
+                ),
+                on_process_started=on_process_started,
+                on_process_finished=on_process_finished,
+            )
+            if failure is not None:
+                return _fallback(transcript, failure)
+            failure = _run_kiro_model_check(
                 preset,
                 temp_dir,
                 environment,
@@ -804,6 +898,25 @@ def _run_postprocessor_impl(
                     (
                         "CLI_FAILED",
                         f"{preset.display_name} が正常に完了しませんでした",
+                    ),
+                )
+            if (
+                preset.adapter == "kiro"
+                and _kiro_stderr_reports_fallback(command_result.stderr)
+            ):
+                _log_failure(
+                    preset,
+                    "kiro_agent_or_model_warning",
+                    transcript,
+                    output_length=command_result.stdout_bytes,
+                    error_length=command_result.stderr_bytes,
+                )
+                return _fallback(
+                    transcript,
+                    (
+                        "KIRO_AGENT_OR_MODEL_FALLBACK",
+                        "Kiro CLIが指定したagentまたはモデルを"
+                        "使用できなかった可能性があります",
                     ),
                 )
             output = sanitize_cli_output(command_result.stdout)
@@ -940,6 +1053,249 @@ def _run_preflight(
         _close_process_streams(process)
 
 
+def _collect_kiro_model_ids(value: object) -> set[str]:
+    model_ids: set[str] = set()
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                model_ids.add(item)
+            else:
+                model_ids.update(_collect_kiro_model_ids(item))
+        return model_ids
+    if not isinstance(value, dict):
+        return model_ids
+    for key, item in value.items():
+        normalized_key = str(key).replace("_", "").lower()
+        if normalized_key in {"id", "modelid"} and isinstance(item, str):
+            model_ids.add(item)
+        elif isinstance(item, (dict, list)):
+            model_ids.update(_collect_kiro_model_ids(item))
+    return model_ids
+
+
+def _kiro_stderr_reports_fallback(stderr: str) -> bool:
+    normalized = " ".join(stderr.lower().split())
+    fallback_mentioned = any(
+        phrase in normalized
+        for phrase in ("fallback", "fall back", "falling back", "fell back")
+    )
+    default_agent_selected = "default agent" in normalized and any(
+        phrase in normalized
+        for phrase in (
+            "using default agent",
+            "use default agent",
+            "selected default agent",
+            "switching to default agent",
+            "switched to default agent",
+        )
+    )
+    return default_agent_selected or (
+        fallback_mentioned
+        and ("model" in normalized or "agent" in normalized)
+    )
+
+
+def _run_kiro_agent_validation(
+    preset: PostprocessorPreset,
+    cwd: str,
+    environment: dict[str, str],
+    agent_path: str,
+    *,
+    on_process_started: ProcessStartedCallback | None,
+    on_process_finished: ProcessFinishedCallback | None,
+) -> tuple[str, str] | None:
+    process: subprocess.Popen[Any] | None = None
+    try:
+        process = subprocess.Popen(
+            [preset.executable, "agent", "validate", agent_path],
+            shell=False,
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        _log_failure(preset, "agent_validation_executable_not_found", "")
+        return (
+            "KIRO_AGENT_INVALID",
+            f"{preset.display_name} の実行ファイルが見つかりません",
+        )
+    except Exception as exc:
+        _log_failure(
+            preset,
+            "agent_validation_launch_failed",
+            "",
+            exception_type=type(exc).__name__,
+        )
+        return (
+            "KIRO_AGENT_INVALID",
+            f"{preset.display_name} のagent検証に失敗しました",
+        )
+
+    authorized, registered, callback_error = _register_active_process(
+        process,
+        on_process_started,
+    )
+    if not authorized:
+        terminate_process_group(process)
+        _close_process_streams(process)
+        _log_failure(
+            preset,
+            "agent_validation_registration_rejected",
+            "",
+            exception_type=callback_error,
+        )
+        return (
+            "CLI_CANCELLED",
+            f"{preset.display_name} は終了処理のためキャンセルされました",
+        )
+
+    try:
+        try:
+            returncode = process.wait(timeout=min(preset.timeout_sec, 10.0))
+        except subprocess.TimeoutExpired:
+            terminate_process_group(process)
+            _log_failure(preset, "agent_validation_timeout", "")
+            return (
+                "KIRO_AGENT_INVALID",
+                f"{preset.display_name} のagent検証がタイムアウトしました",
+            )
+        if returncode != 0:
+            _log_failure(preset, "agent_validation_exit_nonzero", "")
+            return (
+                "KIRO_AGENT_INVALID",
+                f"{preset.display_name} の一時agent設定を検証できませんでした",
+            )
+        return None
+    finally:
+        if registered:
+            _notify_process_finished(
+                process,
+                on_process_finished,
+                preset,
+                "",
+            )
+        _close_process_streams(process)
+
+
+def _run_kiro_model_check(
+    preset: PostprocessorPreset,
+    cwd: str,
+    environment: dict[str, str],
+    *,
+    on_process_started: ProcessStartedCallback | None,
+    on_process_finished: ProcessFinishedCallback | None,
+) -> tuple[str, str] | None:
+    process: subprocess.Popen[Any] | None = None
+    try:
+        process = subprocess.Popen(
+            [
+                preset.executable,
+                "chat",
+                "--list-models",
+                "--format",
+                "json",
+            ],
+            shell=False,
+            cwd=cwd,
+            env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except FileNotFoundError:
+        _log_failure(preset, "model_check_executable_not_found", "")
+        return (
+            "PREFLIGHT_FAILED",
+            preset.preflight_failure_message
+            or f"{preset.display_name} のモデル確認に失敗しました",
+        )
+    except Exception as exc:
+        _log_failure(
+            preset,
+            "model_check_launch_failed",
+            "",
+            exception_type=type(exc).__name__,
+        )
+        return (
+            "PREFLIGHT_FAILED",
+            f"{preset.display_name} のモデル確認に失敗しました",
+        )
+
+    authorized, registered, callback_error = _register_active_process(
+        process,
+        on_process_started,
+    )
+    if not authorized:
+        terminate_process_group(process)
+        _close_process_streams(process)
+        _log_failure(
+            preset,
+            "model_check_registration_rejected",
+            "",
+            exception_type=callback_error,
+        )
+        return (
+            "CLI_CANCELLED",
+            f"{preset.display_name} は終了処理のためキャンセルされました",
+        )
+
+    try:
+        result = _communicate_bounded(
+            process,
+            None,
+            min(preset.timeout_sec, 10.0),
+        )
+    finally:
+        if registered:
+            _notify_process_finished(
+                process,
+                on_process_finished,
+                preset,
+                "",
+            )
+        _close_process_streams(process)
+
+    if result.status == "timeout":
+        _log_failure(preset, "model_check_timeout", "")
+        return (
+            "PREFLIGHT_TIMEOUT",
+            f"{preset.display_name} のモデル確認がタイムアウトしました",
+        )
+    if result.status != "completed" or result.returncode != 0:
+        _log_failure(
+            preset,
+            "model_check_failed",
+            "",
+            output_length=result.stdout_bytes,
+            error_length=result.stderr_bytes,
+            exception_type=result.exception_type,
+        )
+        return (
+            "PREFLIGHT_FAILED",
+            preset.preflight_failure_message
+            or f"{preset.display_name} のモデル確認に失敗しました",
+        )
+    try:
+        available_models = _collect_kiro_model_ids(json.loads(result.stdout))
+    except (json.JSONDecodeError, TypeError, ValueError):
+        _log_failure(preset, "model_check_invalid_json", "")
+        return (
+            "PREFLIGHT_FAILED",
+            f"{preset.display_name} のモデル確認に失敗しました",
+        )
+    if preset.model not in available_models:
+        _log_failure(preset, "model_unavailable", "")
+        return (
+            "KIRO_MODEL_UNAVAILABLE",
+            f"Kiroモデル {preset.model} を現在のアカウントで利用できません",
+        )
+    return None
+
+
 def _fallback(
     corrected: str,
     failure: tuple[str, str],
@@ -968,6 +1324,7 @@ def _template_values(
 ) -> dict[str, str]:
     return {
         "prompt": "",
+        "agent": "",
         "transcript": transcript,
         "context": profile.context if profile and profile.context else "（なし）",
         "terms": render_terms(profile),
@@ -995,6 +1352,54 @@ def _write_system_prompt_file(temp_dir: str, system_prompt: str) -> str:
             pass
         raise
     return path
+
+
+def _write_private_json(path: str, value: object) -> None:
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+        0o600,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as file:
+            json.dump(value, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        raise
+
+
+def _prepare_kiro_agent(
+    temp_dir: str,
+    preset: PostprocessorPreset,
+) -> tuple[str, str]:
+    kiro_home = os.path.join(temp_dir, "kiro-home")
+    agents_dir = os.path.join(kiro_home, "agents")
+    settings_dir = os.path.join(kiro_home, "settings")
+    os.makedirs(agents_dir, mode=0o700)
+    os.makedirs(settings_dir, mode=0o700)
+    _write_private_json(
+        os.path.join(settings_dir, "cli.json"),
+        {"chat.disableInheritingDefaultResources": True},
+    )
+    _write_private_json(
+        os.path.join(agents_dir, f"{_KIRO_AGENT_ID}.json"),
+        {
+            "name": _KIRO_AGENT_ID,
+            "description": "Ephemeral ZenWhisper transcript proofreader",
+            "prompt": preset.system_prompt,
+            "model": preset.model,
+            "tools": [],
+            "allowedTools": [],
+            "resources": [],
+            "mcpServers": {},
+            "includeMcpJson": False,
+        },
+    )
+    return _KIRO_AGENT_ID, kiro_home
 
 
 def _render(template: str, values: dict[str, str]) -> str:
@@ -1056,7 +1461,7 @@ def _communicate_bounded(
 ) -> _CommandResult:
     """Drain process pipes concurrently without retaining unbounded output."""
     stdout_capture = _StreamCapture(keep_content=True)
-    stderr_capture = _StreamCapture(keep_content=False)
+    stderr_capture = _StreamCapture(keep_content=True)
     wake = threading.Event()
     writer_errors: list[str] = []
     threads: list[threading.Thread] = []
@@ -1166,8 +1571,13 @@ def _communicate_bounded(
         status = "too_large"
 
     stdout = ""
+    stderr = ""
     if status == "completed":
         stdout = bytes(stdout_capture.content).decode(
+            "utf-8",
+            errors="replace",
+        )
+        stderr = bytes(stderr_capture.content).decode(
             "utf-8",
             errors="replace",
         )
@@ -1177,6 +1587,7 @@ def _communicate_bounded(
         stdout=stdout,
         stdout_bytes=stdout_capture.total_bytes,
         stderr_bytes=stderr_capture.total_bytes,
+        stderr=stderr,
         exception_type=exception_type,
     )
 

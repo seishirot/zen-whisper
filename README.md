@@ -10,7 +10,7 @@ Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe
 - **Local ASR transcription** — no data leaves your machine after models are installed
 - **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper or Transformers-native Qwen3-ASR) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
 - **Domain profiles** — reusable project context, preferred spellings, pronunciations, and exact error mappings
-- **Optional CLI cleanup** — generic shell-free presets, including Codex and Claude Code (remote) plus Ollama (loopback local)
+- **Optional CLI cleanup** — generic shell-free presets, including Codex, Claude Code, and Kiro CLI (remote) plus Ollama (loopback local)
 - **Tray / menu bar** — runs in the background with a Windows tray icon or macOS menu bar item showing recording state
 - **Microphone selection** — pick the recording input from the Windows tray or macOS menu bar, including virtual mics like NVIDIA Broadcast
 - **Floating overlay** — Windows/Python draggable microphone widget with real-time VAD visual feedback
@@ -375,10 +375,15 @@ The bundled `postprocessors.default.toml` contains:
 - `claude`: remote Claude Code cleanup using the `haiku` model alias; Haiku
   does not support `--effort`, so the preset omits it while retaining safe
   mode, `dontAsk` permission mode, no tools, and no session persistence
+- `kiro`: remote Kiro CLI cleanup in non-interactive mode using an ephemeral
+  `KIRO_HOME` and generated custom agent. The agent replaces the system prompt,
+  selects `gpt-5.6-luna` with low effort, exposes no tools or MCP servers, and
+  disables inherited resources. ZenWhisper removes its temporary settings and
+  session after each request and logs a warning if Windows blocks cleanup
 - `ollama`: local `qwen3.5:4b` cleanup, pinned to
   `127.0.0.1:11434`
 
-The macOS native app bundles equivalent `codex`, `claude`, and `ollama` presets
+The macOS native app bundles equivalent `codex`, `claude`, `kiro`, and `ollama` presets
 as generated JSON. `postprocessors.default.toml` is the single editable source;
 run `mise exec -- python -P macos/scripts/generate_postprocessor_catalog.py`
 after changing it. The installer also generates the app resource directly from
@@ -394,13 +399,21 @@ ZenWhisper shows a safe readiness-fallback warning; run
 `ollama pull qwen3.5:4b` before trying again. It does not let `ollama run`
 implicitly fetch a model during voice input.
 
+The Kiro preset requires `kiro-cli` and a valid `KIRO_API_KEY`. Before each
+request it validates the generated custom agent, reads the account's JSON model
+list, and requires an exact match for the dedicated `Model` field. It then sends
+the rendered prompt on standard input to a single
+`kiro-cli chat --no-interactive` invocation. If ZenWhisper detects a known
+agent/model fallback warning on stderr, it discards that output and uses
+dictionary fallback instead of silently accepting another model.
+
 Add or override arbitrary CLIs from `設定... > 後処理CLI`. The editor keeps the
 command, input mode, model arguments, environment, destination declaration, and
-prompt free-form. Model selection is an ordinary CLI argument in the command
-field, so provider-specific flags such as `--model` do not require a dedicated
-ZenWhisper setting. The editor lists every supported placeholder and inserts it
-into the appropriate field when clicked. The equivalent ignored file is
-`postprocessors.toml`:
+prompt free-form. Generic presets keep model selection in ordinary CLI command
+arguments. The Kiro adapter instead has a dedicated `Model` field because Kiro
+pins the model and system prompt in a generated custom-agent definition. The
+editor lists every supported placeholder and inserts it into the appropriate
+field when clicked. The equivalent ignored file is `postprocessors.toml`:
 
 ```toml
 [postprocessors.custom]
@@ -429,11 +442,12 @@ For macOS native, create or edit a definition with the `New…` and `Edit…`
 buttons next to `Post-process` in Settings. Definitions and bundled-preset
 overrides are stored in
 `~/Library/Application Support/zen-whisper/postprocessors.json`. Executable,
-arguments, input mode, destination, timeout, preflight, environment, and prompt
-are editable. Argument and environment fields use JSON arrays/objects so spaces
-and empty arguments round-trip exactly. Model selection remains an ordinary CLI
-argument (`--model`, a model name after `ollama run`, and so on), matching the
-Windows editor's provider-neutral design. Native presets separate the
+arguments, adapter, model, input mode, destination, timeout, preflight,
+environment, and prompt are editable. Argument and environment fields use JSON
+arrays/objects so spaces and empty arguments round-trip exactly. Generic model
+selection remains an ordinary CLI argument (`--model`, a model name after
+`ollama run`, and so on); the Kiro adapter uses its dedicated model field.
+Native presets separate the
 executable and argument array, so there is no command string for a shell to
 reinterpret:
 
@@ -462,8 +476,9 @@ reinterpret:
 ```
 
 Native preset IDs `off` and `dictionary` are reserved. Supported placeholders
-are the same as Windows/Python. In `stdin` mode, invocation arguments must be
-static and all transcript/profile values travel only through standard input.
+are the same as Windows/Python. In generic `stdin` mode, invocation arguments
+may contain only `{{system_prompt_file}}`; the Kiro adapter instead requires
+`{{agent}}`. All transcript/profile values travel only through standard input.
 In `argument` mode, `arguments` must contain `{{prompt}}`, which exposes the
 rendered prompt in the child process argument list. `preflight_executable` is
 optional and is always run without standard input before the main command.
@@ -472,11 +487,13 @@ optional and is always run without standard input before the main command.
 substitution and is always executed with `shell = false`. Pipes, redirects, and
 `&&` are not interpreted; explicitly invoke a wrapper script for a complex
 flow. Supported placeholders are `{{prompt}}`, `{{transcript}}`, `{{context}}`,
-`{{terms}}`, `{{profile_name}}`, `{{language}}`, and `{{boundary}}`. The
-`{{boundary}}` value is a fresh 128-bit random identifier for delimiter names,
-so untrusted values cannot predict a matching closing delimiter. With
-`input_mode = "stdin"`, put placeholders in `prompt_template`; `command` must remain
-static so transcript/profile data cannot leak through the process command line.
+`{{terms}}`, `{{profile_name}}`, `{{language}}`, `{{boundary}}`,
+`{{system_prompt_file}}`, and `{{agent}}`. The `{{boundary}}` value is a fresh
+128-bit random identifier for delimiter names, so untrusted values cannot
+predict a matching closing delimiter. With `input_mode = "stdin"`, keep all
+transcript/profile placeholders in `prompt_template`. Generic commands may use
+only `{{system_prompt_file}}`, while Kiro commands use only `{{agent}}`, so
+transcript/profile data cannot leak through the process command line.
 Argument mode exposes the prompt in the child process command line. On Windows,
 argument mode rejects `.cmd` / `.bat` launchers because the OS may parse their
 arguments through `cmd.exe`; invoke the underlying `.exe`, `node`, or `python`

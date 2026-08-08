@@ -271,6 +271,38 @@ def test_bundled_codex_preset_restores_hardened_historical_default(tmp_path):
     _assert_bundled_prompt_is_delimited(prompt, "全ウィスパー")
 
 
+def test_bundled_kiro_preset_is_ephemeral_toolless_and_model_pinned(tmp_path):
+    presets = load_postprocessors(user_path=tmp_path / "missing.toml")
+
+    kiro = presets["kiro"]
+    argv, prompt = _build_invocation(
+        kiro,
+        "全ウィスパー",
+        _profile(),
+        "ja",
+        agent="zen-whisper-postprocessor",
+    )
+
+    assert kiro.adapter == postprocessing.ADAPTER_KIRO
+    assert kiro.model == "gpt-5.6-luna"
+    assert kiro.data_destination == DATA_DESTINATION_REMOTE
+    assert kiro.input_mode == "stdin"
+    assert kiro.preflight_command == ""
+    assert argv[:7] == [
+        "kiro-cli",
+        "chat",
+        "--no-interactive",
+        "--agent",
+        "zen-whisper-postprocessor",
+        "--effort",
+        "low",
+    ]
+    assert "--wrap" in argv
+    assert "{{agent}}" not in argv
+    _assert_bundled_system_prompt_is_dedicated(kiro.system_prompt)
+    _assert_bundled_prompt_is_delimited(prompt, "全ウィスパー")
+
+
 def test_native_bundled_catalog_matches_python_desktop_defaults(tmp_path):
     root = Path(__file__).resolve().parents[1]
     native = json.loads(
@@ -285,7 +317,7 @@ def test_native_bundled_catalog_matches_python_desktop_defaults(tmp_path):
     )["postprocessors"]
     desktop = load_postprocessors(user_path=tmp_path / "missing.toml")
 
-    assert set(native) == set(desktop) == {"codex", "claude", "ollama"}
+    assert set(native) == set(desktop) == {"codex", "claude", "kiro", "ollama"}
     for preset_id, desktop_preset in desktop.items():
         native_preset = native[preset_id]
         command = postprocessing.split_command(desktop_preset.command)
@@ -312,6 +344,8 @@ def test_native_bundled_catalog_matches_python_desktop_defaults(tmp_path):
             == desktop_preset.data_destination
         )
         assert native_preset["timeout_sec"] == desktop_preset.timeout_sec
+        assert native_preset["adapter"] == desktop_preset.adapter
+        assert native_preset["model"] == desktop_preset.model
         assert native_preset["system_prompt"] == desktop_preset.system_prompt
         assert (
             native_preset["prompt_template"]
@@ -559,6 +593,54 @@ environment = { OLLAMA_HOST = "remote.example:11434" }
     assert preset.data_destination == DATA_DESTINATION_UNKNOWN
 
 
+def test_changing_bundled_kiro_model_resets_inherited_destination(tmp_path):
+    bundled = tmp_path / "bundled.toml"
+    bundled.write_text(
+        """
+[postprocessors.kiro]
+display_name = "Kiro"
+command = 'kiro-cli chat --no-interactive --agent {{agent}} "Process stdin"'
+adapter = "kiro"
+model = "gpt-5.6-luna"
+system_prompt = "Dedicated"
+data_destination = "remote"
+prompt_template = "{{transcript}}"
+""",
+        encoding="utf-8",
+    )
+    local = tmp_path / "postprocessors.toml"
+    local.write_text(
+        """
+[postprocessors.kiro]
+model = "gpt-5.6-terra"
+""",
+        encoding="utf-8",
+    )
+
+    preset = load_postprocessors(bundled, local)["kiro"]
+
+    assert preset.model == "gpt-5.6-terra"
+    assert preset.data_destination == DATA_DESTINATION_UNKNOWN
+
+
+def test_generic_adapter_normalizes_whitespace_only_model(tmp_path):
+    source = tmp_path / "postprocessors.toml"
+    source.write_text(
+        '''
+[postprocessors.generic]
+display_name = "Generic"
+command = "generic-cli"
+model = "   "
+prompt_template = "{{transcript}}"
+''',
+        encoding="utf-8",
+    )
+
+    preset = load_postprocessors(source, tmp_path / "missing.toml")["generic"]
+
+    assert preset.model == ""
+
+
 def test_stdin_runner_uses_shell_false_and_empty_working_directory(monkeypatch):
     calls = []
 
@@ -628,6 +710,283 @@ def test_runner_uses_private_per_run_system_prompt_file(monkeypatch):
     assert result.succeeded is True
     assert captured_path is not None
     assert not captured_path.exists()
+
+
+def test_runner_creates_isolated_toolless_kiro_agent(monkeypatch):
+    captured_agent_path: Path | None = None
+    captured_home: Path | None = None
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            nonlocal captured_agent_path, captured_home
+            self.argv = argv
+            captured_home = Path(kwargs["env"]["KIRO_HOME"])
+            captured_agent_path = (
+                captured_home / "agents" / "zen-whisper-postprocessor.json"
+            )
+            if argv[1:3] == ["agent", "validate"]:
+                assert argv == [
+                    "kiro-cli",
+                    "agent",
+                    "validate",
+                    str(captured_agent_path),
+                ]
+                assert captured_agent_path.is_file()
+                return
+            if "--list-models" in argv:
+                assert argv == [
+                    "kiro-cli",
+                    "chat",
+                    "--list-models",
+                    "--format",
+                    "json",
+                ]
+                return
+            assert argv[0:5] == [
+                "kiro-cli",
+                "chat",
+                "--no-interactive",
+                "--agent",
+                "zen-whisper-postprocessor",
+            ]
+            agent = json.loads(captured_agent_path.read_text(encoding="utf-8"))
+            assert agent["prompt"] == "Dedicated"
+            assert agent["model"] == "gpt-5.6-luna"
+            assert agent["tools"] == []
+            assert agent["allowedTools"] == []
+            assert agent["mcpServers"] == {}
+            assert agent["includeMcpJson"] is False
+            settings = json.loads(
+                (captured_home / "settings" / "cli.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            assert settings == {
+                "chat.disableInheritingDefaultResources": True,
+            }
+            assert kwargs["env"]["KIRO_LOG_NO_COLOR"] == "1"
+            assert kwargs["env"]["NO_COLOR"] == "1"
+
+        def wait(self, timeout=None):
+            assert self.argv[1:3] == ["agent", "validate"]
+            return 0
+
+        def communicate(self, input=None, timeout=None):
+            if "--list-models" in self.argv:
+                assert input is None
+                return json.dumps(
+                    {"models": [{"id": "gpt-5.6-luna"}]}
+                ), ""
+            assert input == "secret transcript"
+            return " corrected ", ""
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="kiro",
+        display_name="Kiro",
+        command=(
+            'kiro-cli chat --no-interactive --agent {{agent}} '
+            '"Process stdin"'
+        ),
+        adapter=postprocessing.ADAPTER_KIRO,
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        environment={
+            "KIRO_API_KEY": "test-key",
+            "KIRO_HOME": "must-not-win",
+            "KIRO_LOG_NO_COLOR": "0",
+            "NO_COLOR": "",
+        },
+    )
+
+    result = run_postprocessor(preset, "secret transcript", None, "ja")
+
+    assert result.succeeded is True
+    assert result.text == "corrected"
+    assert captured_agent_path is not None
+    assert captured_home is not None
+    assert not captured_agent_path.exists()
+    assert not captured_home.exists()
+
+
+def test_runner_rejects_unavailable_kiro_model(monkeypatch):
+    launches: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+            launches.append(argv)
+
+        def wait(self, timeout=None):
+            assert self.argv[1:3] == ["agent", "validate"]
+            return 0
+
+        def communicate(self, input=None, timeout=None):
+            assert "--list-models" in self.argv
+            return json.dumps({"models": [{"id": "other-model"}]}), ""
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="kiro",
+        display_name="Kiro",
+        command='kiro-cli chat --no-interactive --agent {{agent}} "Process stdin"',
+        adapter=postprocessing.ADAPTER_KIRO,
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        environment={"KIRO_API_KEY": "test-key"},
+    )
+
+    result = run_postprocessor(preset, "secret transcript", None, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert result.error == (
+        "Kiroモデル gpt-5.6-luna を現在のアカウントで利用できません"
+    )
+    assert len(launches) == 2
+    assert launches[0][1:3] == ["agent", "validate"]
+    assert "--list-models" in launches[1]
+
+
+def test_runner_rejects_invalid_generated_kiro_agent(monkeypatch):
+    launches: list[list[str]] = []
+
+    class FakeProcess:
+        returncode = 1
+
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+            launches.append(argv)
+
+        def wait(self, timeout=None):
+            return 1
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="kiro",
+        display_name="Kiro",
+        command='kiro-cli chat --no-interactive --agent {{agent}} "Process stdin"',
+        adapter=postprocessing.ADAPTER_KIRO,
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        environment={"KIRO_API_KEY": "test-key"},
+    )
+
+    result = run_postprocessor(preset, "secret transcript", None, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert result.error == "Kiro の一時agent設定を検証できませんでした"
+    assert len(launches) == 1
+    assert launches[0][1:3] == ["agent", "validate"]
+
+
+def test_kiro_fallback_warning_detection_is_specific():
+    assert postprocessing._kiro_stderr_reports_fallback(
+        "Warning: requested model unavailable; falling back to default model"
+    )
+    assert postprocessing._kiro_stderr_reports_fallback(
+        "Custom agent not found, fall back to default agent"
+    )
+    assert postprocessing._kiro_stderr_reports_fallback(
+        "Custom agent not found; using default agent"
+    )
+    assert not postprocessing._kiro_stderr_reports_fallback(
+        "Warning: a newer Kiro CLI version is available"
+    )
+
+
+def test_runner_discards_kiro_output_when_cli_reports_fallback(monkeypatch):
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            pass
+
+        def communicate(self, input=None, timeout=None):
+            assert input == "secret transcript"
+            return (
+                "plausible but wrong output",
+                "Custom agent not found; using default agent",
+            )
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    monkeypatch.setattr(
+        postprocessing,
+        "_run_kiro_agent_validation",
+        lambda *args, **kwargs: "",
+    )
+    monkeypatch.setattr(
+        postprocessing,
+        "_run_kiro_model_check",
+        lambda *args, **kwargs: "",
+    )
+    preset = PostprocessorPreset(
+        preset_id="kiro",
+        display_name="Kiro",
+        command='kiro-cli chat --no-interactive --agent {{agent}} "Process stdin"',
+        adapter=postprocessing.ADAPTER_KIRO,
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        environment={"KIRO_API_KEY": "test-key"},
+    )
+
+    result = run_postprocessor(preset, "secret transcript", None, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert "agentまたはモデル" in result.error
+
+
+def test_generic_runner_accepts_stderr_that_mentions_kiro_fallback(monkeypatch):
+    class FakeProcess:
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            pass
+
+        def communicate(self, input=None, timeout=None):
+            return "corrected", "Custom agent not found; using default agent"
+
+    monkeypatch.setattr(postprocessing.subprocess, "Popen", FakeProcess)
+    monkeypatch.setattr(postprocessing, "subprocess_run_options", lambda: {})
+    preset = PostprocessorPreset(
+        preset_id="generic",
+        display_name="Generic",
+        command="generic-cli",
+    )
+
+    result = run_postprocessor(preset, "raw", None, "ja")
+
+    assert result.succeeded is True
+    assert result.text == "corrected"
+
+
+def test_runner_rejects_kiro_without_api_key(monkeypatch):
+    monkeypatch.delenv("KIRO_API_KEY", raising=False)
+    preset = PostprocessorPreset(
+        preset_id="kiro",
+        display_name="Kiro",
+        command='kiro-cli chat --no-interactive --agent {{agent}} "Process stdin"',
+        adapter=postprocessing.ADAPTER_KIRO,
+        model="gpt-5.6-luna",
+        system_prompt="Dedicated",
+        preflight_failure_message="Kiro needs KIRO_API_KEY",
+    )
+
+    result = run_postprocessor(preset, "secret transcript", None, "ja")
+
+    assert result.succeeded is False
+    assert result.text == "secret transcript"
+    assert result.error == "Kiro needs KIRO_API_KEY"
 
 
 def test_cli_output_controls_are_collapsed_to_one_safe_line(monkeypatch):

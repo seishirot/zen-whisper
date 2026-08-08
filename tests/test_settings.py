@@ -393,9 +393,23 @@ def test_local_transport_change_requires_destination_reclassification():
             "prompt_template": "Fix {{transcript}}",
         }
     )
+    changed_adapter = PostprocessorPreset(
+        **{
+            **original.__dict__,
+            "adapter": "kiro",
+        }
+    )
+    changed_model = PostprocessorPreset(
+        **{
+            **original.__dict__,
+            "model": "gpt-5.6-luna",
+        }
+    )
 
     assert local_transport_changed(original, changed_command) is True
     assert local_transport_changed(original, changed_environment) is True
+    assert local_transport_changed(original, changed_adapter) is True
+    assert local_transport_changed(original, changed_model) is True
     assert local_transport_changed(original, prompt_only) is False
 
 

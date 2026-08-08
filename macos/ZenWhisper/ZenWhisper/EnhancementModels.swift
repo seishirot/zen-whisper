@@ -313,6 +313,11 @@ enum EnhancementPostprocessorInputMode: String, CaseIterable, Codable, Sendable 
     case argument
 }
 
+enum EnhancementPostprocessorAdapter: String, CaseIterable, Codable, Sendable {
+    case generic
+    case kiro
+}
+
 enum EnhancementDataDestination: String, CaseIterable, Codable, Sendable {
     case local
     case remote
@@ -330,6 +335,8 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
     var inputMode: EnhancementPostprocessorInputMode
     var destination: EnhancementDataDestination
     var timeoutSeconds: Double
+    var adapter: EnhancementPostprocessorAdapter
+    var model: String
     var systemPrompt: String
     var promptTemplate: String
     var environment: [String: String]
@@ -347,6 +354,8 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
         inputMode: EnhancementPostprocessorInputMode = .stdin,
         destination: EnhancementDataDestination = .unknown,
         timeoutSeconds: Double = 30,
+        adapter: EnhancementPostprocessorAdapter = .generic,
+        model: String = "",
         systemPrompt: String = "",
         promptTemplate: String = "{{transcript}}",
         environment: [String: String] = [:],
@@ -363,6 +372,8 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
         self.inputMode = inputMode
         self.destination = destination
         self.timeoutSeconds = timeoutSeconds
+        self.adapter = adapter
+        self.model = model
         self.systemPrompt = systemPrompt
         self.promptTemplate = promptTemplate
         self.environment = environment
@@ -387,6 +398,8 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
             "output_mode": "stdout",
             "timeout_sec": timeoutSeconds,
             "data_destination": destination.rawValue,
+            "adapter": adapter.rawValue,
+            "model": model,
             "system_prompt": systemPrompt,
             "prompt_template": promptTemplate,
             "environment": environment
@@ -412,6 +425,8 @@ struct EnhancementPostprocessorPreset: Equatable, Sendable {
                 "preflight_executable": preflightExecutable,
                 "preflight_arguments": preflightArguments,
                 "input_mode": inputMode.rawValue,
+                "adapter": adapter.rawValue,
+                "model": model,
                 "environment": environment
             ]
         )
