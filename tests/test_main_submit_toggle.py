@@ -42,6 +42,7 @@ def _make_recording_app() -> App:
     app._lock = threading.Lock()
     app._model_load_lock = threading.Lock()
     app._model_loading = False
+    app._model_load_error = None
     app._is_recording = True
     app._is_capturing = True
     app._submit_after_paste = False
@@ -67,6 +68,7 @@ def _make_idle_app() -> App:
     app._lock = threading.Lock()
     app._model_load_lock = threading.Lock()
     app._model_loading = False
+    app._model_load_error = None
     app._is_recording = False
     app._is_capturing = False
     app._submit_after_paste = False
@@ -130,6 +132,21 @@ def test_toggle_is_rejected_while_latest_model_is_loading() -> None:
 
     assert app._is_recording is False
     assert notices == ["モデルを準備中です。しばらくお待ちください。"]
+
+
+def test_toggle_reports_model_load_failure_instead_of_preparing() -> None:
+    app = _make_idle_app()
+    notices = []
+    app._model_load_error = main_module._MODEL_LOAD_FAILED_MESSAGE
+    app.tray.notify = notices.append
+
+    app._on_toggle()
+
+    assert app._is_recording is False
+    assert len(notices) == 1
+    assert "ロードに失敗" in notices[0]
+    assert "再起動" in notices[0]
+    assert "準備中" not in notices[0]
 
 
 def test_recording_can_still_be_stopped_while_model_load_flag_is_set() -> None:
@@ -485,6 +502,7 @@ def _make_settings_app() -> App:
     app._model_worker_lock = threading.Lock()
     app._model_load_generation = 0
     app._model_loading = False
+    app._model_load_error = None
     app.transcriber = _ReadyTranscriber()
     app.tray = _SettingsTray()
     app.overlay = _SettingsOverlay()
@@ -1174,6 +1192,7 @@ def test_model_loading_recovers_when_worker_thread_cannot_start(
     app._load_model_async()
 
     assert app._model_loading is False
+    assert app._model_load_error is not None
     assert unloaded == [True]
     assert states[-1] is main_module.TrayState.IDLE
     assert "開始できませんでした" in app.tray.notices[-1]
@@ -1212,6 +1231,7 @@ def test_model_loading_recovers_when_transcriber_construction_fails(
     app._load_model_async()
 
     assert app._model_loading is False
+    assert app._model_load_error is not None
     assert unloaded == [True]
     assert states[-1] is main_module.TrayState.IDLE
     assert "ロードに失敗" in app.tray.notices[-1]

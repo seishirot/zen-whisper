@@ -88,6 +88,12 @@ from src.tray import TrayApp, TrayState
 logger = logging.getLogger("zen-whisper")
 
 
+_MODEL_LOAD_FAILED_MESSAGE = (
+    "モデルのロードに失敗しているため実行できません。"
+    "ZenWhisperを再起動してください。"
+)
+
+
 def _write_startup_warning(message: str) -> None:
     """Best-effort diagnostics that also work under pythonw.exe."""
     try:
@@ -220,6 +226,7 @@ class App:
         self._model_worker_lock = threading.Lock()
         self._model_load_generation = 0
         self._model_loading = False
+        self._model_load_error: str | None = None
         self._language = self.cfg.recognition.language
         self._is_recording = False
         self._is_capturing = False
@@ -994,6 +1001,7 @@ class App:
                 self._model_load_generation += 1
                 generation = self._model_load_generation
                 self._model_loading = True
+                self._model_load_error = None
         self._set_state(TrayState.LOADING)
         if notify_message:
             self.tray.notify(notify_message)
@@ -1057,11 +1065,14 @@ class App:
                             generation,
                         )
                         return
-                    if candidate.is_ready:
-                        self.tray.notify(
-                            "モデルのロードが完了しました"
-                            f"（{candidate.engine_label}）。使用可能です。"
+                    if not candidate.is_ready:
+                        raise RuntimeError(
+                            "モデルのロード完了後もASRバックエンドを利用できません"
                         )
+                    self.tray.notify(
+                        "モデルのロードが完了しました"
+                        f"（{candidate.engine_label}）。使用可能です。"
+                    )
                 except Exception:
                     with self._model_load_lock:
                         current_failure = (
@@ -1071,6 +1082,8 @@ class App:
                         failed_transcriber = (
                             candidate if candidate is not None else self.transcriber
                         )
+                        if current_failure:
+                            self._model_load_error = _MODEL_LOAD_FAILED_MESSAGE
                     if not current_failure:
                         if candidate is not None:
                             self._unload_transcriber(candidate)
@@ -1108,6 +1121,7 @@ class App:
                 )
                 if start_failure:
                     self._model_loading = False
+                    self._model_load_error = _MODEL_LOAD_FAILED_MESSAGE
                     failed_transcriber = self.transcriber
             if start_failure:
                 self._unload_transcriber(failed_transcriber)
@@ -1260,10 +1274,14 @@ class App:
                 return
             with self._model_load_lock:
                 model_loading = self._model_loading
+                model_load_error = self._model_load_error
             if model_loading:
                 self.tray.notify(
                     "モデルを準備中です。しばらくお待ちください。"
                 )
+                return
+            if model_load_error:
+                self.tray.notify(model_load_error)
                 return
             if not self.transcriber.is_ready:
                 self.tray.notify("モデルを準備中です。しばらくお待ちください。")
