@@ -142,6 +142,37 @@ setups.
   uv run --locked zen-whisper
   ```
 
+### External recording commands (Windows)
+
+An already-running ZenWhisper instance can be toggled without synthesizing a
+keyboard shortcut. This is intended for application launchers such as Logi
+Options+ while an RDP client has keyboard focus.
+
+```powershell
+# Normal toggle: command form
+.venv\Scripts\zen-whisper.exe --toggle
+
+# Normal toggle: argument-free launcher form (recommended for Options+)
+.venv\Scripts\zen-whisper-toggle.exe
+
+# Stop, paste, then press Enter
+.venv\Scripts\zen-whisper.exe --submit-toggle
+
+# Argument-free submit launcher (recommended for Options+)
+.venv\Scripts\zen-whisper-submit-toggle.exe
+```
+
+Run `uv sync --locked` after updating ZenWhisper so all GUI entry points are
+installed. The command launchers require ZenWhisper to be running already and
+exits immediately after signaling it. It uses session-local Windows semaphores;
+it does not send `Shift+Space`, `Ctrl`, or any other keyboard input. Configure
+each Options+ action to open only the corresponding argument-free executable,
+without an additional keystroke action. Use `zen-whisper-toggle.exe` for the
+normal recording toggle and `zen-whisper-submit-toggle.exe` for the same
+start/stop flow as the `submit_toggle` hotkey: its stop action pastes the result
+and presses Enter only after a successful paste. If no instance is running, a
+command exits without starting recording.
+
 **macOS**:
 ```bash
 mise trust .mise.toml

@@ -1262,6 +1262,9 @@ class App:
 
     def _on_toggle(self, submit_after_paste: bool = False) -> None:
         with self._lock:
+            if getattr(self, "_shutdown", False):
+                logger.info("終了処理中のため録音トグルを無視します")
+                return
             if self._is_recording:
                 if submit_after_paste and self._is_capturing and not self._stop_event.is_set():
                     self._submit_after_paste = True
@@ -1446,11 +1449,14 @@ class App:
         self._cleanup()
 
 
-def main() -> None:
+def main() -> int:
     """エントリポイント関数。"""
-    app = App()
-    app.run()
+    # Direct development launches share the same single-instance/control path
+    # as the installed GUI entry point, although importing this module is heavier.
+    from src.launcher import main as launcher_main
+
+    return launcher_main(app_factory=App)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -122,6 +122,18 @@ def test_start_clears_stale_stop_event_before_worker_starts(monkeypatch) -> None
     assert _ThreadStub.started_targets[0].__self__ is app
 
 
+def test_toggle_is_ignored_after_shutdown(monkeypatch) -> None:
+    app = _make_idle_app()
+    app._shutdown = True
+    _ThreadStub.started_targets = []
+    monkeypatch.setattr(main_module.threading, "Thread", _ThreadStub)
+
+    app._on_toggle()
+
+    assert app._is_recording is False
+    assert _ThreadStub.started_targets == []
+
+
 def test_toggle_is_rejected_while_latest_model_is_loading() -> None:
     app = _make_idle_app()
     notices = []

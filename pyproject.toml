@@ -82,7 +82,9 @@ packages = ["src"]
 "src/model_manifest.json" = "src/model_manifest.json"
 
 [project.gui-scripts]
-zen-whisper = "src.main:main"
+zen-whisper = "src.launcher:main"
+zen-whisper-toggle = "src.launcher:toggle_main"
+zen-whisper-submit-toggle = "src.launcher:submit_toggle_main"
 
 [tool.uv]
 required-version = "==0.11.32"
