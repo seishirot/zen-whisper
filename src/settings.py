@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import logging
 import math
-import sys
 import threading
 import tkinter as tk
 from collections.abc import Callable, Mapping
@@ -356,9 +355,6 @@ class SettingsSnapshot:
     postprocessors_fingerprint: FileFingerprint = (
         MISSING_FILE_FINGERPRINT
     )
-    hotkey_healthy: bool = True
-    hotkey_status: str = ""
-    hotkey_can_retry: bool = False
 
 
 def refresh_snapshot_resources(
@@ -375,9 +371,6 @@ def refresh_snapshot_resources(
         config_fingerprint=previous.config_fingerprint,
         profile_fingerprints=refreshed.profile_fingerprints,
         postprocessors_fingerprint=refreshed.postprocessors_fingerprint,
-        hotkey_healthy=refreshed.hotkey_healthy,
-        hotkey_status=refreshed.hotkey_status,
-        hotkey_can_retry=refreshed.hotkey_can_retry,
     )
 
 
@@ -395,9 +388,6 @@ def refresh_snapshot_config(
         config_fingerprint=refreshed.config_fingerprint,
         profile_fingerprints=previous.profile_fingerprints,
         postprocessors_fingerprint=previous.postprocessors_fingerprint,
-        hotkey_healthy=refreshed.hotkey_healthy,
-        hotkey_status=refreshed.hotkey_status,
-        hotkey_can_retry=refreshed.hotkey_can_retry,
     )
 
 
@@ -912,17 +902,12 @@ class SettingsWindow:
         tab = self._add_scrollable_tab(notebook, "基本")
 
         hotkeys = self._section(tab, "ホットキー")
-        apply_note = (
-            "Windowsでは保存後すぐ反映"
-            if sys.platform == "win32"
-            else "変更はZenWhisper再起動後に反映"
-        )
         self._entry_row(
             hotkeys,
             0,
             "録音トグル",
             "hotkey.toggle",
-            help_text=f"複数指定はカンマ区切り。{apply_note}",
+            help_text="複数指定はカンマ区切り",
         )
         self._entry_row(
             hotkeys,
@@ -1921,23 +1906,14 @@ class SettingsWindow:
             return
 
         changed_keys = self._config_changed_keys()
-        hotkey_retry = self._hotkey_retry_available()
         if self._save_config_button is not None:
             self._save_config_button.configure(
-                state="normal"
-                if changed_keys or hotkey_retry
-                else "disabled"
+                state="normal" if changed_keys else "disabled"
             )
         if self._config_changes_var is None:
             return
         if not changed_keys:
-            if hotkey_retry:
-                self._config_changes_var.set(
-                    "Windowsホットキーの再登録が必要です。"
-                    "「設定を保存」で再試行できます"
-                )
-            else:
-                self._config_changes_var.set("未保存の設定変更はありません")
+            self._config_changes_var.set("未保存の設定変更はありません")
             return
 
         labels = [
@@ -1952,14 +1928,6 @@ class SettingsWindow:
         self._config_changes_var.set(
             f"未保存の設定変更: {len(changed_keys)}件"
             f"（{'、'.join(labels)}{suffix}）"
-        )
-
-    def _hotkey_retry_available(self) -> bool:
-        snapshot = self._snapshot
-        return bool(
-            snapshot is not None
-            and snapshot.hotkey_can_retry
-            and not snapshot.hotkey_healthy
         )
 
     def _discard_config_changes(self) -> None:
@@ -2081,11 +2049,6 @@ class SettingsWindow:
                 "ホットキー設定を修正してください: "
                 + hotkey_errors[0]
             )
-        elif not snapshot.hotkey_healthy:
-            status_message = (
-                "Windowsホットキーを利用できません: "
-                + (snapshot.hotkey_status or "原因不明")
-            )
         self._set_status(status_message)
 
     def _refresh_config_snapshot(
@@ -2131,11 +2094,6 @@ class SettingsWindow:
             status_message = (
                 "ホットキー設定を修正してください: "
                 + hotkey_errors[0]
-            )
-        elif not snapshot.hotkey_healthy:
-            status_message = (
-                "Windowsホットキーを利用できません: "
-                + (snapshot.hotkey_status or "原因不明")
             )
         self._set_status(status_message)
 
@@ -2609,26 +2567,13 @@ class SettingsWindow:
             )
             return
         changed_keys = self._config_changed_keys()
-        hotkey_retry = self._hotkey_retry_available()
-        if not changed_keys and not hotkey_retry:
+        if not changed_keys:
             self._set_status("保存する設定変更はありません")
             self._update_config_change_state()
             return
         try:
             cfg = self._config_from_form(changed_keys)
-            confirmed = (
-                self._confirm_config_changes(cfg, changed_keys)
-                if changed_keys
-                else messagebox.askyesno(
-                    "Windowsホットキーを再登録しますか？",
-                    (
-                        "config.tomlの現在値を使って、Windowsホットキーを"
-                        "再登録します。"
-                    ),
-                    parent=self._root,
-                )
-            )
-            if not confirmed:
+            if not self._confirm_config_changes(cfg, changed_keys):
                 self._set_status("設定の保存をキャンセルしました")
                 return
             if not self._confirm_external_postprocessor(cfg):

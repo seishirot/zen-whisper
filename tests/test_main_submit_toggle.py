@@ -490,56 +490,6 @@ class _SettingsOverlay:
         self.stopped = True
 
 
-class _SettingsHotkeyTransaction:
-    def __init__(self) -> None:
-        self.committed = False
-        self.aborted = False
-        self.commit_error = None
-        self.abort_error = None
-
-    def commit(self) -> None:
-        if self.commit_error is not None:
-            raise self.commit_error
-        self.committed = True
-
-    def abort(self) -> None:
-        if self.abort_error is not None:
-            raise self.abort_error
-        self.aborted = True
-
-
-class _SettingsHotkey:
-    supports_live_reconfigure = True
-
-    def __init__(self) -> None:
-        self.runtime_status = main_module.HotkeyRuntimeStatus(True, "ok")
-        self.transaction = _SettingsHotkeyTransaction()
-        self.prepared = []
-        self.recovered = []
-        self.prepare_error = None
-        self.recovery_status = main_module.HotkeyRuntimeStatus(True, "ok")
-        self.runtime_error_callback = None
-
-    def status(self):
-        return self.runtime_status
-
-    def set_runtime_error_callback(self, callback):
-        self.runtime_error_callback = callback
-
-    def prepare_reconfigure(self, cfg):
-        if self.prepare_error is not None:
-            raise self.prepare_error
-        self.prepared.append(cfg)
-        return self.transaction
-
-    def recover(self, cfg):
-        self.recovered.append(cfg)
-        return self.recovery_status
-
-    def stop(self) -> bool:
-        return True
-
-
 def _make_settings_app() -> App:
     app = App.__new__(App)
     app.cfg = AppConfig()
@@ -569,24 +519,7 @@ def _make_settings_app() -> App:
     app.tray = _SettingsTray()
     app.overlay = _SettingsOverlay()
     app.sound = object()
-    app._hotkey_handle = _SettingsHotkey()
-    app._hotkey_start_error = ""
     return app
-
-
-def test_hotkey_runtime_error_is_shown_in_tray() -> None:
-    app = _make_settings_app()
-    status = main_module.HotkeyRuntimeStatus(
-        False,
-        "Win32 error 1234",
-        restart_required=True,
-    )
-
-    app._on_hotkey_runtime_error(status)
-
-    assert app._hotkey_start_error == "Win32 error 1234"
-    assert "ホットキーが停止" in app.tray.notices[-1]
-    assert "Win32 error 1234" in app.tray.notices[-1]
 
 
 def test_settings_save_is_rejected_while_pipeline_is_active(monkeypatch):
@@ -663,7 +596,7 @@ def test_sound_toggle_persists_under_config_revision_lock(monkeypatch):
     assert app._settings_revision == 1
 
 
-def test_settings_save_applies_hotkey_live_without_restart(monkeypatch):
+def test_settings_save_applies_live_and_marks_restart_fields(monkeypatch):
     app = _make_settings_app()
     new_cfg = copy.deepcopy(app.cfg)
     new_cfg.hotkey.toggle = "ctrl+space"
@@ -697,225 +630,8 @@ def test_settings_save_applies_hotkey_live_without_restart(monkeypatch):
     assert app._language == new_cfg.recognition.language
     assert app.tray.applied == [(new_cfg, {}, {})]
     assert load_messages == ["設定変更によりモデルを再読み込みしています"]
-    assert app._hotkey_handle.prepared == [new_cfg.hotkey]
-    assert app._hotkey_handle.transaction.committed is True
-    assert "再起動後" not in message
-
-
-def test_hotkey_prepare_failure_keeps_config_and_file_unchanged(monkeypatch):
-    app = _make_settings_app()
-    old_cfg = app.cfg
-    new_cfg = copy.deepcopy(old_cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    saved = []
-    app._hotkey_handle.prepare_error = main_module.HotkeyRuntimeError(
-        "ホットキー「ctrl+space」を登録できませんでした "
-        "(Win32 error 1409)"
-    )
-    monkeypatch.setattr(
-        main_module,
-        "save_config",
-        lambda cfg, **kwargs: saved.append(cfg) or True,
-    )
-
-    succeeded, message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is False
-    assert "1409" in message
-    assert app.cfg is old_cfg
-    assert saved == []
-
-
-def test_hotkey_prepare_unknown_failure_recovers_old_config(monkeypatch):
-    app = _make_settings_app()
-    old_cfg = app.cfg
-    new_cfg = copy.deepcopy(old_cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    app._hotkey_handle.prepare_error = main_module.HotkeyRuntimeError(
-        "command timeout",
-        state_unknown=True,
-    )
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: True)
-
-    succeeded, message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is False
-    assert app._hotkey_handle.recovered == [old_cfg.hotkey]
-    assert "旧設定" in message
-
-
-def test_config_save_failure_aborts_prepared_hotkeys(monkeypatch):
-    app = _make_settings_app()
-    old_cfg = app.cfg
-    new_cfg = copy.deepcopy(old_cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: False)
-
-    succeeded, message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is False
-    assert "保存に失敗" in message
-    assert app._hotkey_handle.transaction.aborted is True
-    assert app.cfg is old_cfg
-
-
-def test_abort_failure_rebuilds_from_old_authoritative_config(monkeypatch):
-    app = _make_settings_app()
-    old_cfg = app.cfg
-    new_cfg = copy.deepcopy(old_cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    app._hotkey_handle.transaction.abort_error = (
-        main_module.HotkeyRuntimeError("abort timeout", state_unknown=True)
-    )
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: False)
-
-    succeeded, _message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is False
-    assert app._hotkey_handle.recovered == [old_cfg.hotkey]
-    assert app.cfg is old_cfg
-
-
-def test_abort_recovery_failure_requests_restart(monkeypatch):
-    app = _make_settings_app()
-    new_cfg = copy.deepcopy(app.cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    app._hotkey_handle.transaction.abort_error = (
-        main_module.HotkeyRuntimeError("abort timeout", state_unknown=True)
-    )
-    app._hotkey_handle.recovery_status = main_module.HotkeyRuntimeStatus(
-        False,
-        "old thread is still alive",
-        restart_required=True,
-    )
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: False)
-
-    succeeded, message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is False
-    assert "再起動してください" in message
-
-
-def test_commit_failure_rebuilds_from_new_authoritative_config(monkeypatch):
-    app = _make_settings_app()
-    new_cfg = copy.deepcopy(app.cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    app._hotkey_handle.transaction.commit_error = (
-        main_module.HotkeyRuntimeError("commit timeout", state_unknown=True)
-    )
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: True)
-    monkeypatch.setattr(main_module, "SoundPlayer", lambda cfg: object())
-
-    succeeded, message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is True
-    assert app.cfg is new_cfg
-    assert app._hotkey_handle.recovered == [new_cfg.hotkey]
-    assert "再構築" in message
-
-
-def test_commit_recovery_failure_preserves_saved_config_and_requests_restart(
-    monkeypatch,
-):
-    app = _make_settings_app()
-    new_cfg = copy.deepcopy(app.cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    app._hotkey_handle.transaction.commit_error = (
-        main_module.HotkeyRuntimeError("commit timeout", state_unknown=True)
-    )
-    app._hotkey_handle.recovery_status = main_module.HotkeyRuntimeStatus(
-        False,
-        "old thread is still alive",
-        restart_required=True,
-    )
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: True)
-    monkeypatch.setattr(main_module, "SoundPlayer", lambda cfg: object())
-
-    succeeded, message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is True
-    assert app.cfg is new_cfg
-    assert "再起動してください" in message
-
-
-def test_degraded_runtime_retries_even_when_hotkey_value_is_unchanged(
-    monkeypatch,
-):
-    app = _make_settings_app()
-    cfg = copy.deepcopy(app.cfg)
-    app._hotkey_handle.runtime_status = main_module.HotkeyRuntimeStatus(
-        False,
-        "startup registration failed",
-    )
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: True)
-    monkeypatch.setattr(main_module, "SoundPlayer", lambda cfg: object())
-
-    succeeded, _message = app._on_settings_save_config(cfg)
-
-    assert succeeded is True
-    assert app._hotkey_handle.prepared == [cfg.hotkey]
-    assert app._hotkey_handle.transaction.committed is True
-
-
-def test_unsettled_hotkey_thread_is_not_reconfigured_until_restart(monkeypatch):
-    app = _make_settings_app()
-    new_cfg = copy.deepcopy(app.cfg)
-    new_cfg.hotkey.toggle = "ctrl+space"
-    app._hotkey_handle.runtime_status = main_module.HotkeyRuntimeStatus(
-        False,
-        "old thread is still alive",
-        restart_required=True,
-    )
-    monkeypatch.setattr(main_module, "save_config", lambda cfg, **kwargs: True)
-    monkeypatch.setattr(main_module, "SoundPlayer", lambda cfg: object())
-
-    succeeded, message = app._on_settings_save_config(new_cfg)
-
-    assert succeeded is True
-    assert app._hotkey_handle.prepared == []
     assert "ホットキー" in message
     assert "再起動後" in message
-
-
-def test_cleanup_unregisters_hotkeys_before_other_components() -> None:
-    events = []
-
-    class Component:
-        def __init__(self, name):
-            self.name = name
-
-        def stop(self):
-            events.append(self.name)
-
-    class Hotkey(Component):
-        def stop(self):
-            events.append(self.name)
-            return True
-
-    app = App.__new__(App)
-    app._lock = threading.Lock()
-    app._shutdown = False
-    app._stop_event = threading.Event()
-    app._exit_event = threading.Event()
-    app._model_load_lock = threading.Lock()
-    app._model_load_generation = 0
-    app._model_loading = True
-    app._hotkey_handle = Hotkey("hotkey")
-    app._cancel_active_postprocessor = lambda: events.append("postprocessor")
-    app.settings = Component("settings")
-    app.overlay = Component("overlay")
-    app.tray = Component("tray")
-
-    app._cleanup()
-    app._cleanup()
-
-    assert events == [
-        "hotkey",
-        "postprocessor",
-        "settings",
-        "overlay",
-        "tray",
-    ]
 
 
 def test_qwen_max_tokens_change_requires_model_reload():
