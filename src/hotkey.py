@@ -1,6 +1,6 @@
 """グローバルホットキーモジュール。
 
-Windows: pynput Listener + win32_event_filter でキー抑制付き。
+Windows: Win32 RegisterHotKey + 専用メッセージループ。
 macOS:   pynput Listener + suppress=True (Quartz Event Tap) でキー抑制。
 """
 
@@ -10,10 +10,22 @@ import logging
 import sys
 import threading
 from collections.abc import Callable
+from typing import Protocol
 
 from pynput import keyboard
 
 from src.config import HotkeyConfig
+from src.windows_hotkey import (
+    MOD_ALT,
+    MOD_CONTROL,
+    MOD_SHIFT,
+    MOD_WIN,
+    HotkeyRuntimeError,
+    HotkeyRuntimeStatus,
+    WindowsHotkeyBinding,
+    WindowsHotkeyController,
+    WindowsHotkeyTransaction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -142,71 +154,120 @@ def validate_hotkey_config(cfg: HotkeyConfig) -> list[str]:
 # ══════════════════════════════════════════════════════
 
 
-class _WindowsHotkeyListener:
-    """
-    Windows: win32_event_filter 内でコンボ判定 → suppress → コールバックを別スレッドで発火。
-    """
+_WINDOWS_MODIFIERS = {
+    "alt": MOD_ALT,
+    "ctrl": MOD_CONTROL,
+    "shift": MOD_SHIFT,
+    "win": MOD_WIN,
+}
+
+
+def _windows_modifier_flags(modifiers: set[str]) -> int:
+    flags = 0
+    for modifier in modifiers:
+        try:
+            flags |= _WINDOWS_MODIFIERS[modifier]
+        except KeyError as exc:
+            raise ValueError(
+                f"Windowsで未対応の修飾キーです: {modifier}"
+            ) from exc
+    return flags
+
+
+class HotkeyHandle(Protocol):
+    """Lifecycle shared by the Windows and macOS implementations."""
+
+    supports_live_reconfigure: bool
+
+    def status(self) -> HotkeyRuntimeStatus: ...
+
+    def set_runtime_error_callback(
+        self,
+        callback: Callable[[HotkeyRuntimeStatus], None] | None,
+    ) -> None: ...
+
+    def prepare_reconfigure(
+        self,
+        cfg: HotkeyConfig,
+    ) -> WindowsHotkeyTransaction: ...
+
+    def recover(self, cfg: HotkeyConfig) -> HotkeyRuntimeStatus: ...
+
+    def stop(self) -> bool: ...
+
+
+class _WindowsHotkeyManager:
+    supports_live_reconfigure = True
 
     def __init__(
         self,
-        combos: list[tuple[set[str], int, Callable[[], None]]],
+        on_toggle: Callable[[], None],
+        on_switch_lang: Callable[[], None],
+        on_submit_toggle: Callable[[], None] | None,
+        *,
+        controller: WindowsHotkeyController | None = None,
     ) -> None:
-        self._combos = combos
-        self._listener: keyboard.Listener | None = None
+        self._callbacks = {
+            "toggle": on_toggle,
+            "switch_lang": on_switch_lang,
+        }
+        if on_submit_toggle is not None:
+            self._callbacks["submit_toggle"] = on_submit_toggle
+        self._controller = controller or WindowsHotkeyController()
 
-    def _check_modifiers(self, required: set[str]) -> bool:
-        """GetAsyncKeyState で現在の修飾キー状態が required と一致するか。"""
-        from src.platform.windows import (
-            is_alt_down,
-            is_ctrl_down,
-            is_shift_down,
-            is_win_down,
+    def _bindings(
+        self,
+        cfg: HotkeyConfig,
+    ) -> tuple[WindowsHotkeyBinding, ...]:
+        bindings: list[WindowsHotkeyBinding] = []
+        entries = (
+            ("toggle", _combo_list(cfg.toggle)),
+            ("submit_toggle", _combo_list(cfg.submit_toggle)),
+            ("switch_lang", [cfg.switch_lang]),
         )
+        for action, combos in entries:
+            callback = self._callbacks.get(action)
+            if callback is None:
+                continue
+            for combo in combos:
+                modifiers, key_name = _parse_combo(combo)
+                virtual_key = _vk_from_key(key_name)
+                if virtual_key is None:
+                    raise ValueError(f"ホットキーの解析に失敗: {combo}")
+                bindings.append(
+                    WindowsHotkeyBinding(
+                        combo=combo,
+                        modifiers=_windows_modifier_flags(modifiers),
+                        virtual_key=virtual_key,
+                        action=action,
+                        callback=callback,
+                    )
+                )
+        return tuple(bindings)
 
-        actual: set[str] = set()
-        if is_win_down():
-            actual.add("win")
-        if is_shift_down():
-            actual.add("shift")
-        if is_ctrl_down():
-            actual.add("ctrl")
-        if is_alt_down():
-            actual.add("alt")
-        return actual == required
+    def start(self, cfg: HotkeyConfig) -> HotkeyRuntimeStatus:
+        return self._controller.start(self._bindings(cfg))
 
-    def _win32_event_filter(self, msg: int, data: object) -> None:
-        """低レベルキーボードフック。on_press より先に呼ばれる。"""
-        if msg not in (0x0100, 0x0104):
-            return
+    def status(self) -> HotkeyRuntimeStatus:
+        return self._controller.status()
 
-        try:
-            vk = data.vkCode  # type: ignore[attr-defined]
-        except Exception:
-            logger.exception("win32_event_filter: vkCode 取得エラー")
-            return
+    def set_runtime_error_callback(
+        self,
+        callback: Callable[[HotkeyRuntimeStatus], None] | None,
+    ) -> None:
+        self._controller.set_runtime_error_callback(callback)
 
-        for required_mods, target_vk, callback in self._combos:
-            if vk == target_vk and self._check_modifiers(required_mods):
-                threading.Thread(target=callback, daemon=True).start()
-                if self._listener is not None:
-                    self._listener.suppress_event()
-                return
+    def prepare_reconfigure(
+        self,
+        cfg: HotkeyConfig,
+    ) -> WindowsHotkeyTransaction:
+        return self._controller.prepare_reconfigure(self._bindings(cfg))
 
-    def _on_press(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
-        pass
+    def recover(self, cfg: HotkeyConfig) -> HotkeyRuntimeStatus:
+        return self._controller.recover(self._bindings(cfg))
 
-    def _on_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
-        pass
-
-    def start(self) -> keyboard.Listener:
-        self._listener = keyboard.Listener(
-            on_press=self._on_press,
-            on_release=self._on_release,
-            win32_event_filter=self._win32_event_filter,
-        )
-        self._listener.daemon = True
-        self._listener.start()
-        return self._listener
+    def stop(self) -> bool:
+        return self._controller.stop()
 
 
 # ══════════════════════════════════════════════════════
@@ -302,6 +363,46 @@ class _DarwinHotkeyListener:
         return self._listener
 
 
+class _PynputHotkeyHandle:
+    supports_live_reconfigure = False
+
+    def __init__(self, listener: keyboard.Listener) -> None:
+        self._listener = listener
+
+    def status(self) -> HotkeyRuntimeStatus:
+        healthy = self._listener.is_alive()
+        return HotkeyRuntimeStatus(
+            healthy,
+            "macOSホットキーは有効です"
+            if healthy
+            else "macOSホットキーリスナーが停止しています",
+        )
+
+    def set_runtime_error_callback(
+        self,
+        callback: Callable[[HotkeyRuntimeStatus], None] | None,
+    ) -> None:
+        del callback
+
+    def prepare_reconfigure(
+        self,
+        cfg: HotkeyConfig,
+    ) -> WindowsHotkeyTransaction:
+        del cfg
+        raise HotkeyRuntimeError(
+            "macOSのホットキー変更は再起動後に反映されます"
+        )
+
+    def recover(self, cfg: HotkeyConfig) -> HotkeyRuntimeStatus:
+        del cfg
+        return self.status()
+
+    def stop(self) -> bool:
+        self._listener.stop()
+        self._listener.join(timeout=2.0)
+        return not self._listener.is_alive()
+
+
 # ══════════════════════════════════════════════════════
 # 公開 API
 # ══════════════════════════════════════════════════════
@@ -312,8 +413,8 @@ def start_hotkey_listener(
     on_toggle: Callable[[], None],
     on_switch_lang: Callable[[], None],
     on_submit_toggle: Callable[[], None] | None = None,
-) -> keyboard.Listener:
-    """グローバルホットキーリスナーを起動する（デーモンスレッド、キー入力抑制付き）。"""
+) -> HotkeyHandle:
+    """グローバルホットキーを起動し、解除可能なhandleを返す。"""
     validation_errors = validate_hotkey_config(cfg)
     if validation_errors:
         raise ValueError(" / ".join(validation_errors))
@@ -347,30 +448,19 @@ def _start_windows_listener(
     on_toggle: Callable[[], None],
     on_switch_lang: Callable[[], None],
     on_submit_toggle: Callable[[], None] | None = None,
-) -> keyboard.Listener:
-    """Windows 用ホットキーリスナーを起動する。"""
-    combos: list[tuple[set[str], int, Callable[[], None]]] = []
-
-    for combo_str in toggle_strs:
-        mods, key_str = _parse_combo(combo_str)
-        vk = _vk_from_key(key_str)
-        if vk is None:
-            raise ValueError(f"ホットキーの解析に失敗: {combo_str}")
-        combos.append((mods, vk, on_toggle))
-
-    if on_submit_toggle is not None:
-        for combo_str in submit_toggle_strs:
-            mods, key_str = _parse_combo(combo_str)
-            vk = _vk_from_key(key_str)
-            if vk is None:
-                raise ValueError(f"ホットキーの解析に失敗: submit_toggle={combo_str}")
-            combos.append((mods, vk, on_submit_toggle))
-
-    switch_mods, switch_key_str = _parse_combo(switch_lang_str)
-    switch_vk = _vk_from_key(switch_key_str)
-    if switch_vk is None:
-        raise ValueError(f"ホットキーの解析に失敗: switch={switch_lang_str}")
-    combos.append((switch_mods, switch_vk, on_switch_lang))
+) -> HotkeyHandle:
+    """Windows用RegisterHotKey controllerを起動する。"""
+    cfg = HotkeyConfig(
+        toggle=toggle_strs,
+        submit_toggle=submit_toggle_strs,
+        switch_lang=switch_lang_str,
+    )
+    manager = _WindowsHotkeyManager(
+        on_toggle,
+        on_switch_lang,
+        on_submit_toggle,
+    )
+    status = manager.start(cfg)
 
     logger.info(
         "ホットキー登録 (Windows): toggle=%s, submit_toggle=%s, switch_lang=%s",
@@ -379,8 +469,9 @@ def _start_windows_listener(
         switch_lang_str,
     )
 
-    handler = _WindowsHotkeyListener(combos)
-    return handler.start()
+    if not status.healthy:
+        logger.error("Windowsホットキー登録失敗: %s", status.message)
+    return manager
 
 
 def _start_darwin_listener(
@@ -390,7 +481,7 @@ def _start_darwin_listener(
     on_toggle: Callable[[], None],
     on_switch_lang: Callable[[], None],
     on_submit_toggle: Callable[[], None] | None = None,
-) -> keyboard.Listener:
+) -> HotkeyHandle:
     """macOS 用ホットキーリスナーを起動する。"""
     combos: list[tuple[set[str], str, Callable[[], None]]] = []
 
@@ -420,4 +511,4 @@ def _start_darwin_listener(
     )
 
     handler = _DarwinHotkeyListener(combos)
-    return handler.start()
+    return _PynputHotkeyHandle(handler.start())

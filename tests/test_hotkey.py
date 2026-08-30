@@ -11,13 +11,14 @@ from pynput import keyboard
 import src.hotkey as hotkey_module
 from src.hotkey import (
     _DarwinHotkeyListener,
-    _WindowsHotkeyListener,
     _combo_list,
     _darwin_key_name,
     _parse_combo,
     _vk_from_key,
+    _windows_modifier_flags,
     validate_hotkey_config,
 )
+from src.windows_hotkey import MOD_CONTROL, MOD_SHIFT, MOD_WIN
 from src.config import HotkeyConfig
 
 
@@ -148,22 +149,49 @@ def test_hotkey_validation_rejects_duplicate_actions():
     assert any("重複" in error for error in errors)
 
 
-class TestWindowsModifierMatching:
-    """Windows 修飾キー検出のテスト。"""
+def test_hotkey_validation_allows_toggle_and_submit_lists():
+    cfg = HotkeyConfig(
+        toggle=["space", "win+a"],
+        submit_toggle=["ctrl+enter", "alt+tab"],
+        switch_lang="shift+escape",
+    )
 
-    @pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
-    def test_ctrl_shift_requires_ctrl_and_shift(self, monkeypatch):
-        import src.platform.windows as windows
+    assert validate_hotkey_config(cfg) == []
 
-        monkeypatch.setattr(windows, "is_win_down", lambda: False)
-        monkeypatch.setattr(windows, "is_shift_down", lambda: True)
-        monkeypatch.setattr(windows, "is_ctrl_down", lambda: True)
-        monkeypatch.setattr(windows, "is_alt_down", lambda: False)
 
-        listener = _WindowsHotkeyListener([])
+def test_hotkey_validation_allows_empty_optional_submit():
+    cfg = HotkeyConfig(
+        toggle="shift+space",
+        submit_toggle="",
+        switch_lang="alt+space",
+    )
 
-        assert listener._check_modifiers({"ctrl", "shift"}) is True
-        assert listener._check_modifiers({"shift"}) is False
+    assert validate_hotkey_config(cfg) == []
+
+
+@pytest.mark.parametrize("field", ["toggle", "switch_lang"])
+def test_hotkey_validation_rejects_empty_required_action(field):
+    cfg = HotkeyConfig()
+    setattr(cfg, field, "")
+
+    assert any("空にできません" in error for error in validate_hotkey_config(cfg))
+
+
+def test_hotkey_validation_rejects_duplicate_inside_one_list():
+    cfg = HotkeyConfig(
+        toggle=["ctrl+space", "control+space"],
+        submit_toggle="",
+        switch_lang="alt+space",
+    )
+
+    assert any("重複" in error for error in validate_hotkey_config(cfg))
+
+
+def test_windows_modifier_flags_map_parsed_names():
+    assert _windows_modifier_flags({"ctrl", "shift"}) == (
+        MOD_CONTROL | MOD_SHIFT
+    )
+    assert _windows_modifier_flags({"win"}) == MOD_WIN
 
 
 class TestDarwinKeyName:

@@ -188,6 +188,46 @@ def test_hotkey_value_to_text_keeps_multiple_bindings_editable():
     )
 
 
+def test_refresh_snapshot_config_updates_hotkey_runtime_health():
+    previous = SettingsSnapshot(
+        config=AppConfig(),
+        profiles={},
+        postprocessors={},
+        hotkey_healthy=True,
+    )
+    refreshed = SettingsSnapshot(
+        config=AppConfig(),
+        profiles={},
+        postprocessors={},
+        hotkey_healthy=False,
+        hotkey_status="Win32 error 1409",
+        hotkey_can_retry=True,
+    )
+
+    result = refresh_snapshot_config(previous, refreshed)
+
+    assert result.hotkey_healthy is False
+    assert result.hotkey_status == "Win32 error 1409"
+    assert result.hotkey_can_retry is True
+
+
+def test_degraded_hotkey_enables_retry_without_form_edits():
+    snapshot = SettingsSnapshot(
+        config=AppConfig(),
+        profiles={},
+        postprocessors={},
+        hotkey_healthy=False,
+        hotkey_status="Win32 error 1409",
+        hotkey_can_retry=True,
+    )
+    window = _stateful_settings_window(snapshot)
+
+    window._update_config_change_state()
+
+    assert window._save_config_button.state == "normal"
+    assert "再登録" in window._config_changes_var.value
+
+
 def test_hotkey_value_to_text_keeps_invalid_list_repairable():
     assert hotkey_value_to_text([1, "ctrl+space"]) == "1, ctrl+space"
 
@@ -511,6 +551,9 @@ def test_resource_refresh_keeps_form_config_and_revision_stale():
         config_fingerprint=new_config_fingerprint,
         profile_fingerprints={"new": new_profile_fingerprint},
         postprocessors_fingerprint=new_postprocessor_fingerprint,
+        hotkey_healthy=False,
+        hotkey_status="Win32 error 1409",
+        hotkey_can_retry=True,
     )
 
     combined = refresh_snapshot_resources(previous, refreshed)
@@ -529,6 +572,9 @@ def test_resource_refresh_keeps_form_config_and_revision_stale():
         combined.postprocessors_fingerprint
         == new_postprocessor_fingerprint
     )
+    assert combined.hotkey_healthy is False
+    assert combined.hotkey_status == "Win32 error 1409"
+    assert combined.hotkey_can_retry is True
 
 
 def test_config_refresh_keeps_resource_editor_snapshots():
@@ -956,6 +1002,54 @@ def test_config_save_success_preserves_unsaved_definition_editors(monkeypatch):
     assert window._command_text.value == "edited-cli"
     assert window._profile_editor_changed() is True
     assert window._postprocessor_editor_changed() is True
+
+
+def test_degraded_hotkey_save_retries_with_unchanged_form(monkeypatch):
+    initial_cfg = AppConfig()
+    initial_snapshot = SettingsSnapshot(
+        initial_cfg,
+        {},
+        {},
+        revision=4,
+        hotkey_healthy=False,
+        hotkey_status="Win32 error 1409",
+        hotkey_can_retry=True,
+    )
+    refreshed_snapshot = SettingsSnapshot(
+        initial_cfg,
+        {},
+        {},
+        revision=5,
+        hotkey_healthy=True,
+    )
+    save_calls = []
+
+    def save_config(cfg, revision, fingerprint):
+        save_calls.append((cfg, revision, fingerprint))
+        return True, "ホットキーを再登録しました"
+
+    window = _stateful_settings_window(
+        initial_snapshot,
+        snapshot_provider=lambda: refreshed_snapshot,
+        on_save_config=save_config,
+    )
+    window._config_from_form = lambda changed_keys: copy.deepcopy(initial_cfg)
+    window._confirm_external_postprocessor = lambda cfg: True
+    monkeypatch.setattr(
+        "src.settings.messagebox.askyesno",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "src.settings.messagebox.showinfo",
+        lambda *args, **kwargs: None,
+    )
+
+    window._save_config()
+
+    assert len(save_calls) == 1
+    assert save_calls[0][1] == 4
+    assert window._snapshot.hotkey_healthy is True
+    assert window._save_config_button.state == "disabled"
 
 
 def test_config_save_failure_keeps_config_and_definition_edits_dirty(

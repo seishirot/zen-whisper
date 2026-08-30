@@ -52,7 +52,13 @@ from src.config import (
     qwen3_model_label,
     save_config,
 )
-from src.hotkey import start_hotkey_listener, validate_hotkey_config
+from src.hotkey import (
+    HotkeyHandle,
+    HotkeyRuntimeError,
+    HotkeyRuntimeStatus,
+    start_hotkey_listener,
+    validate_hotkey_config,
+)
 from src.overlay import OverlayIndicator
 from src.paster import paste
 from src.postprocessing import (
@@ -235,6 +241,8 @@ class App:
         self._exit_event = threading.Event()
         self._lock = threading.Lock()
         self._shutdown = False
+        self._hotkey_handle: HotkeyHandle | None = None
+        self._hotkey_start_error = ""
 
         logger.info("zen-whisper を起動します")
         log_available_devices(self.cfg.recording.sample_rate)
@@ -320,7 +328,29 @@ class App:
     def _on_open_settings(self) -> None:
         self.settings.show()
 
+    def _current_hotkey_status(self) -> HotkeyRuntimeStatus:
+        handle = getattr(self, "_hotkey_handle", None)
+        if handle is not None:
+            return handle.status()
+        start_error = getattr(self, "_hotkey_start_error", "")
+        if start_error:
+            return HotkeyRuntimeStatus(
+                False,
+                start_error,
+                restart_required=True,
+            )
+        return HotkeyRuntimeStatus(True, "ホットキーは起動準備中です")
+
+    def _on_hotkey_runtime_error(self, status: HotkeyRuntimeStatus) -> None:
+        self._hotkey_start_error = status.message
+        logger.error("ホットキーを利用できません: %s", status.message)
+        self.tray.notify(
+            "ホットキーが停止しました。ZenWhisperを再起動してください:\n"
+            + status.message
+        )
+
     def _settings_snapshot(self) -> SettingsSnapshot:
+        hotkey_status = self._current_hotkey_status()
         with self._lock:
             with self._config_lock:
                 with self._enhancement_lock:
@@ -360,6 +390,13 @@ class App:
             config_fingerprint=config_fingerprint,
             profile_fingerprints=profile_fingerprints,
             postprocessors_fingerprint=postprocessors_fingerprint,
+            hotkey_healthy=hotkey_status.healthy,
+            hotkey_status=hotkey_status.message,
+            hotkey_can_retry=(
+                sys.platform == "win32"
+                and not hotkey_status.healthy
+                and not hotkey_status.restart_required
+            ),
         )
 
     @staticmethod
@@ -485,7 +522,14 @@ class App:
                         if recognition_error:
                             return False, recognition_error
                     restart_items: list[str] = []
-                    if old_cfg.hotkey != cfg.hotkey:
+                    hotkey_changed = old_cfg.hotkey != cfg.hotkey
+                    hotkey_handle = getattr(self, "_hotkey_handle", None)
+                    live_hotkey = bool(
+                        sys.platform == "win32"
+                        and hotkey_handle is not None
+                        and hotkey_handle.supports_live_reconfigure
+                    )
+                    if hotkey_changed and not live_hotkey:
                         restart_items.append("ホットキー")
                     if old_cfg.logging != cfg.logging:
                         restart_items.append("ログ")
@@ -496,6 +540,42 @@ class App:
                         old_cfg.enhancement != cfg.enhancement
                     )
 
+                    hotkey_transaction = None
+                    if live_hotkey and hotkey_handle is not None:
+                        hotkey_status = hotkey_handle.status()
+                        if hotkey_status.restart_required:
+                            if hotkey_changed:
+                                restart_items.append("ホットキー")
+                        elif hotkey_changed or not hotkey_status.healthy:
+                            try:
+                                hotkey_transaction = (
+                                    hotkey_handle.prepare_reconfigure(
+                                        cfg.hotkey
+                                    )
+                                )
+                            except HotkeyRuntimeError as exc:
+                                recovery_note = ""
+                                if exc.state_unknown:
+                                    try:
+                                        recovered = hotkey_handle.recover(
+                                            old_cfg.hotkey
+                                        )
+                                        recovery_note = (
+                                            "。旧設定のホットキーへ復旧しました"
+                                            if recovered.healthy
+                                            else "。旧ホットキースレッドを復旧できません。"
+                                            "ZenWhisperを再起動してください"
+                                        )
+                                    except Exception:
+                                        logger.exception(
+                                            "旧ホットキー設定への復旧に失敗しました"
+                                        )
+                                        recovery_note = (
+                                            "。ホットキー制御を復旧できません。"
+                                            "ZenWhisperを再起動してください"
+                                        )
+                                return False, f"{exc}{recovery_note}"
+
                     saved = (
                         save_config(
                             cfg,
@@ -505,13 +585,75 @@ class App:
                         else save_config(cfg)
                     )
                     if not saved:
+                        rollback_note = ""
+                        if hotkey_transaction is not None:
+                            try:
+                                hotkey_transaction.abort()
+                            except HotkeyRuntimeError as exc:
+                                logger.error(
+                                    "保存失敗後のホットキーrollback失敗: %s",
+                                    exc,
+                                )
+                                try:
+                                    recovered = hotkey_handle.recover(
+                                        old_cfg.hotkey
+                                    )
+                                    if not recovered.healthy:
+                                        rollback_note = (
+                                            "。旧ホットキー設定を復旧できません。"
+                                            "ZenWhisperを再起動してください: "
+                                            + recovered.message
+                                        )
+                                except Exception:
+                                    logger.exception(
+                                        "旧ホットキー設定への再構築に失敗しました"
+                                    )
+                                    rollback_note = (
+                                        "。旧ホットキー設定を復旧できません。"
+                                        "ZenWhisperを再起動してください"
+                                    )
                         return (
                             False,
                             "config.toml の保存に失敗しました。"
-                            "既存ファイルが壊れていないかログを確認してください",
+                            "既存ファイルが壊れていないかログを確認してください"
+                            + rollback_note,
                         )
+
+                    saved_fingerprint = config_file_fingerprint()
+                    hotkey_runtime_note = ""
+                    if hotkey_transaction is not None:
+                        try:
+                            hotkey_transaction.commit()
+                        except HotkeyRuntimeError as exc:
+                            logger.error(
+                                "保存後のホットキーcommit失敗: %s",
+                                exc,
+                            )
+                            try:
+                                recovered = hotkey_handle.recover(cfg.hotkey)
+                            except Exception:
+                                logger.exception(
+                                    "保存済みホットキー設定への再構築に失敗しました"
+                                )
+                                recovered = HotkeyRuntimeStatus(
+                                    False,
+                                    "ホットキー制御を再構築できませんでした",
+                                    restart_required=True,
+                                )
+                            if recovered.healthy:
+                                hotkey_runtime_note = (
+                                    "。ホットキー制御を保存済み設定から"
+                                    "再構築しました"
+                                )
+                            else:
+                                hotkey_runtime_note = (
+                                    "。設定は保存しましたがホットキーを"
+                                    "再登録できませんでした。"
+                                    "ZenWhisperを再起動してください: "
+                                    + recovered.message
+                                )
                     self.cfg = cfg
-                    self._config_fingerprint = config_file_fingerprint()
+                    self._config_fingerprint = saved_fingerprint
                     self._settings_revision += 1
                     if enhancement_changed:
                         self._enhancement_generation += 1
@@ -552,6 +694,7 @@ class App:
                 )
 
         message = "設定を保存しました"
+        message += hotkey_runtime_note
         if restart_items:
             message += (
                 "。"
@@ -1397,6 +1540,12 @@ class App:
             self._stop_event.set()
             self._exit_event.set()
         logger.info("クリーンアップ処理を実行中...")
+        hotkey_handle = getattr(self, "_hotkey_handle", None)
+        self._hotkey_handle = None
+        if hotkey_handle is not None and not hotkey_handle.stop():
+            logger.error(
+                "ホットキーの解除を完了できませんでした。プロセス終了時に解放されます"
+            )
         with self._model_load_lock:
             self._model_load_generation += 1
             self._model_loading = False
@@ -1423,13 +1572,39 @@ class App:
             self._load_model_async()
 
             # ホットキー登録
-            start_hotkey_listener(
-                self.cfg.hotkey,
-                on_toggle=self._on_toggle,
-                on_switch_lang=self._on_switch_lang,
-                on_submit_toggle=lambda: self._on_toggle(submit_after_paste=True),
-            )
-            logger.info("ホットキーリスナーを起動しました")
+            try:
+                hotkey_handle = start_hotkey_listener(
+                    self.cfg.hotkey,
+                    on_toggle=self._on_toggle,
+                    on_switch_lang=self._on_switch_lang,
+                    on_submit_toggle=lambda: self._on_toggle(
+                        submit_after_paste=True
+                    ),
+                )
+                self._hotkey_handle = hotkey_handle
+                hotkey_handle.set_runtime_error_callback(
+                    self._on_hotkey_runtime_error
+                )
+                hotkey_status = hotkey_handle.status()
+                self._hotkey_start_error = ""
+                if hotkey_status.healthy:
+                    logger.info("ホットキーを起動しました")
+                else:
+                    self._hotkey_start_error = hotkey_status.message
+                    logger.error(
+                        "ホットキーを利用できません: %s",
+                        hotkey_status.message,
+                    )
+                    self.tray.notify(
+                        "ホットキーを利用できません:\n"
+                        + hotkey_status.message
+                    )
+            except Exception as exc:
+                logger.exception("ホットキーの起動に失敗しました")
+                self._hotkey_start_error = str(exc)
+                self.tray.notify(
+                    "ホットキーの起動に失敗しました:\n" + str(exc)
+                )
 
             active_postprocessor = self.cfg.enhancement.postprocessor
             if active_postprocessor not in (

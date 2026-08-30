@@ -206,6 +206,12 @@ mise exec -- uv run --locked python src/main.py
    macOS native, unsafe or unverifiable targets fall back to copy-only or skip
    copying.
 
+On Windows/Python, host shortcuts are registered with the Win32
+`RegisterHotKey` API. They are owned by a dedicated host message loop so a
+physical-keyboard shortcut can still reach ZenWhisper while an RDP window is
+foreground or full screen. A registered shortcut is consumed on the host and
+must not insert its normal key (for example Space) into the remote app.
+
 For Python CLI, set `[hotkey] submit_toggle` in `config.toml` to add an alternate
 toggle that presses Enter after pasting when it is used to stop recording. In
 the macOS native app, choose `Submit Hotkey` from the menu bar item; the
@@ -251,8 +257,12 @@ effective values from `config.toml` plus defaults; empty optional values are
 shown explicitly as `（OS既定）` or `（無効）`, while fixed internal values are
 read-only. The config save button is enabled only after a setting changes, and
 a field-level preview is shown before writing. Profile and CLI definition
-editors have separate save buttons. Hotkey and logging changes require an app
-restart; other supported settings are applied after saving. Saving is blocked
+editors have separate save buttons. Windows hotkey changes are registered
+immediately after the atomic config save; a registration conflict leaves the
+old config and old registrations active. The same Save button retries the
+current values when startup registration is degraded. macOS hotkey changes and
+logging changes require an app restart; other supported settings are applied
+after saving. Saving is blocked
 while recording, transcribing, or postprocessing. If a tray action changes
 settings after the window was opened, a stale save is rejected and the window
 asks for a reload. Only fields changed in the form are applied to the loaded
@@ -591,6 +601,10 @@ service.
 - Submit-after-paste toggle: `submit_toggle = "ctrl+shift+space"`; it only sends
   Enter when the key press stops an active recording, and suppresses Enter when
   a CLI postprocessor was selected
+- Windows adds `MOD_NOREPEAT`, so holding a registered shortcut produces one
+  action until the keys are released. If another app owns a shortcut,
+  ZenWhisper reports the exact combination and Win32 error instead of silently
+  replacing the working registration.
 
 ### Python CLI Custom Sound Files
 
@@ -604,6 +618,19 @@ To use custom start/stop sounds instead of generated tones:
 
 ### Windows
 
+- **RDP hotkey acceptance**: test a physical keyboard in five cases: local,
+  ZenWhisper then RDP windowed, RDP then ZenWhisper windowed, ZenWhisper then
+  RDP full screen, and RDP then ZenWhisper full screen. In each RDP case verify
+  one press causes one host action, a hold causes one action, two released
+  presses cause two actions, and no Space reaches a safe editor on the remote
+  side. Use the normal `start.vbs` launcher for final acceptance.
+- **Hotkey registration error**: close the app that owns the combination, then
+  open Settings and save again. ZenWhisper keeps `config.toml` unchanged when a
+  new combination cannot be prepared. If it reports that the old hotkey thread
+  cannot stop, restart ZenWhisper before retrying.
+- **Logicool buttons**: first complete the physical-keyboard RDP check above,
+  then try the existing shortcut assignment. Logicool-specific helpers, IPC,
+  and synthetic-input handling are intentionally outside this change.
 - **CPU-only install**: plain `uv sync --locked` does not install PyTorch, Transformers, or CUDA DLL packages. Select `Whisper > CPU (int8)` or set `device = "cpu"` for faster-whisper CPU, or install `uv sync --locked --extra reazon` for the Torch-free Reazon K2 backend. Qwen dependencies stay inside the `qwen3` extras.
 - **Torch DLL errors (`WinError 1114`)**: plain `uv sync --locked` should remove PyTorch from the base environment. If you install `--extra qwen3` or `--extra qwen3-cuda`, a broken PyTorch install can also break faster-whisper because CTranslate2 imports PyTorch when it is present.
 - **CUDA errors**: use `uv sync --locked --extra cuda` for faster-whisper CUDA or `uv sync --locked --extra qwen3-cuda` for Qwen3-ASR CUDA. Ensure the NVIDIA driver is current and confirm `torch.cuda.is_available()` for the Qwen path.
