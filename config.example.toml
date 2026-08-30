@@ -31,6 +31,8 @@ model_load_timeout_sec = 300
 # Only "ja" has an approved snapshot. Legacy "ja-en" is migrated to pinned "ja".
 reazon_language = "ja"
 reazon_precision = "int8-fp32"
+# Validated Windows CPU default; set 1 for a one-setting rollback.
+reazon_inference_threads = 4
 reazon_chunk_sec = 25.0
 reazon_trailing_silence_sec = 0.5
 # Qwen3-ASR model name (tray path requires: uv sync --locked --extra qwen3-cuda)

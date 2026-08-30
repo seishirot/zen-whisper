@@ -76,6 +76,7 @@ class RecognitionConfig:
     device: str = field(default_factory=_default_recognition_device)
     reazon_language: str = "ja"
     reazon_precision: str = "int8-fp32"
+    reazon_inference_threads: int = 4
     reazon_chunk_sec: float = 25.0
     reazon_trailing_silence_sec: float = 0.5
     qwen3_model: str = QWEN3_MODEL_LARGE  # Qwen3-ASR 使用時のモデル名（既定: 1.7B）
@@ -235,6 +236,14 @@ class AppConfig:
         if self.recognition.reazon_precision not in ("fp32", "int8", "int8-fp32"):
             warnings.append(
                 "reazon_precision は 'fp32', 'int8', 'int8-fp32' のいずれかを指定してください"
+            )
+        if (
+            not isinstance(self.recognition.reazon_inference_threads, int)
+            or isinstance(self.recognition.reazon_inference_threads, bool)
+            or self.recognition.reazon_inference_threads <= 0
+        ):
+            warnings.append(
+                "reazon_inference_threads は正の整数である必要があります"
             )
         if (
             not is_number(self.recognition.reazon_chunk_sec)

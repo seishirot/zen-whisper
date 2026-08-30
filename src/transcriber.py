@@ -242,6 +242,12 @@ class Transcriber:
                 logger.error("モデルがロードされていません")
                 return ""
 
+            logger.info(
+                "文字起こし開始 (%s): lang=%s, 音声=%.1f秒",
+                engine,
+                language,
+                audio_duration,
+            )
             t0 = time.perf_counter()
             text = backend.transcribe(audio, language, cfg, hints)
             elapsed = time.perf_counter() - t0

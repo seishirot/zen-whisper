@@ -52,27 +52,43 @@ def _load_pinned_reazon_model(
     device: str,
     precision: str,
     language: str,
+    num_threads: int = 1,
+    local_files_only: bool = False,
+    on_model_resolved: Callable[[Path, dict[str, Path]], None] | None = None,
 ) -> object:
     """Load the public Reazon K2 model from its reviewed immutable snapshot."""
     if language != "ja":
         raise ValueError(f"No approved Reazon snapshot for language: {language}")
+    if num_threads <= 0:
+        raise ValueError("num_threads must be positive")
     source = model_source("reazon_k2", language)
     files = _reazon_model_files(precision)
-    snapshot = Path(
-        download_verified_snapshot(
-            source,
-            required_files=tuple(files.values()),
-        )
-    )
+    download_kwargs: dict[str, object] = {
+        "required_files": tuple(files.values()),
+    }
+    if local_files_only:
+        download_kwargs["local_files_only"] = True
+    snapshot = Path(download_verified_snapshot(source, **download_kwargs))
+    resolved_files = {name: snapshot / filename for name, filename in files.items()}
+    if on_model_resolved is not None:
+        on_model_resolved(snapshot, resolved_files)
 
     import sherpa_onnx
 
+    logger.info(
+        "ReazonSpeech K2 実効モデル設定: revision=%s, precision=%s, "
+        "num_threads=%d, files=%s",
+        source.revision,
+        precision,
+        num_threads,
+        ",".join(path.name for path in resolved_files.values()),
+    )
     return sherpa_onnx.OfflineRecognizer.from_transducer(
-        tokens=str(snapshot / files["tokens"]),
-        encoder=str(snapshot / files["encoder"]),
-        decoder=str(snapshot / files["decoder"]),
-        joiner=str(snapshot / files["joiner"]),
-        num_threads=1,
+        tokens=str(resolved_files["tokens"]),
+        encoder=str(resolved_files["encoder"]),
+        decoder=str(resolved_files["decoder"]),
+        joiner=str(resolved_files["joiner"]),
+        num_threads=num_threads,
         sample_rate=ASR_SAMPLE_RATE,
         feature_dim=80,
         decoding_method="greedy_search",
@@ -155,9 +171,11 @@ class ReazonK2Backend:
         self._audio_from_path = audio_from_path
         self._transcribe = transcribe
         logger.info(
-            "ReazonSpeech K2 モデルのロードが完了しました (precision=%s, language=%s)",
+            "ReazonSpeech K2 モデルのロードが完了しました "
+            "(precision=%s, language=%s, threads=%d)",
             cfg.reazon_precision,
             cfg.reazon_language,
+            cfg.reazon_inference_threads,
         )
 
     def _load_reazon_model(self, load_model: Callable[..., Any], cfg: RecognitionConfig):
@@ -165,6 +183,7 @@ class ReazonK2Backend:
             device="cpu",
             precision=cfg.reazon_precision,
             language=cfg.reazon_language,
+            num_threads=cfg.reazon_inference_threads,
         )
 
     def transcribe(
@@ -178,6 +197,18 @@ class ReazonK2Backend:
             logger.error("モデルがロードされていません")
             return ""
 
+        chunk_samples = max(1, int(cfg.reazon_chunk_sec * ASR_SAMPLE_RATE))
+        chunk_count = (len(audio) + chunk_samples - 1) // chunk_samples
+        logger.info(
+            "ReazonSpeech K2 転写条件: precision=%s, configured_threads=%d, "
+            "chunk_sec=%.3f, trailing_silence_sec=%.3f, chunks=%d, "
+            "stream_per_chunk=true, join=space",
+            cfg.reazon_precision,
+            cfg.reazon_inference_threads,
+            cfg.reazon_chunk_sec,
+            cfg.reazon_trailing_silence_sec,
+            chunk_count,
+        )
         parts: list[str] = []
         with tempfile.TemporaryDirectory(prefix="zen_whisper_reazon_") as tmp_dir:
             tmp_path = Path(tmp_dir)

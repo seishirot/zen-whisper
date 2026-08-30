@@ -56,7 +56,7 @@
         "revision": "f44edd35eaeb2274e85ac7b31fb2c6f59ff1c4bc",
         "allow_patterns": ["config.json", "preprocessor_config.json", "model.bin", "tokenizer.json", "vocabulary.json"],
         "files": {"model.bin": {"sha256": "60d2bc2e33de9d43f2745be09caefe1161acab670f6796d4a750d8d848382b36", "size": 1512927867}},
-        "license": "Apache-2.0"
+        "license": "MIT"
       }
     },
     "mlx_whisper": {

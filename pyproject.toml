@@ -66,6 +66,10 @@ Issues = "https://github.com/seishirot/zen-whisper/issues"
 dev = [
     "pytest>=9.0.3",
 ]
+benchmark = [
+    # Public ASR corpus preparation only; never imported by the application.
+    "pyarrow>=21,<22",
+]
 
 [build-system]
 requires = ["hatchling==1.31.0"]

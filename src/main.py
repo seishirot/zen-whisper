@@ -373,6 +373,7 @@ class App:
             return common + (
                 recognition.reazon_language,
                 recognition.reazon_precision,
+                recognition.reazon_inference_threads,
             )
         if recognition.engine == ENGINE_QWEN3_ASR:
             return common + (

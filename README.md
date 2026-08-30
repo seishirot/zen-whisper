@@ -284,7 +284,9 @@ backend.
 - `device = "cuda"` is the Windows default for the Python CLI. Select `Whisper > CPU (int8)` when you want the CPU Whisper path.
 - `engine = "reazon-k2"` uses the fast Japanese CPU backend without PyTorch.
   Its default precision is `int8-fp32`; `int8` and `fp32` remain available for
-  explicit comparison. Long audio is split into `reazon_chunk_sec` chunks with
+  explicit comparison. `reazon_inference_threads = 4` is the validated Windows
+  CPU default and can be rolled back to `1` without changing other settings.
+  Long audio is split into `reazon_chunk_sec` chunks with
   `reazon_trailing_silence_sec` silence appended to each chunk.
 - `engine = "qwen3-asr"` uses Transformers `AutoProcessor` and
   `AutoModelForMultimodalLM` with `Qwen/Qwen3-ASR-1.7B-hf` or

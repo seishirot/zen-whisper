@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import gc
+import hashlib
 import json
 import sys
 import time
@@ -64,7 +65,9 @@ class BenchResult:
     audio_sec: float
     rtf: float
     matched_terms: list[str]
-    text: str
+    text_sha256: str
+    text_chars: int
+    quality: dict[str, Any] | None
 
 
 class _PerStreamHotwordRecognizer:
@@ -256,6 +259,7 @@ def run_mode(
     terms: list[str],
     chunk_sec: float,
     trailing_silence_sec: float,
+    references: dict[Path, str],
 ) -> list[BenchResult]:
     results: list[BenchResult] = []
     for path in audio_paths:
@@ -273,6 +277,17 @@ def run_mode(
         elapsed = time.perf_counter() - started
         folded_text = text.casefold()
         matched = [term for term in terms if term.casefold() in folded_text]
+        reference = references.get(path.resolve())
+        quality = None
+        if reference is not None:
+            from tools.bench_reazon_production import quality_with_correction
+
+            quality = quality_with_correction(
+                reference,
+                text,
+                corrected_text=None,
+                accepted_without_edit=None,
+            )
         results.append(
             BenchResult(
                 audio=str(path),
@@ -282,7 +297,9 @@ def run_mode(
                 audio_sec=audio_sec,
                 rtf=elapsed / audio_sec if audio_sec else 0.0,
                 matched_terms=matched,
-                text=text,
+                text_sha256=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                text_chars=len(text),
+                quality=quality,
             )
         )
     return results
@@ -290,14 +307,19 @@ def run_mode(
 
 def print_results(results: list[BenchResult]) -> None:
     print()
-    print("audio | mode | score | seconds | RTF | matched terms")
-    print("------+------|-------|---------|-----|--------------")
+    print("audio | mode | score | seconds | RTF | CER | matched terms")
+    print("------+------|-------|---------|-----|-----|--------------")
     for result in results:
         score = "-" if result.hotword_score is None else f"{result.hotword_score:g}"
         matched = ", ".join(result.matched_terms) or "-"
+        cer = (
+            "-"
+            if result.quality is None
+            else f"{result.quality['normalized_cer']:.3f}"
+        )
         print(
             f"{Path(result.audio).name} | {result.mode} | {score} | "
-            f"{result.elapsed_sec:.2f} | {result.rtf:.3f} | {matched}"
+            f"{result.elapsed_sec:.2f} | {result.rtf:.3f} | {cer} | {matched}"
         )
 
 
@@ -310,6 +332,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="append",
         type=Path,
         help="16 kHz WAV to test. Repeat to compare positive and negative samples.",
+    )
+    parser.add_argument(
+        "--manifest",
+        type=Path,
+        help="Optional private corpus manifest supplying audio and references.",
     )
     parser.add_argument(
         "--term",
@@ -341,8 +368,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args(argv)
 
-    if args.audio is None:
+    if args.audio is None and args.manifest is None:
         args.audio = [DEFAULT_POSITIVE_AUDIO, DEFAULT_NEGATIVE_AUDIO]
+    elif args.audio is None:
+        args.audio = []
     if args.score is None:
         args.score = list(DEFAULT_SCORES)
     if args.num_threads <= 0:
@@ -360,7 +389,19 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
-    audio_paths = [path.resolve() for path in args.audio]
+    references: dict[Path, str] = {}
+    manifest_audio: list[Path] = []
+    if args.manifest is not None:
+        from tools.bench_reazon_production import load_corpus_manifest
+
+        items = load_corpus_manifest(args.manifest.resolve())
+        manifest_audio = [item.audio.resolve() for item in items]
+        references = {item.audio.resolve(): item.reference for item in items}
+    audio_paths = list(
+        dict.fromkeys(
+            [*manifest_audio, *(path.resolve() for path in args.audio)]
+        )
+    )
     missing_audio = [path for path in audio_paths if not path.is_file()]
     if missing_audio:
         for path in missing_audio:
@@ -402,6 +443,7 @@ def main(argv: list[str] | None = None) -> int:
             terms=args.term,
             chunk_sec=args.chunk_sec,
             trailing_silence_sec=args.trailing_silence_sec,
+            references=references,
         )
     )
     del recognizer
@@ -426,6 +468,7 @@ def main(argv: list[str] | None = None) -> int:
                     terms=args.term,
                     chunk_sec=args.chunk_sec,
                     trailing_silence_sec=args.trailing_silence_sec,
+                    references=references,
                 )
             )
         results.extend(
@@ -438,6 +481,7 @@ def main(argv: list[str] | None = None) -> int:
                 terms=args.term,
                 chunk_sec=args.chunk_sec,
                 trailing_silence_sec=args.trailing_silence_sec,
+                references=references,
             )
         )
         del recognizer
@@ -461,6 +505,7 @@ def main(argv: list[str] | None = None) -> int:
                     terms=args.term,
                     chunk_sec=args.chunk_sec,
                     trailing_silence_sec=args.trailing_silence_sec,
+                    references=references,
                 )
             )
             del recognizer
@@ -482,6 +527,8 @@ def main(argv: list[str] | None = None) -> int:
                 str(static_hotwords_file) if static_hotwords_file is not None else None
             ),
             "scores": args.score,
+            "manifest": str(args.manifest.resolve()) if args.manifest else None,
+            "transcript_bodies_retained": False,
         },
         "results": [asdict(result) for result in results],
     }

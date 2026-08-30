@@ -190,6 +190,11 @@ CONFIG_FORM_FIELDS: dict[str, tuple[str, str, str]] = {
         "reazon_precision",
         "Reazon精度",
     ),
+    "recognition.reazon_inference_threads": (
+        "recognition",
+        "reazon_inference_threads",
+        "Reazon推論threads",
+    ),
     "recognition.reazon_chunk_sec": (
         "recognition",
         "reazon_chunk_sec",
@@ -1066,12 +1071,18 @@ class SettingsWindow:
         self._entry_row(
             reazon,
             2,
+            "推論threads",
+            "recognition.reazon_inference_threads",
+        )
+        self._entry_row(
+            reazon,
+            3,
             "チャンク長 (秒)",
             "recognition.reazon_chunk_sec",
         )
         self._entry_row(
             reazon,
-            3,
+            4,
             "末尾無音 (秒)",
             "recognition.reazon_trailing_silence_sec",
         )
@@ -2135,6 +2146,9 @@ class SettingsWindow:
             ),
             "recognition.reazon_language": cfg.recognition.reazon_language,
             "recognition.reazon_precision": cfg.recognition.reazon_precision,
+            "recognition.reazon_inference_threads": str(
+                cfg.recognition.reazon_inference_threads
+            ),
             "recognition.reazon_chunk_sec": str(
                 cfg.recognition.reazon_chunk_sec
             ),
@@ -2420,6 +2434,10 @@ class SettingsWindow:
         )
         cfg.recognition.reazon_precision = str(
             self._vars["recognition.reazon_precision"].get()
+        )
+        cfg.recognition.reazon_inference_threads = self._int_value(
+            "recognition.reazon_inference_threads",
+            "Reazon推論threads",
         )
         cfg.recognition.reazon_chunk_sec = self._float_value(
             "recognition.reazon_chunk_sec",

@@ -52,6 +52,7 @@ class TestRecognitionConfig:
         cfg = RecognitionConfig()
         assert cfg.reazon_language == "ja"
         assert cfg.reazon_precision == "int8-fp32"
+        assert cfg.reazon_inference_threads == 4
         assert cfg.reazon_chunk_sec == 25.0
         assert cfg.reazon_trailing_silence_sec == 0.5
         assert cfg.cpu_threads == 4
@@ -60,6 +61,15 @@ class TestRecognitionConfig:
         cfg = AppConfig(recognition=RecognitionConfig(reazon_language="ja-en"))
 
         assert any("reazon_language" in warning for warning in cfg.validate())
+
+    @pytest.mark.parametrize("value", [0.5, True, 0, -1, "4"])
+    def test_validate_rejects_invalid_reazon_inference_threads(self, value):
+        cfg = AppConfig()
+        cfg.recognition.reazon_inference_threads = value
+
+        assert any(
+            "reazon_inference_threads" in warning for warning in cfg.validate()
+        )
 
     def test_default_model_size(self):
         cfg = RecognitionConfig()

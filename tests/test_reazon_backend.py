@@ -53,14 +53,29 @@ def test_reazon_load_does_not_silently_fallback_for_unsupported_language() -> No
     backend = ReazonK2Backend()
     calls: list[str] = []
 
-    def fake_load_model(*, device: str, precision: str, language: str):
-        calls.append(language)
+    def fake_load_model(
+        *, device: str, precision: str, language: str, num_threads: int
+    ):
+        calls.append(f"{language}:{num_threads}")
         raise ValueError("unsupported language")
 
     with pytest.raises(ValueError, match="unsupported language"):
         backend._load_reazon_model(fake_load_model, cfg)
 
-    assert calls == ["ja-en"]
+    assert calls == ["ja-en:4"]
+
+
+def test_reazon_backend_passes_configured_inference_threads() -> None:
+    cfg = RecognitionConfig(reazon_inference_threads=7)
+    backend = ReazonK2Backend()
+    calls: list[int] = []
+
+    def fake_load_model(**kwargs):
+        calls.append(kwargs["num_threads"])
+        return object()
+
+    assert backend._load_reazon_model(fake_load_model, cfg) is not None
+    assert calls == [7]
 
 
 def test_pinned_reazon_loader_rejects_unapproved_bilingual_snapshot() -> None:
@@ -110,12 +125,17 @@ def test_pinned_reazon_loader_passes_verified_local_files(
     precision: str,
     expected_files: set[str],
 ) -> None:
-    download_calls: list[tuple[object, tuple[str, ...]]] = []
+    download_calls: list[tuple[object, tuple[str, ...], bool]] = []
     recognizer = object()
     factory_calls: list[dict[str, object]] = []
 
-    def fake_download(source, *, required_files: tuple[str, ...]) -> str:
-        download_calls.append((source, required_files))
+    def fake_download(
+        source,
+        *,
+        required_files: tuple[str, ...],
+        local_files_only: bool = False,
+    ) -> str:
+        download_calls.append((source, required_files, local_files_only))
         return str(tmp_path)
 
     def fake_from_transducer(**kwargs):
@@ -141,6 +161,7 @@ def test_pinned_reazon_loader_passes_verified_local_files(
     )
     assert len(download_calls) == 1
     assert set(download_calls[0][1]) == expected_files
+    assert download_calls[0][2] is False
     expected_paths = {name: str(tmp_path / name) for name in expected_files}
     assert factory_calls == [
         {
@@ -161,6 +182,66 @@ def test_pinned_reazon_loader_passes_verified_local_files(
             "provider": "cpu",
         }
     ]
+
+
+def test_pinned_reazon_loader_supports_benchmark_only_overrides(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    download_calls: list[dict[str, object]] = []
+    factory_calls: list[dict[str, object]] = []
+    resolved: list[tuple[Path, dict[str, Path]]] = []
+
+    def fake_download(source, **kwargs) -> str:
+        download_calls.append(kwargs)
+        return str(tmp_path)
+
+    def fake_from_transducer(**kwargs):
+        factory_calls.append(kwargs)
+        return object()
+
+    monkeypatch.setattr("src.asr.reazon.download_verified_snapshot", fake_download)
+    monkeypatch.setitem(
+        sys.modules,
+        "sherpa_onnx",
+        SimpleNamespace(
+            OfflineRecognizer=SimpleNamespace(from_transducer=fake_from_transducer)
+        ),
+    )
+
+    _load_pinned_reazon_model(
+        device="cpu",
+        precision="int8-fp32",
+        language="ja",
+        num_threads=4,
+        local_files_only=True,
+        on_model_resolved=lambda snapshot, files: resolved.append((snapshot, files)),
+    )
+
+    assert download_calls == [
+        {
+            "required_files": (
+                "tokens.txt",
+                "encoder-epoch-99-avg-1.int8.onnx",
+                "decoder-epoch-99-avg-1.onnx",
+                "joiner-epoch-99-avg-1.int8.onnx",
+            ),
+            "local_files_only": True,
+        }
+    ]
+    assert factory_calls[0]["num_threads"] == 4
+    assert resolved[0][0] == tmp_path
+    assert resolved[0][1]["encoder"].name.endswith("int8.onnx")
+
+
+def test_pinned_reazon_loader_rejects_non_positive_threads() -> None:
+    with pytest.raises(ValueError, match="num_threads"):
+        _load_pinned_reazon_model(
+            device="cpu",
+            precision="int8-fp32",
+            language="ja",
+            num_threads=0,
+        )
 
 
 def test_reazon_model_files_rejects_unknown_precision() -> None:
