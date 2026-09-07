@@ -10,9 +10,18 @@ toggle = ["shift+space"]
 switch_lang = "shift+alt+space"
 
 [recognition]
+# Optional Windows backend: engine = "crispasr" (default remains whisper).
+# Setup: mise exec -- uv run --no-sync python tools/setup_crispasr.py --runtime cpu --model parakeet-ja-0.6b-q8
+# crispasr_root = "tools/bin/crispasr/v0.8.32"
+# crispasr_model = "parakeet-ja-0.6b-q8"
+# crispasr_decoder = "auto" # auto / tdt / ctc; only supported profile decoders
+# cuda_gpu_uuid = "" # Choose by name in Settings > Recognition or the tray GPU menu.
+# crispasr_gpu_device = 0 # Legacy CrispASR index, only used when cuda_gpu_uuid is empty.
+# crispasr_timeout_sec = 120
+# crispasr_max_tokens = 512
 # Language for transcription ("ja", "en", etc.)
 language = "ja"
-# Engine: "whisper", "reazon-k2", or "qwen3-asr"
+# Engine: "whisper", "reazon-k2", "qwen3-asr", or optional "crispasr" (Windows)
 engine = "whisper"
 # Whisper model size (e.g., "large-v3-turbo", "medium", "small", "base", "tiny").
 # Built-ins resolve to reviewed full commits. A custom model must be an existing

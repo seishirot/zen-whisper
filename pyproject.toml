@@ -84,6 +84,7 @@ packages = ["src"]
 "profiles/README.md" = "profiles/README.md"
 "profiles/zen-whisper.toml.example" = "profiles/zen-whisper.toml.example"
 "src/model_manifest.json" = "src/model_manifest.json"
+"src/crispasr_manifest.json" = "src/crispasr_manifest.json"
 
 [project.gui-scripts]
 zen-whisper = "src.launcher:main"

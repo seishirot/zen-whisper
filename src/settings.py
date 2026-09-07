@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import logging
 import math
+import sys
 import threading
 import tkinter as tk
 from collections.abc import Callable, Mapping
@@ -13,6 +14,7 @@ from tkinter import messagebox, ttk
 
 from src.config import (
     ENGINE_QWEN3_ASR,
+    ENGINE_CRISPASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
     POSTPROCESSOR_DICTIONARY,
@@ -111,6 +113,13 @@ READ_ONLY_CONFIG_FIELDS = frozenset(
 # UI variable -> AppConfig field, plus the label used in the change preview.
 # Fields listed in READ_ONLY_CONFIG_FIELDS are displayed separately.
 CONFIG_FORM_FIELDS: dict[str, tuple[str, str, str]] = {
+    "recognition.cuda_gpu_label": ("recognition", "cuda_gpu_uuid", "CUDAで使うGPU"),
+    "recognition.crispasr_root": ("recognition", "crispasr_root", "CrispASR配置先"),
+    "recognition.crispasr_model": ("recognition", "crispasr_model", "CrispASRモデル"),
+    "recognition.crispasr_decoder": ("recognition", "crispasr_decoder", "CrispASR decoder"),
+    "recognition.crispasr_gpu_device": ("recognition", "crispasr_gpu_device", "CrispASR GPU番号"),
+    "recognition.crispasr_timeout_sec": ("recognition", "crispasr_timeout_sec", "CrispASR認識期限"),
+    "recognition.crispasr_max_tokens": ("recognition", "crispasr_max_tokens", "CrispASR最大生成トークン"),
     "hotkey.toggle": ("hotkey", "toggle", "録音トグル"),
     "hotkey.submit_toggle": (
         "hotkey",
@@ -325,6 +334,7 @@ def recognition_selection_text(
 ) -> str:
     """Return an explicit human-readable recognition selection."""
     engine_label = {
+        ENGINE_CRISPASR: "CrispASR",
         ENGINE_WHISPER: "Whisper",
         ENGINE_REAZON_K2: "Reazon K2",
         ENGINE_QWEN3_ASR: "Qwen3-ASR",
@@ -538,6 +548,7 @@ class SettingsWindow:
         self._thread: threading.Thread | None = None
         self._snapshot: SettingsSnapshot | None = None
         self._vars: dict[str, tk.Variable] = {}
+        self._gpu_uuid_by_label: dict[str, str] = {}
         self._widgets: dict[str, tk.Widget] = {}
         self._status_var: tk.StringVar | None = None
         self._config_source_var: tk.StringVar | None = None
@@ -1046,11 +1057,25 @@ class SettingsWindow:
         ttk.Label(
             common,
             text=(
+                "CrispASRは別途runtime・modelの明示導入が必要です。"
+                "CrispASRは読込期限で終了、他のエンジンは警告後もロード完了を待ちます。"
+                if sys.platform == "win32" else
                 "未導入のエンジン・実行先は選択肢に表示されません。"
                 "読込警告後も安全のため現在のロード完了を待ちます。"
             ),
             foreground="#666666",
         ).grid(row=7, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+        if sys.platform == "win32":
+            self._widgets["recognition.cuda_gpu_label"] = self._combo_row(
+                common, 8, "CUDAで使うGPU", "recognition.cuda_gpu_label", (), width=52,
+            )
+            ttk.Button(common, text="GPU一覧・空き容量を更新", command=self._refresh_gpu_choices).grid(
+                row=9, column=1, sticky="w", pady=4,
+            )
+            ttk.Label(common, text="Whisper・CrispASR・Qwen3で共通。CPUでは使用しません。", foreground="#666666").grid(
+                row=10, column=0, columnspan=3, sticky="w",
+            )
 
         reazon = self._section(tab, "Reazon K2")
         self._combo_row(
@@ -1114,6 +1139,44 @@ class SettingsWindow:
             text="torch.compile を使用",
             variable=self._new_bool_var("recognition.qwen3_torch_compile"),
         ).grid(row=3, column=0, columnspan=2, sticky="w", pady=4)
+
+        if sys.platform == "win32":
+            from src.asr.crispasr_assets import manifest
+
+            crisp = self._section(tab, "CrispASR（Windows専用・既定OFF）")
+            self._entry_row(crisp, 0, "配置先", "recognition.crispasr_root", help_text="空欄: tools/bin/crispasr/v0.8.32。setupで配置したフォルダ")
+            self._combo_row(crisp, 1, "モデル", "recognition.crispasr_model", tuple(manifest()["models"]))
+            self._combo_row(crisp, 2, "Decoder", "recognition.crispasr_decoder", ("auto", "tdt", "ctc"))
+
+            self._entry_row(crisp, 4, "認識期限 (秒)", "recognition.crispasr_timeout_sec")
+            self._entry_row(crisp, 5, "最大生成トークン", "recognition.crispasr_max_tokens")
+            ttk.Label(crisp, text="実行先は共通欄のcpu / cudaを選択。文脈・hotwordsは認識に反映されません。", foreground="#666666").grid(row=6, column=0, columnspan=3, sticky="w", pady=(8, 0))
+
+    def _refresh_gpu_choices(self, cfg: AppConfig | None = None) -> None:
+        from src.gpu import GPUSelectionError, list_nvidia_gpus
+        key = "recognition.cuda_gpu_label"
+        if key not in self._vars:
+            return
+        if cfg is None:
+            identity = self._gpu_uuid_by_label.get(str(self._vars[key].get()), "")
+        else:
+            identity = cfg.recognition.cuda_gpu_uuid
+        options = {}
+        if not identity:
+            legacy_index = cfg.recognition.crispasr_gpu_device if cfg is not None and cfg.recognition.engine == ENGINE_CRISPASR else 0
+            options[f"既存設定（GPU {legacy_index}・GPU名を選んで固定）"] = ""
+        try:
+            for gpu in list_nvidia_gpus():
+                options[f"{gpu.label} 空き {gpu.free_mib / 1024:.1f} GiB"] = gpu.uuid
+        except GPUSelectionError as exc:
+            if self._status_var is not None:
+                self._status_var.set(str(exc))
+        if identity and identity not in options.values():
+            options[f"選択GPUが未検出（{identity}）"] = identity
+        self._gpu_uuid_by_label = options
+        if key in self._widgets:
+            self._widgets[key].configure(values=tuple(options))
+        self._vars[key].set(next(label for label, value in options.items() if value == identity))
 
     def _build_recording_tab(self, notebook: ttk.Notebook) -> None:
         tab = self._add_scrollable_tab(notebook, "録音")
@@ -1727,6 +1790,8 @@ class SettingsWindow:
             ):
                 return ""
             return parse_hotkey_value(text)
+        if key == "recognition.cuda_gpu_label":
+            return self._gpu_uuid_by_label.get(text, f"__unknown_gpu__:{text}")
         if key == "recording.microphone":
             return (
                 ""
@@ -2110,6 +2175,7 @@ class SettingsWindow:
             return None
 
     def _load_config_variables(self, cfg: AppConfig) -> None:
+        self._refresh_gpu_choices(cfg)
         values: dict[str, object] = {
             "hotkey.toggle": hotkey_value_to_text(cfg.hotkey.toggle),
             "hotkey.submit_toggle": (
@@ -2135,6 +2201,12 @@ class SettingsWindow:
             "logging.level": cfg.logging.level,
             "logging.file": cfg.logging.file,
             "recognition.engine": cfg.recognition.engine,
+            "recognition.crispasr_root": cfg.recognition.crispasr_root,
+            "recognition.crispasr_model": cfg.recognition.crispasr_model,
+            "recognition.crispasr_decoder": cfg.recognition.crispasr_decoder,
+            "recognition.crispasr_gpu_device": str(cfg.recognition.crispasr_gpu_device),
+            "recognition.crispasr_timeout_sec": str(cfg.recognition.crispasr_timeout_sec),
+            "recognition.crispasr_max_tokens": str(cfg.recognition.crispasr_max_tokens),
             "recognition.language": cfg.recognition.language,
             "recognition.device": cfg.recognition.device,
             "recognition.model_size": cfg.recognition.model_size,
@@ -2405,6 +2477,18 @@ class SettingsWindow:
         cfg.recognition.engine = str(
             self._vars["recognition.engine"].get()
         )
+        if "recognition.cuda_gpu_label" in self._vars:
+            label = str(self._vars["recognition.cuda_gpu_label"].get())
+            if label not in self._gpu_uuid_by_label:
+                raise ValueError("GPUを一覧から選び直してください")
+            cfg.recognition.cuda_gpu_uuid = self._gpu_uuid_by_label[label]
+        if "recognition.crispasr_root" in self._vars:
+            cfg.recognition.crispasr_root = str(self._vars["recognition.crispasr_root"].get()).strip()
+            cfg.recognition.crispasr_model = str(self._vars["recognition.crispasr_model"].get())
+            cfg.recognition.crispasr_decoder = str(self._vars["recognition.crispasr_decoder"].get())
+
+            cfg.recognition.crispasr_timeout_sec = self._int_value("recognition.crispasr_timeout_sec", "CrispASR認識期限")
+            cfg.recognition.crispasr_max_tokens = self._int_value("recognition.crispasr_max_tokens", "CrispASR最大生成トークン")
         cfg.recognition.language = str(
             self._vars["recognition.language"].get()
         )

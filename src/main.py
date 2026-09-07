@@ -42,6 +42,7 @@ sys.path.insert(0, str(_ROOT_DIR))
 
 from src.config import (
     ENGINE_QWEN3_ASR,
+    ENGINE_CRISPASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
     POSTPROCESSOR_DICTIONARY,
@@ -251,6 +252,10 @@ class App:
         self.tray = TrayApp(
             on_set_language=self._on_set_language,
             on_set_engine=self._on_set_engine,
+            on_set_gpu=self._on_set_gpu,
+            on_reload_model=self._on_reload_model,
+            initial_gpu_uuid=self.cfg.recognition.cuda_gpu_uuid,
+            initial_gpu_legacy_index=self.cfg.recognition.crispasr_gpu_device,
             on_set_microphone=self._on_set_microphone,
             on_quit=self._on_quit,
             initial_language=self.cfg.recognition.language,
@@ -259,6 +264,8 @@ class App:
             initial_microphone=self.cfg.recording.microphone,
             sample_rate=self.cfg.recording.sample_rate,
             initial_qwen3_model=self.cfg.recognition.qwen3_model,
+            initial_crispasr_model=self.cfg.recognition.crispasr_model,
+            initial_crispasr_root=self.cfg.recognition.crispasr_root,
             feedback_config=self.cfg.feedback,
             on_save_config=self._on_save_config,
             on_set_sound_enabled=self._on_set_sound_enabled,
@@ -369,6 +376,8 @@ class App:
             recognition.engine,
             recognition.device,
         )
+        if recognition.device == "cuda":
+            common += (recognition.cuda_gpu_uuid,)
         if recognition.engine == ENGINE_REAZON_K2:
             return common + (
                 recognition.reazon_language,
@@ -381,6 +390,15 @@ class App:
                 recognition.qwen3_max_new_tokens,
                 recognition.qwen3_attn_implementation,
                 recognition.qwen3_torch_compile,
+            )
+        if recognition.engine == ENGINE_CRISPASR:
+            return common + (
+                recognition.crispasr_root,
+                recognition.crispasr_model,
+                recognition.crispasr_decoder,
+                recognition.crispasr_gpu_device,
+                recognition.crispasr_max_tokens,
+                recognition.cpu_threads,
             )
         whisper = common + (recognition.model_size,)
         if recognition.device == "cpu":
@@ -1039,6 +1057,9 @@ class App:
                     # published candidate is intentionally not ready until its
                     # model has loaded, and recording start is blocked meanwhile.
                     if not self._unload_transcriber(previous):
+                        with self._model_load_lock:
+                            if self.transcriber is candidate:
+                                self.transcriber = previous
                         raise RuntimeError(
                             "旧ASRモデルを安全に解放できませんでした"
                         )
@@ -1074,7 +1095,9 @@ class App:
                         "モデルのロードが完了しました"
                         f"（{candidate.engine_label}）。使用可能です。"
                     )
-                except Exception:
+                except Exception as exc:
+                    from src.gpu import GPUSelectionError
+                    failure_message = str(exc) if isinstance(exc, GPUSelectionError) else _MODEL_LOAD_FAILED_MESSAGE
                     with self._model_load_lock:
                         current_failure = (
                             not self._shutdown
@@ -1084,7 +1107,7 @@ class App:
                             candidate if candidate is not None else self.transcriber
                         )
                         if current_failure:
-                            self._model_load_error = _MODEL_LOAD_FAILED_MESSAGE
+                            self._model_load_error = failure_message
                     if not current_failure:
                         if candidate is not None:
                             self._unload_transcriber(candidate)
@@ -1096,10 +1119,7 @@ class App:
                         return
                     self._unload_transcriber(failed_transcriber)
                     logger.exception("モデルのロードに失敗しました")
-                    self.tray.notify(
-                        "モデルのロードに失敗しました。"
-                        "ログを確認してください。"
-                    )
+                    self.tray.notify(failure_message)
                 finally:
                     with self._model_load_lock:
                         finish_current = (
@@ -1138,7 +1158,7 @@ class App:
     def _on_set_engine(
         self,
         engine: str,
-        qwen3_model: str | None = None,
+        model: str | None = None,
         device: str | None = None,
     ) -> bool:
         with self._lock:
@@ -1163,12 +1183,15 @@ class App:
                 ):
                     proposed.device = device
                     changed = True
-                if (
-                    qwen3_model
-                    and qwen3_model != proposed.qwen3_model
-                ):
-                    proposed.qwen3_model = qwen3_model
-                    changed = True
+                if model and engine == ENGINE_CRISPASR:
+                    if model != proposed.crispasr_model:
+                        proposed.crispasr_model = model
+                        proposed.crispasr_decoder = "auto"
+                        changed = True
+                elif model and engine == ENGINE_QWEN3_ASR:
+                    if model != proposed.qwen3_model:
+                        proposed.qwen3_model = model
+                        changed = True
                 if not changed:
                     return True
                 recognition_error = recognition_configuration_error(proposed)
@@ -1188,11 +1211,39 @@ class App:
             label = engine
             if engine == ENGINE_WHISPER and device:
                 label = f"{engine} ({device})"
-            if engine == ENGINE_QWEN3_ASR and qwen3_model:
-                label = f"{engine} ({qwen3_model_label(qwen3_model)})"
+            if engine == ENGINE_QWEN3_ASR and model:
+                label = f"{engine} ({qwen3_model_label(model)})"
+            if engine == ENGINE_CRISPASR and model:
+                from src.asr.crispasr_assets import profile_label
+                label = f"CrispASR {profile_label(model)} ({proposed.device})"
             self._load_model_async(
                 notify_message=f"エンジン切替中: {label}"
             )
+        return True
+
+    def _on_set_gpu(self, identity: str) -> bool:
+        with self._config_lock:
+            revision = self._settings_revision
+            fingerprint = self._config_fingerprint
+            cfg = copy.deepcopy(self.cfg)
+            unchanged = cfg.recognition.cuda_gpu_uuid == identity
+            cfg.recognition.cuda_gpu_uuid = identity
+        if unchanged:
+            return self._on_reload_model()
+        saved, message = self._on_settings_save_config(cfg, revision, fingerprint)
+        if not saved:
+            self.tray.notify(message)
+        return saved
+
+    def _on_reload_model(self) -> bool:
+        with self._lock:
+            if self._shutdown or self._is_recording:
+                self.tray.notify("録音・文字起こし・校正が終わってから再読み込みしてください")
+                return False
+            if self._model_loading:
+                self.tray.notify("モデルを読み込み中です。完了後に再試行してください")
+                return False
+            self._load_model_async(notify_message="選択したモデルを再読み込みします")
         return True
 
     # ── マイク切替 ────────────────────────────────────

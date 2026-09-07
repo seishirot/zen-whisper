@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "version": "0.8.32",
+  "commit": "e2a356146e36bc1cc0410edefb01990448766979",
+  "source": "https://github.com/CrispStrobe/CrispASR",
+  "license": "MIT; bundled dependencies: see archive THIRD_PARTY_NOTICES.txt",
+  "runtimes": {
+    "cpu": {
+      "asset": "crispasr-windows-x86_64-cpu.zip",
+      "sha256": "ac8b6caf4dd448d00c5050907275bce4d154747110c37943aa4f69ee7fac9541",
+      "size": 8261759,
+      "requires": "Windows x64, AVX2 + FMA; no NVIDIA libraries"
+    },
+    "cuda": {
+      "asset": "crispasr-windows-x86_64-cuda.zip",
+      "sha256": "9108d2be9b61415cf2c6d758d09a6fbfda369c2cda2d98f1f3d61e1326792d01",
+      "size": 722987805,
+      "requires": "Windows x64; NVIDIA driver supporting bundled CUDA 12.8.0",
+      "cuda_license": "https://docs.nvidia.com/cuda/archive/12.8.0/eula/index.html"
+    }
+  },
+  "models": {
+    "parakeet-ja-0.6b-q8": {
+      "repo": "cstr/parakeet-tdt-0.6b-ja-GGUF",
+      "revision": "d9e3ba65a6579796389ea89e5939509ed257f972",
+      "file": "parakeet-tdt-0.6b-ja-q8_0.gguf",
+      "sha256": "5a61e6c7d956c3c72a76fafcd798cac0c9ea66d0e29b3910cd04865a1e42cc17",
+      "size": 673554880,
+      "backend": "parakeet",
+      "precision": "Q8_0",
+      "decoders": ["tdt", "ctc"],
+      "languages": ["ja"],
+      "checkpoint": "nvidia/parakeet-tdt_ctc-0.6b-ja",
+      "license": "CC-BY-4.0; attribution: NVIDIA, GGUF conversion by CrispStrobe (cstr)",
+      "label": "Parakeet JA 0.6B Q8"
+    },
+    "parakeet-ja-0.6b-f16": {
+      "repo": "cstr/parakeet-tdt-0.6b-ja-GGUF",
+      "revision": "d9e3ba65a6579796389ea89e5939509ed257f972",
+      "file": "parakeet-tdt-0.6b-ja.gguf",
+      "sha256": "374eb0132eebaec4df77a9631cbbeb03790be48a4a517f6cc8e8bdb38fe9a584",
+      "size": 1246932800,
+      "backend": "parakeet",
+      "precision": "F16",
+      "decoders": ["tdt", "ctc"],
+      "languages": ["ja"],
+      "checkpoint": "nvidia/parakeet-tdt_ctc-0.6b-ja",
+      "license": "CC-BY-4.0; attribution: NVIDIA, GGUF conversion by CrispStrobe (cstr)",
+      "label": "Parakeet JA 0.6B F16"
+    },
+    "qwen3-1.7b-q8": {
+      "repo": "cstr/qwen3-asr-1.7b-GGUF",
+      "revision": "674df5d44b50a63e7102a18895ed20e3f91de301",
+      "file": "qwen3-asr-1.7b-q8_0.gguf",
+      "sha256": "9851ab996591a2d0cb0efb216002764b509c86bd40c95e613d7b65b8e69c8a6e",
+      "size": 2506723200,
+      "backend": "qwen3-1.7b",
+      "precision": "Q8_0",
+      "decoders": ["greedy"],
+      "languages": ["ja", "en"],
+      "checkpoint": "Qwen/Qwen3-ASR-1.7B (non-hf conversion source)",
+      "license": "Apache-2.0; Qwen, GGUF conversion by CrispStrobe (cstr)",
+      "label": "Qwen3 1.7B Q8"
+    },
+    "qwen3-1.7b-f16": {
+      "repo": "cstr/qwen3-asr-1.7b-GGUF",
+      "revision": "674df5d44b50a63e7102a18895ed20e3f91de301",
+      "file": "qwen3-asr-1.7b-f16.gguf",
+      "sha256": "ac6c58f9cb0f2bb22290319cde01b0e25a2c1f1ee69aa2f1a9265f29a8bfc9d7",
+      "size": 4704800576,
+      "backend": "qwen3-1.7b",
+      "precision": "F16",
+      "decoders": ["greedy"],
+      "languages": ["ja", "en"],
+      "checkpoint": "Qwen/Qwen3-ASR-1.7B (non-hf conversion source)",
+      "license": "Apache-2.0; Qwen, GGUF conversion by CrispStrobe (cstr)",
+      "label": "Qwen3 1.7B F16"
+    },
+    "qwen3-0.6b-q8": {
+      "repo": "cstr/qwen3-asr-0.6b-GGUF",
+      "revision": "58bd3202f835f46b24b17142cb503b0860c737a5",
+      "file": "qwen3-asr-0.6b-q8_0.gguf",
+      "sha256": "f547589d5ca582e093b2d3312ad9ff13b609b43d413f972c0e92b823dde70a00",
+      "size": 1006809760,
+      "backend": "qwen3",
+      "precision": "Q8_0",
+      "decoders": ["greedy"],
+      "languages": ["ja", "en"],
+      "checkpoint": "Qwen/Qwen3-ASR-0.6B (non-hf conversion source)",
+      "license": "Apache-2.0; Qwen, GGUF conversion by CrispStrobe (cstr)",
+      "label": "Qwen3 0.6B Q8"
+    },
+    "parakeet-ctc-ja-1.1b-q8": {
+      "repo": "cstr/parakeet-ctc-1.1b-ja-GGUF",
+      "revision": "033e8bf08d60a582b47a92bba07ca9e392982861",
+      "file": "parakeet-ctc-1.1b-ja-q8_0.gguf",
+      "sha256": "4fca7a83833012d515b4a71ab3df9a0abcf3362107369850d89dda962dfd34b4",
+      "size": 1137330464,
+      "backend": "fastconformer-ctc",
+      "precision": "Q8_0",
+      "decoders": ["ctc"],
+      "languages": ["ja"],
+      "checkpoint": "grider-transwithai/parakeet-ctc-1.1b-ja / parakeet-ja-gal.nemo",
+      "license": "Apache-2.0 fine-tune; NVIDIA/parakeet-ctc-1.1b upstream CC-BY-4.0 attribution retained; GGUF by CrispStrobe (cstr)",
+      "label": "Parakeet CTC JA 1.1B Q8"
+    }
+  }
+}

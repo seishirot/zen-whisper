@@ -388,6 +388,12 @@ class Qwen3Backend:
             raise ValueError(
                 f"Qwen3-ASR の実行先は cuda または cpu が必要です: {resolved}"
             )
+        target_device = resolved
+        if resolved == "cuda" and cfg.cuda_gpu_uuid != "":
+            from src.gpu import cuda_device_index, select_gpu
+            gpu = select_gpu(cfg)
+            target_device = f"cuda:{cuda_device_index(gpu.uuid)}"
+            logger.info("Qwen Transformers GPU: %s (%s)", gpu.name, gpu.uuid)
         attn_impl = _resolve_qwen3_attn(cfg.qwen3_attn_implementation)
         use_compile = (
             cfg.qwen3_torch_compile and resolved != "cpu" and _is_triton_available()
@@ -427,7 +433,7 @@ class Qwen3Backend:
                 local_files_only=True,
                 trust_remote_code=False,
             )
-            model = model.to(resolved).eval()
+            model = model.to(target_device).eval()
             compile_config = (
                 CompileConfig(mode="reduce-overhead") if use_compile else None
             )

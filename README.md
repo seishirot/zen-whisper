@@ -110,6 +110,11 @@ verifies its weights against the repository's SHA-256 manifest. Built-in
 Whisper, Reazon, and Qwen model IDs are immutable in the same way on Windows and
 macOS, and remote-code loading is disabled for the Transformers path.
 
+For the optional Windows CrispASR backend (CPU/CUDA Parakeet and Qwen3), see
+[explicit setup, selection, rollback and local validation](tools/CRISPASR.md).
+It is off by default, uses separately pinned native artifacts, and adds no
+Python dependencies or automatic model download on startup.
+
 For advanced Python configuration, `model_size` and `qwen3_model` also accept an
 existing local model directory. A custom Hugging Face repository must include a
 full lowercase hexadecimal commit as `owner/model@40-character-commit`; a branch,

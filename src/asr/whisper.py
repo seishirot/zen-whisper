@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import logging
+import subprocess
 import sys
 from collections.abc import Callable
+from functools import lru_cache
 
 import numpy as np
 
@@ -66,8 +68,34 @@ def _to_mlx_repo(model_size: str) -> str:
     return _MLX_REPO_MAP.get(model_size, model_size)
 
 
+@lru_cache(maxsize=1)
+def _windows_cuda_available() -> bool:
+    """Probe once without initializing CTranslate2 in the tray/UI thread.
+
+    On Windows, importing CTranslate2 in the UI before loading on another
+    thread reproduced a native abort after inference on a non-default GPU.
+    Keep the capability probe in a short-lived process so the model-loading
+    thread remains the first CTranslate2 caller in the application.
+    """
+    try:
+        result = subprocess.run(
+            [sys.executable, "-I", "-c",
+             "import ctranslate2; print(int(ctranslate2.get_cuda_device_count() > 0))"],
+            capture_output=True, text=True, encoding="utf-8", errors="replace",
+            timeout=10, check=False, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if result.returncode == 0 and result.stdout.strip() in ("0", "1"):
+            return result.stdout.strip() == "1"
+        logger.warning("Whisper CUDAの確認に失敗しました: code=%s", result.returncode)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        logger.warning("Whisper CUDAの確認に失敗しました: type=%s", type(exc).__name__)
+    return False
+
+
 def _cuda_available() -> bool:
     """Best-effort CUDA availability check for CTranslate2/faster-whisper."""
+    if sys.platform == "win32":
+        return _windows_cuda_available()
     try:
         import ctranslate2
 
@@ -210,6 +238,12 @@ class FasterWhisperBackend:
             kwargs["compute_type"] = "int8"
             kwargs["cpu_threads"] = cfg.cpu_threads
             kwargs["num_workers"] = 1
+
+        if self._device == "cuda" and cfg.cuda_gpu_uuid != "":
+            from src.gpu import cuda_device_index, select_gpu
+            gpu = select_gpu(cfg)
+            kwargs["device_index"] = cuda_device_index(gpu.uuid)
+            logger.info("Whisper GPU: %s (%s)", gpu.name, gpu.uuid)
 
         resolved = resolve_model(
             "faster_whisper",

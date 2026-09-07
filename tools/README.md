@@ -4,6 +4,12 @@ Qwen3-ASR や CPU 向け ASR の推論速度・精度を調査するための使
 本体からは呼び出されず、アプリの動作には不要。一部は`src/`の実装を直接利用する。
 リポジトリルートから実行する。
 
+Gitで追跡するのはスクリプト・公開用の手順・人工テストデータのみ。
+自分用の検証音声、原稿、ログ、集計JSON、比較表、グラフ、採否メモは
+すべて `tools/bench_outputs/` に保存し、コミットしない。集計や匿名化だけで
+公開用データにはならない。既存の実測レポートもこのディレクトリでローカル管理する。
+[ASR比較の実行手順](ASR_BENCHMARKS.md)も参照。
+
 | ファイル | 用途 |
 |---|---|
 | `prepare_public_asr_corpus.py` | 固定Common Voice 8.0日本語test artifactを検証downloadし、30件以上の16kHz mono WAVとduration／境界compositeをlocal-onlyで生成 |
@@ -47,8 +53,8 @@ mise exec -c 'uv run --no-sync python tools\bench_reazon_production.py run --man
 mise exec -c 'uv run --locked --no-sync python tools\bench_asr_candidates.py prepare'
 mise exec -c 'uv run --locked --no-sync python tools\bench_asr_candidates.py run'
 
-# ユーザー実録音を固定private corpus化（再録前の検出3番を除外したrealwork-v1）
-mise exec -c 'uv run --locked --no-sync python tools\prepare_private_asr_corpus.py --exclude-detected-index 3 --overwrite'
+# 許可されたローカル録音からprivate corpusを準備
+mise exec -c 'uv run --locked --no-sync python tools\prepare_private_asr_corpus.py'
 
 # 公式SenseVoice artifactの取得だけがnetworkを使う。runとverify-appはlocal artifactをhash検証
 mise exec -c 'uv run --locked --no-sync python tools\bench_private_asr.py prepare-sensevoice'

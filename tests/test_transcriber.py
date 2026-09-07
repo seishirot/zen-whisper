@@ -13,6 +13,7 @@ import src.transcriber as transcriber_module
 import src.asr.qwen as qwen_module
 from src.asr.base import load_with_timeout
 from src.config import (
+    ENGINE_CRISPASR,
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
@@ -78,10 +79,10 @@ def test_available_recognition_choices_follow_installed_runtime(monkeypatch):
         lambda: False,
     )
 
-    assert available_recognition_engines() == (
-        ENGINE_WHISPER,
-        ENGINE_QWEN3_ASR,
-    )
+    expected = (ENGINE_WHISPER, ENGINE_QWEN3_ASR)
+    if sys.platform == "win32":
+        expected += (ENGINE_CRISPASR,)
+    assert available_recognition_engines() == expected
     assert available_recognition_devices(ENGINE_WHISPER) == ("cpu",)
     assert available_recognition_devices(ENGINE_QWEN3_ASR) == ("cpu",)
 

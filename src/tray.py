@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 import logging
+import sys
 from collections.abc import Callable
 from enum import Enum
 from PIL import Image, ImageDraw
 from pystray import Icon, Menu, MenuItem
 
 from src.audio_devices import default_input_name, list_microphone_names, microphone_available
+from src.asr.crispasr_assets import (
+    installation_root,
+    manifest as crispasr_manifest,
+    profile_label as crispasr_profile_label,
+    resolve_installation,
+)
 from src.config import (
+    ENGINE_CRISPASR,
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
@@ -149,6 +157,12 @@ class TrayApp:
         on_set_profile: Callable[[str], bool | None] | None = None,
         on_set_postprocessor: Callable[[str], bool | None] | None = None,
         on_open_settings: Callable[[], None] | None = None,
+        initial_crispasr_model: str = "parakeet-ja-0.6b-q8",
+        initial_crispasr_root: str = "",
+        initial_gpu_uuid: str = "",
+        initial_gpu_legacy_index: int = 0,
+        on_set_gpu: Callable[[str], bool] | None = None,
+        on_reload_model: Callable[[], bool] | None = None,
     ) -> None:
         self._on_set_language = on_set_language
         self._on_set_engine = on_set_engine
@@ -160,6 +174,13 @@ class TrayApp:
         self._microphone = initial_microphone
         self._sample_rate = sample_rate
         self._qwen3_model = initial_qwen3_model
+        self._crispasr_model = initial_crispasr_model
+        self._crispasr_root = initial_crispasr_root
+        self._gpu_uuid = initial_gpu_uuid
+        self._gpu_legacy_index = initial_gpu_legacy_index
+        self._on_set_gpu = on_set_gpu
+        self._on_reload_model = on_reload_model
+        self._gpu_display = "未指定"
         self._feedback_config = feedback_config
         self._on_save_config = on_save_config
         self._on_set_sound_enabled = on_set_sound_enabled
@@ -191,6 +212,8 @@ class TrayApp:
             engine = "Whisper"
         elif self._engine == ENGINE_REAZON_K2:
             engine = "Reazon K2"
+        elif self._engine == ENGINE_CRISPASR:
+            engine = f"CrispASR {crispasr_profile_label(self._crispasr_model)}"
         elif self._engine == ENGINE_QWEN3_ASR:
             model = qwen3_model_label(self._qwen3_model)
             engine = f"Qwen3-ASR {model}"
@@ -288,49 +311,81 @@ class TrayApp:
     def _is_engine(
         self,
         engine: str,
-        qwen3_model: str | None = None,
+        model: str | None = None,
         device: str | None = None,
     ) -> Callable[[MenuItem], bool]:
-        """エンジンメニューアイテムのチェック状態を返すコールバック。
-
-        qwen3_model / device を指定した場合は、その下位設定まで一致しているかで判定する。
-        """
+        """Check the selected engine, its own model, and execution device."""
         def checked(item: MenuItem) -> bool:
             if self._engine != engine:
                 return False
-            return (
-                (qwen3_model is None or self._qwen3_model == qwen3_model)
-                and (device is None or self._device == device)
-            )
+            if model is not None:
+                current = self._crispasr_model if engine == ENGINE_CRISPASR else self._qwen3_model
+                if current != model:
+                    return False
+            return device is None or self._device == device
         return checked
 
     def _set_engine(
         self,
         engine: str,
-        qwen3_model: str | None = None,
+        model: str | None = None,
         device: str | None = None,
     ) -> Callable[[Icon, MenuItem], None]:
-        """エンジン（および Qwen のモデルサイズ）切替のコールバック。"""
+        """Select a model within its engine without changing another engine's model."""
         def handler(icon: Icon, item: MenuItem) -> None:
-            accepted = self._on_set_engine(engine, qwen3_model, device)
+            accepted = self._on_set_engine(engine, model, device)
             if accepted is False:
                 self.refresh_menu()
                 self._update_title()
                 return
             self._engine = engine
-            if qwen3_model is not None:
-                self._qwen3_model = qwen3_model
+            if model is not None:
+                if engine == ENGINE_CRISPASR:
+                    self._crispasr_model = model
+                elif engine == ENGINE_QWEN3_ASR:
+                    self._qwen3_model = model
             if device is not None:
                 self._device = device
             logger.info(
                 "エンジンを %s%s%s に切替えました（トレイメニュー）",
                 engine,
-                f" ({qwen3_model})" if qwen3_model else "",
+                f" ({model})" if model else "",
                 f" [{device}]" if device else "",
             )
             self.refresh_menu()
             self._update_icon()
         return handler
+
+    def _crispasr_installed(self, profile: str, device: str) -> bool:
+        try:
+            resolve_installation(
+                installation_root(self._crispasr_root), device, profile, verify=False,
+            )
+            return True
+        except (ValueError, OSError, TypeError):
+            return False
+
+    def _build_crispasr_menu(self) -> Menu:
+        if is_mac() or sys.platform != "win32":
+            return Menu()
+        models = []
+        for profile in crispasr_manifest()["models"]:
+            targets = []
+            for device, label in (("cuda", "GPU (CUDA)"), ("cpu", "CPU")):
+                installed = self._crispasr_installed(profile, device)
+                targets.append(MenuItem(
+                    label if installed else f"{label}（未導入）",
+                    self._set_engine(ENGINE_CRISPASR, profile, device=device),
+                    checked=self._is_engine(ENGINE_CRISPASR, profile, device=device),
+                    radio=True,
+                    enabled=installed,
+                ))
+            models.append(MenuItem(crispasr_profile_label(profile), Menu(*targets)))
+        return Menu(
+            *models,
+            Menu.SEPARATOR,
+            MenuItem("モデル配置・Decoderの設定...", self._open_settings),
+        )
 
     def _is_qwen3_enabled(self, item: MenuItem) -> bool:
         """Qwen3-ASR メニュー項目が有効かどうかを返す。"""
@@ -533,7 +588,47 @@ class TrayApp:
         self._on_quit()
         icon.stop()
 
+    def _set_gpu(self, identity: str):
+        def handler(icon, item):
+            if self._on_set_gpu is not None and self._on_set_gpu(identity):
+                self._gpu_uuid = identity
+            self.refresh_menu()
+        return handler
+
+    def _build_gpu_menu(self) -> Menu:
+        self._gpu_count = 0
+        from src.gpu import GPUSelectionError, list_nvidia_gpus
+        if sys.platform != "win32" or getattr(self, "_on_set_gpu", None) is None:
+            return Menu(MenuItem("GPU選択はWindowsで利用できます", None, enabled=False))
+        try:
+            devices = list_nvidia_gpus()
+        except GPUSelectionError as exc:
+            self._gpu_display = "取得できません"
+            return Menu(MenuItem(str(exc), None, enabled=False), MenuItem("GPU一覧を更新", lambda icon, item: self.refresh_menu()))
+        self._gpu_count = len(devices)
+        selected = self._gpu_uuid
+        legacy = self._gpu_legacy_index if self._engine == ENGINE_CRISPASR else 0
+        self._gpu_display = "未検出" if selected else "未指定"
+        items = []
+        for gpu in devices:
+            checked = gpu.uuid == selected if selected else gpu.index == legacy
+            if checked:
+                self._gpu_display = gpu.name
+            items.append(MenuItem(
+                f"{gpu.label} 空き {gpu.free_mib / 1024:.1f} GiB",
+                self._set_gpu(gpu.uuid), checked=lambda item, value=checked: value, radio=True,
+            ))
+        if not items:
+            items.append(MenuItem("NVIDIA GPUが見つかりません", None, enabled=False))
+        items.extend((Menu.SEPARATOR, MenuItem("GPU一覧・空き容量を更新", lambda icon, item: self.refresh_menu())))
+        return Menu(*items)
+
+    def _reload_model(self, icon, item):
+        if self._on_reload_model is not None:
+            self._on_reload_model()
+
     def _build_menu(self) -> Menu:
+        gpu_menu = self._build_gpu_menu()
         return Menu(
             MenuItem(
                 f"言語: {self._language_label()}",
@@ -590,7 +685,12 @@ class TrayApp:
                         enabled=self._is_reazon_enabled,
                     ),
                     MenuItem(
-                        "Qwen3-ASR",
+                        "CrispASR",
+                        self._build_crispasr_menu(),
+                        visible=lambda item: not is_mac() and sys.platform == "win32",
+                    ),
+                    MenuItem(
+                        "Qwen3-ASR (Transformers)",
                         Menu(
                             MenuItem(
                                 "1.7B",
@@ -626,6 +726,12 @@ class TrayApp:
                     ),
                 ),
             ),
+            MenuItem(
+                f"GPU: {getattr(self, '_gpu_display', '未指定')}", gpu_menu,
+                visible=lambda item: sys.platform == "win32" and self._gpu_count > 1,
+            ),
+            MenuItem("モデルを再読み込み", self._reload_model,
+                     visible=lambda item: getattr(self, "_on_reload_model", None) is not None),
             MenuItem(
                 f"プロファイル: {self._profile_label()}",
                 self._build_profile_menu(),
@@ -696,6 +802,10 @@ class TrayApp:
         self._microphone = cfg.recording.microphone
         self._sample_rate = cfg.recording.sample_rate
         self._qwen3_model = cfg.recognition.qwen3_model
+        self._crispasr_model = cfg.recognition.crispasr_model
+        self._crispasr_root = cfg.recognition.crispasr_root
+        self._gpu_uuid = cfg.recognition.cuda_gpu_uuid
+        self._gpu_legacy_index = cfg.recognition.crispasr_gpu_device
         self._feedback_config = cfg.feedback
         self._profiles = profiles
         self._postprocessors = postprocessors

@@ -25,7 +25,8 @@ ENGINE_AUTO = "auto"
 ENGINE_WHISPER = "whisper"
 ENGINE_REAZON_K2 = "reazon-k2"
 ENGINE_QWEN3_ASR = "qwen3-asr"
-VALID_ENGINES = (ENGINE_WHISPER, ENGINE_REAZON_K2, ENGINE_QWEN3_ASR)
+ENGINE_CRISPASR = "crispasr"
+VALID_ENGINES = (ENGINE_WHISPER, ENGINE_REAZON_K2, ENGINE_QWEN3_ASR, ENGINE_CRISPASR)
 VALID_DEVICES = ("cuda", "cpu", "mlx")
 ASR_SAMPLE_RATE = 16000
 POSTPROCESSOR_OFF = "off"
@@ -85,6 +86,14 @@ class RecognitionConfig:
     qwen3_attn_implementation: str = "auto"
     # Transformers generation compile。CUDA のみで、CPU または triton 未導入時は無効。
     qwen3_torch_compile: bool = False
+    # Optional Windows runtime; only tools/setup_crispasr.py downloads artifacts.
+    crispasr_root: str = ""
+    crispasr_model: str = "parakeet-ja-0.6b-q8"
+    crispasr_decoder: str = "auto"
+    cuda_gpu_uuid: str = ""  # Shared Windows CUDA selection; empty preserves legacy defaults.
+    crispasr_gpu_device: int = 0
+    crispasr_timeout_sec: int = 120
+    crispasr_max_tokens: int = 512
     # ハルシネーション抑制パラメータ
     no_speech_threshold: float = 0.6
     condition_on_previous_text: bool = False
@@ -312,11 +321,37 @@ class AppConfig:
             )
         ):
             warnings.append("max_recording_warning_pct は 1〜100 の範囲である必要があります")
+        if self.recognition.cuda_gpu_uuid:
+            from src.gpu import valid_gpu_uuid
+            if not valid_gpu_uuid(self.recognition.cuda_gpu_uuid):
+                warnings.append("CUDA GPUの選択が無効です。GPUを選び直してください")
+        elif not isinstance(self.recognition.cuda_gpu_uuid, str):
+            warnings.append("cuda_gpu_uuid は文字列で指定してください")
         if self.recognition.engine not in VALID_ENGINES:
             warnings.append(
                 f"engine '{self.recognition.engine}' は無効です"
                 f"（有効値: {', '.join(VALID_ENGINES)}）"
             )
+        if self.recognition.engine == ENGINE_CRISPASR:
+            from src.asr.crispasr_assets import decoder_for, profile_spec
+
+            if sys.platform != "win32":
+                warnings.append("CrispASRはWindows x64専用です")
+            if self.recognition.device not in ("cpu", "cuda"):
+                warnings.append("CrispASRはcpuまたはcudaを明示選択してください")
+            if not isinstance(self.recognition.crispasr_root, str):
+                warnings.append("crispasr_root は文字列で指定してください")
+            try:
+                profile = profile_spec(self.recognition.crispasr_model)
+                decoder_for(profile, self.recognition.crispasr_decoder)
+                if self.recognition.language not in profile["languages"]:
+                    warnings.append("CrispASR: 選択モデルはこの言語に対応していません")
+            except ValueError as exc:
+                warnings.append(str(exc))
+            for name, minimum in (("crispasr_gpu_device", 0), ("crispasr_timeout_sec", 1), ("crispasr_max_tokens", 1)):
+                value = getattr(self.recognition, name)
+                if not isinstance(value, int) or isinstance(value, bool) or value < minimum:
+                    warnings.append(f"{name} は {minimum} 以上の整数で指定してください")
         if not isinstance(self.enhancement.profile, str):
             warnings.append("enhancement.profile は文字列で指定してください")
         if (

@@ -111,3 +111,15 @@ tools/bench_outputs/
 tools/bin/
 tools/downloads/
 tools/models/
+
+# Local evaluation artifacts include derived metrics and reports, not just audio.
+*.local.*
+*.m4a
+*.ogg
+*.opus
+*.aac
+# Legacy report names are ignored even if regenerated outside bench_outputs.
+/tools/ASR*COMPARISON.md
+/tools/*comparison-*.json
+/tools/crispasr-smoke-*.json
+/tools/crispasr-runtime-inventory-*.json

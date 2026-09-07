@@ -396,3 +396,76 @@ def test_apply_settings_refreshes_tray_snapshot(monkeypatch):
     assert app._profile == "coding"
     assert app._postprocessor == "local"
     assert refreshed == ["menu", "title"]
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_crispasr_qwen_menu_uses_installed_runtime_without_transformers(
+    monkeypatch, tmp_path, accepted,
+):
+    import src.tray as tray_module
+    from src.asr.crispasr_assets import manifest
+
+    profile = "qwen3-1.7b-q8"
+    data = manifest()
+    runtime = tmp_path / "cuda"
+    executable = runtime / data["runtimes"]["cuda"]["asset"].removesuffix(".zip") / "crispasr.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"not executed")
+    (runtime / "receipt.json").write_text("{}", encoding="utf-8")
+    models = tmp_path / "models"
+    models.mkdir()
+    (models / data["models"][profile]["file"]).write_bytes(b"not loaded")
+    calls = []
+    app = tray_module.TrayApp(
+        on_set_language=lambda language: True,
+        on_set_engine=lambda *selection: calls.append(selection) or accepted,
+        on_quit=lambda: None,
+        initial_crispasr_root=str(tmp_path),
+    )
+    previous_qwen = app._qwen3_model
+    monkeypatch.setattr(tray_module.sys, "platform", "win32")
+    monkeypatch.setattr(tray_module, "is_mac", lambda: False)
+    monkeypatch.setattr(tray_module, "is_qwen3_cuda_available", lambda: False)
+    monkeypatch.setattr(app, "_build_microphone_menu", lambda: tray_module.Menu())
+    monkeypatch.setattr(app, "refresh_menu", lambda: None)
+    monkeypatch.setattr(app, "_update_icon", lambda: None)
+    monkeypatch.setattr(app, "_update_title", lambda: None)
+
+    engine_items = app._build_menu().items[2].submenu.items
+    crisp = next(item for item in engine_items if item.text == "CrispASR")
+    legacy = next(item for item in engine_items if item.text == "Qwen3-ASR (Transformers)")
+    qwen = next(item for item in crisp.submenu.items if item.text == "Qwen3 1.7B Q8")
+    gpu, cpu = qwen.submenu.items
+
+    assert crisp.visible
+    assert gpu.enabled
+    assert not cpu.enabled and "未導入" in cpu.text
+    assert all(not item.enabled for item in legacy.submenu.items)
+    gpu(None)
+
+    assert calls == [("crispasr", profile, "cuda")]
+    assert app._qwen3_model == previous_qwen
+    assert gpu.checked is accepted
+    if accepted:
+        assert app._crispasr_model == profile
+        assert app._engine_label() == "CrispASR Qwen3 1.7B Q8 / GPU (CUDA)"
+    else:
+        assert app._engine == "whisper"
+        assert app._crispasr_model == "parakeet-ja-0.6b-q8"
+
+
+def test_crispasr_tray_menu_stays_hidden_on_mac(monkeypatch):
+    import src.tray as tray_module
+
+    app = tray_module.TrayApp(
+        on_set_language=lambda language: True,
+        on_set_engine=lambda *selection: True,
+        on_quit=lambda: None,
+    )
+    monkeypatch.setattr(tray_module, "is_mac", lambda: True)
+    monkeypatch.setattr(app, "_build_microphone_menu", lambda: tray_module.Menu())
+    engines = app._build_menu().items[2].submenu.items
+    crisp = next(item for item in engines if item.text == "CrispASR")
+
+    assert not crisp.visible
+    assert not crisp.submenu.items

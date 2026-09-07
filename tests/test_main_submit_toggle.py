@@ -6,6 +6,8 @@ import copy
 import threading
 import time
 
+import pytest
+
 import src.main as main_module
 from src.config import AppConfig
 from src.main import App
@@ -596,11 +598,16 @@ def test_sound_toggle_persists_under_config_revision_lock(monkeypatch):
     assert app._settings_revision == 1
 
 
-def test_settings_save_applies_live_and_marks_restart_fields(monkeypatch):
+@pytest.mark.parametrize("engine", ["whisper", "crispasr"])
+def test_settings_save_applies_live_and_marks_restart_fields(monkeypatch, engine):
     app = _make_settings_app()
+    app.cfg.recognition.engine = engine
     new_cfg = copy.deepcopy(app.cfg)
     new_cfg.hotkey.toggle = "ctrl+space"
-    new_cfg.recognition.model_size = "medium"
+    if engine == "crispasr":
+        new_cfg.recognition.crispasr_model = "qwen3-1.7b-q8"
+    else:
+        new_cfg.recognition.model_size = "medium"
     load_messages = []
     monkeypatch.setattr(
         main_module,
@@ -1312,3 +1319,82 @@ def test_model_loads_are_serialized_and_queued_stale_load_is_skipped(
     assert candidate_count == 2
     assert max_active_loads == 1
     assert app.transcriber.engine_label == "candidate-1"
+
+
+@pytest.mark.parametrize(
+    ("model", "save_succeeds", "expected_decoder"),
+    [
+        ("qwen3-1.7b-q8", True, "auto"),
+        ("parakeet-ja-0.6b-q8", True, "ctc"),
+        ("qwen3-1.7b-q8", False, "ctc"),
+    ],
+)
+def test_crispasr_tray_switch_persists_own_model_and_reloads(
+    monkeypatch, tmp_path, model, save_succeeds, expected_decoder,
+):
+    import src.config as config_module
+
+    path = tmp_path / "config.toml"
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", path)
+    app = _make_settings_app()
+    app.cfg.recognition.engine = "crispasr"
+    app.cfg.recognition.device = "cpu"
+    app.cfg.recognition.crispasr_decoder = "ctc"
+    original = copy.deepcopy(app.cfg.recognition)
+    assert config_module.save_config(app.cfg)
+    before = path.read_bytes()
+    messages = []
+    monkeypatch.setattr(main_module, "recognition_configuration_error", lambda cfg: "")
+    monkeypatch.setattr(
+        app, "_load_model_async",
+        lambda notify_message=None: messages.append(notify_message),
+    )
+    if not save_succeeds:
+        monkeypatch.setattr(main_module, "save_config", lambda *args, **kwargs: False)
+
+    accepted = app._on_set_engine("crispasr", model, "cuda")
+    persisted = config_module.load_config(path).recognition
+
+    assert accepted is save_succeeds
+    assert app.cfg.recognition.qwen3_model == original.qwen3_model
+    assert persisted.qwen3_model == original.qwen3_model
+    assert app.cfg.recognition.crispasr_decoder == expected_decoder
+    if save_succeeds:
+        assert persisted.crispasr_model == model
+        assert persisted.crispasr_decoder == expected_decoder
+        assert persisted.device == "cuda"
+        assert len(messages) == 1
+        assert "CrispASR" in messages[0]
+        assert app._settings_revision == 1
+    else:
+        assert app.cfg.recognition == original
+        assert path.read_bytes() == before
+        assert messages == []
+
+
+@pytest.mark.parametrize("old_cleanup_fails", [False, True])
+def test_gpu_load_failure_is_actionable_and_cleanup_failure_keeps_ownership(monkeypatch, old_cleanup_fails):
+    from src.gpu import GPUSelectionError
+    from unittest.mock import Mock
+    app = _make_settings_app()
+    app._set_state = lambda state: None
+    targets = []
+    old = type("Existing", (), {"is_ready": True, "unload": Mock(side_effect=RuntimeError("cannot reap") if old_cleanup_fails else None)})()
+    candidate = type("Candidate", (), {"is_ready": False, "unload": Mock(), "load_model": Mock(side_effect=GPUSelectionError("RTX 2070 SUPER: 空きVRAM不足"))})()
+    class CapturedThread:
+        def __init__(self, target, daemon): self.target = target
+        def start(self): targets.append(self.target)
+    app.transcriber = old
+    monkeypatch.setattr(main_module.threading, "Thread", CapturedThread)
+    monkeypatch.setattr(main_module, "Transcriber", lambda: candidate)
+    monkeypatch.setattr(main_module, "preload_vad", lambda: None)
+    app._load_model_async()
+    targets[0]()
+    assert not app._model_loading
+    if old_cleanup_fails:
+        assert app.transcriber is old
+        candidate.load_model.assert_not_called()
+    else:
+        assert "空きVRAM不足" in app._model_load_error
+        assert "空きVRAM不足" in app.tray.notices[-1]
+        candidate.unload.assert_called_once()

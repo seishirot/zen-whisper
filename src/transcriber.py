@@ -28,6 +28,7 @@ from src.asr.whisper import (
 from src.config import (
     ASR_SAMPLE_RATE,
     ENGINE_AUTO,
+    ENGINE_CRISPASR,
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
@@ -48,17 +49,21 @@ def _resolve_engine(cfg: RecognitionConfig) -> str:
 
 
 def available_recognition_engines() -> tuple[str, ...]:
-    """Return model families currently usable by this Python installation."""
+    """Return selectable adapters; CrispASR artifacts are checked separately."""
     engines = [ENGINE_WHISPER]
     if not is_mac() and is_reazon_k2_available():
         engines.append(ENGINE_REAZON_K2)
     if not is_mac() and is_qwen3_available():
         engines.append(ENGINE_QWEN3_ASR)
+    if not is_mac() and sys.platform == "win32":
+        engines.append(ENGINE_CRISPASR)
     return tuple(engines)
 
 
 def available_recognition_devices(engine: str) -> tuple[str, ...]:
-    """Return execution targets supported by an installed engine."""
+    """Return execution targets selectable for an engine."""
+    if engine == ENGINE_CRISPASR:
+        return ("cpu", "cuda") if not is_mac() and sys.platform == "win32" else ()
     if engine == ENGINE_REAZON_K2:
         return ("cpu",)
     if engine == ENGINE_QWEN3_ASR:
@@ -76,6 +81,10 @@ def available_recognition_devices(engine: str) -> tuple[str, ...]:
 
 def recognition_configuration_error(cfg: RecognitionConfig) -> str:
     """Describe why a requested engine/device cannot be loaded right now."""
+    if cfg.engine == ENGINE_CRISPASR:
+        from src.asr.crispasr import configuration_error
+
+        return configuration_error(cfg)
     if cfg.engine not in available_recognition_engines():
         if cfg.engine == ENGINE_REAZON_K2:
             return (
@@ -150,6 +159,10 @@ class Transcriber:
             self.unload()
 
     def _create_backend(self, engine: str, cfg: RecognitionConfig) -> ASRBackend:
+        if engine == ENGINE_CRISPASR:
+            from src.asr.crispasr import CrispASRBackend
+
+            return CrispASRBackend()
         if engine == ENGINE_REAZON_K2:
             return ReazonK2Backend()
         if engine == ENGINE_QWEN3_ASR:
@@ -169,7 +182,7 @@ class Transcriber:
 
     @property
     def is_ready(self) -> bool:
-        return self._backend is not None and self._backend.is_ready
+        return not getattr(self, "_cleanup_failed", False) and self._backend is not None and self._backend.is_ready
 
     @property
     def engine_label(self) -> str:
@@ -189,7 +202,14 @@ class Transcriber:
                     cleanup()
                 except Exception:
                     logger.exception("ASR バックエンドの明示解放に失敗しました")
+                    with self._lock:
+                        self._backend = backend
+                        self._cleanup_failed = True
+                    # Keep ownership for a later cleanup attempt and prevent a
+                    # replacement model from loading over unreleased resources.
+                    raise
             del backend
+        self._cleanup_failed = False
         gc.collect()
 
         # Do not import optional runtimes just for cleanup. If PyTorch/MLX is
@@ -238,7 +258,7 @@ class Transcriber:
         with self._lock:
             backend = self._backend
             engine = self._engine
-            if backend is None or not backend.is_ready:
+            if getattr(self, "_cleanup_failed", False) or backend is None or not backend.is_ready:
                 logger.error("モデルがロードされていません")
                 return ""
 
