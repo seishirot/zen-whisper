@@ -1277,6 +1277,15 @@ class App:
 
     def _on_set_language(self, lang: str) -> bool:
         with self._config_lock:
+            if self.cfg.recognition.engine == ENGINE_CRISPASR:
+                from src.asr.crispasr_assets import profile_spec
+                try:
+                    profile = profile_spec(self.cfg.recognition.crispasr_model)
+                    if lang not in profile["languages"]:
+                        raise ValueError("CrispASR: 選択モデルはこの言語に対応していません")
+                except ValueError as exc:
+                    self.tray.notify(str(exc))
+                    return False
             previous_language = self._language
             previous_config_language = self.cfg.recognition.language
             self._language = lang
@@ -1293,20 +1302,10 @@ class App:
 
     def _on_switch_lang(self) -> None:
         with self._config_lock:
-            previous_language = self._language
-            previous_config_language = self.cfg.recognition.language
             new_lang = "en" if self._language == "ja" else "ja"
-            self._language = new_lang
-            self.cfg.recognition.language = new_lang
-            saved = self._on_save_config()
-            if not saved:
-                self._language = previous_language
-                self.cfg.recognition.language = previous_config_language
-                new_lang = previous_language
+            if not self._on_set_language(new_lang):
+                return
         self.tray.set_language(new_lang)
-        if not saved:
-            self.tray.notify("言語設定の保存に失敗しました")
-            return
         self.tray.notify(f"言語: {'日本語' if new_lang == 'ja' else 'English'}")
         logger.info("ホットキーで言語を %s に切替えました", new_lang)
 

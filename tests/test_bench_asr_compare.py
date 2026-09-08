@@ -87,3 +87,54 @@ def test_git_ignores_raw_and_derived_evaluation_artifacts():
         cwd=bench.ROOT, capture_output=True, text=True,
     )
     assert public.returncode == 1
+
+
+@pytest.mark.parametrize("selection", ["smoke", "representative", "full"])
+def test_public_only_run_never_reads_private_audio(monkeypatch, tmp_path, selection):
+    import json
+    from types import SimpleNamespace
+    plan = {
+        "items": [
+            {"id": "public-a", "corpus": "public", "audio": "public-a.wav", "sha256": "fixture"},
+            {"id": "private-a", "corpus": "private", "audio": "private-a.wav", "sha256": "fixture"},
+        ],
+        "selections": {"smoke": ["public-a", "private-a"], "representative": ["public-a", "private-a"]},
+    }
+    manifest = tmp_path / "synthetic.json"
+    manifest.write_text(json.dumps(plan), encoding="utf-8")
+    reads = []
+
+    def digest(path):
+        assert path.name == "public-a.wav", "Excluded private input was read"
+        reads.append(path.name)
+        return "fixture"
+
+    class StopBeforeInference(Exception):
+        pass
+
+    def stop(path):
+        raise StopBeforeInference
+
+    monkeypatch.setattr(bench, "digest", digest)
+    monkeypatch.setattr(bench, "local_output", stop)
+    args = SimpleNamespace(device="cpu", profile="reazon-k2", manifest=manifest,
+                           selection=selection, corpora=["public"], output=tmp_path)
+    with pytest.raises(StopBeforeInference):
+        bench.run(args)
+    assert reads == ["public-a.wav"]
+
+
+@pytest.mark.parametrize("ids", [[], ["private-a"]])
+def test_empty_selection_intersection_does_not_expand_to_other_inputs(monkeypatch, tmp_path, ids):
+    import json
+    from types import SimpleNamespace
+    manifest = tmp_path / "synthetic.json"
+    manifest.write_text(json.dumps({
+        "items": [{"id": "public-a", "corpus": "public"}, {"id": "private-a", "corpus": "private"}],
+        "selections": {"representative": ids},
+    }), encoding="utf-8")
+    monkeypatch.setattr(bench, "digest", lambda path: pytest.fail("No input should be read"))
+    args = SimpleNamespace(device="cpu", profile="reazon-k2", manifest=manifest,
+                           selection="representative", corpora=["public"])
+    with pytest.raises(ValueError, match="No selected inputs"):
+        bench.run(args)

@@ -1398,3 +1398,29 @@ def test_gpu_load_failure_is_actionable_and_cleanup_failure_keeps_ownership(monk
         assert "空きVRAM不足" in app._model_load_error
         assert "空きVRAM不足" in app.tray.notices[-1]
         candidate.unload.assert_called_once()
+
+
+@pytest.mark.parametrize("via_hotkey", [False, True])
+@pytest.mark.parametrize(("engine", "model", "accepted"), [
+    ("crispasr", "parakeet-ja-0.6b-q8", False),
+    ("crispasr", "parakeet-ctc-ja-1.1b-q8", False),
+    ("crispasr", "qwen3-1.7b-q8", True),
+    ("whisper", "parakeet-ja-0.6b-q8", True),
+])
+def test_language_controls_preserve_model_language_contract(monkeypatch, via_hotkey, engine, model, accepted):
+    from unittest.mock import Mock
+    app = _make_settings_app()
+    app.cfg.recognition.engine = engine
+    app.cfg.recognition.crispasr_model = model
+    save = Mock(return_value=True)
+    monkeypatch.setattr(app, "_on_save_config", save)
+    app.tray.set_language = Mock()
+    if via_hotkey:
+        app._on_switch_lang()
+    else:
+        assert app._on_set_language("en") is accepted
+    assert app._language == app.cfg.recognition.language == ("en" if accepted else "ja")
+    assert save.call_count == int(accepted)
+    if not accepted:
+        app.tray.set_language.assert_not_called()
+        assert "言語" in app.tray.notices[-1]

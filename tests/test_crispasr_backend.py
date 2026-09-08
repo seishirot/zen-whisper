@@ -336,3 +336,44 @@ def test_insufficient_vram_does_not_spawn_worker(fake_server, monkeypatch):
     with pytest.raises(GPUSelectionError, match="VRAM"):
         backend.load(cfg)
     assert not calls and not processes and not backend.is_ready
+
+
+@pytest.mark.parametrize(("device", "decoder"), [("cpu", "auto"), ("cuda", "ctc")])
+def test_load_waits_for_delayed_log_evidence(fake_server, monkeypatch, device, decoder):
+    import threading
+    backend, cfg, _, processes = fake_server
+    cfg.device, cfg.crispasr_decoder = device, decoder
+    release_reader = threading.Event()
+    models_ready = threading.Event()
+    original_reader, original_request = backend._read_logs, backend._request
+    errors = []
+
+    def delayed_reader(pipe):
+        release_reader.wait(timeout=3)
+        original_reader(pipe)
+
+    def request(*args, **kwargs):
+        result = original_request(*args, **kwargs)
+        models_ready.set()
+        return result
+
+    def load():
+        try:
+            backend.load(cfg)
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(backend, "_read_logs", delayed_reader)
+    monkeypatch.setattr(backend, "_request", request)
+    thread = threading.Thread(target=load)
+    thread.start()
+    try:
+        assert models_ready.wait(timeout=2)
+        # HTTP readiness must not turn delayed stdout into a fallback failure.
+        time.sleep(0.05)
+    finally:
+        release_reader.set()
+        thread.join(timeout=4)
+    assert not thread.is_alive()
+    assert errors == []
+    assert backend.is_ready and processes[0].poll() is None

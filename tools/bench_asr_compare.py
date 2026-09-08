@@ -336,7 +336,10 @@ def run(args) -> None:
         raise ValueError("This Reazon K2 profile is CPU-only")
     plan = json.loads(args.manifest.read_text(encoding="utf-8"))
     selected = set(plan["selections"][args.selection]) if args.selection in ("smoke", "representative") else None
-    items = [row for row in plan["items"] if (row["id"] in selected if selected else row["corpus"] in args.corpora)]
+    items = [
+        row for row in plan["items"]
+        if row["corpus"] in args.corpora and (selected is None or row["id"] in selected)
+    ]
     if not items:
         raise ValueError("No selected inputs")
     for item in items:

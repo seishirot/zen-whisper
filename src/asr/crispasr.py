@@ -231,6 +231,7 @@ class CrispASRBackend:
             self._reader = threading.Thread(target=self._read_logs, args=(self._process.stdout,), daemon=True)
             self._reader.start()
             deadline = time.monotonic() + cfg.model_load_timeout_sec
+            entries = None
             while True:
                 if self._process.poll() is not None:
                     raise RuntimeError(f"CrispASR worker exited during load (code={self._process.returncode})")
@@ -239,21 +240,26 @@ class CrispASRBackend:
                     if on_timeout:
                         on_timeout(message)
                     raise TimeoutError(message)
-                try:
-                    models = self._request("/v1/models", timeout=min(0.5, max(0.01, deadline - time.monotonic())))
-                except (OSError, http.client.HTTPException):
-                    time.sleep(0.05)
-                    continue
-                entries = models.get("data", [])
-                if len(entries) != 1 or entries[0].get("id") != model_argument:
-                    raise RuntimeError("CrispASR worker identity/model mismatch")
-                break
-            if not self._build_verified:
-                raise RuntimeError("CrispASR build identity could not be verified")
-            if cfg.device == "cuda" and not self._cuda_selected:
-                raise RuntimeError("CrispASR CUDA initialization was not confirmed; CPU fallback is refused")
-            if self._profile["backend"] == "parakeet" and self._decoder == "ctc" and not self._ctc_selected:
-                raise RuntimeError("CrispASR CTC head/decoder was not confirmed; TDT fallback is refused")
+                if entries is None:
+                    try:
+                        models = self._request("/v1/models", timeout=min(0.5, max(0.01, deadline - time.monotonic())))
+                    except (OSError, http.client.HTTPException):
+                        time.sleep(0.05)
+                        continue
+                    entries = models.get("data", [])
+                    if len(entries) != 1 or entries[0].get("id") != model_argument:
+                        raise RuntimeError("CrispASR worker identity/model mismatch")
+                # HTTP readiness and stdout consumption are independent. Wait
+                # for required evidence within the same startup deadline.
+                if (
+                    self._build_verified
+                    and (cfg.device != "cuda" or self._cuda_selected)
+                    and (self._decoder != "ctc" or self._profile["backend"] != "parakeet" or self._ctc_selected)
+                ):
+                    break
+                if not self._reader.is_alive():
+                    raise RuntimeError("CrispASR startup log ended before build/device/decoder verification")
+                time.sleep(0.01)
             self._ready = True
             self.evidence = {
                 "version": manifest()["version"], "commit": manifest()["commit"],
