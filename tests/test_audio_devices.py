@@ -217,3 +217,96 @@ def test_legacy_partial_match_still_resolves(fake_sounddevice) -> None:
 
     assert result.stream_device == 6
     assert result.name == "Vocaster mic (Focusrite USB Audio)"
+
+
+@pytest.fixture
+def fake_refresh(monkeypatch):
+    state = {"names": {"USB Mic"}, "events": [], "playback": None, "time": 100.0}
+    monkeypatch.setattr(audio_devices, "is_windows", lambda: True)
+    monkeypatch.setattr(audio_devices, "_capture_names", None)
+    monkeypatch.setattr(audio_devices, "_last_refresh_time", 0.0)
+    monkeypatch.setattr(audio_devices.time, "monotonic", lambda: state["time"])
+    monkeypatch.setattr(audio_devices, "_active_capture_device_names", lambda: set(state["names"]))
+    monkeypatch.setattr(audio_devices.sd, "get_stream", lambda: state["playback"])
+    monkeypatch.setattr(audio_devices.sd, "_initialized", 1)
+
+    def terminate():
+        assert audio_devices.sd._initialized == 1
+        audio_devices.sd._initialized = 0
+        state["events"].append("terminate")
+
+    def initialize():
+        assert audio_devices.sd._initialized == 0
+        audio_devices.sd._initialized = 1
+        state["events"].append("initialize")
+
+    monkeypatch.setattr(audio_devices.sd, "_terminate", terminate)
+    monkeypatch.setattr(audio_devices.sd, "_initialize", initialize)
+    return state
+
+
+def test_late_virtual_microphone_refreshes_discovery(fake_refresh, monkeypatch) -> None:
+    state = fake_refresh
+    cached_names = []
+    initialize = audio_devices.sd._initialize
+
+    def discover():
+        initialize()
+        cached_names[:] = sorted(state["names"])
+
+    monkeypatch.setattr(audio_devices.sd, "_initialize", discover)
+    assert audio_devices.refresh_input_devices()
+    assert cached_names == ["USB Mic"]
+    assert not audio_devices.refresh_input_devices()
+    state["names"].add("Virtual Mic")
+    assert audio_devices.refresh_input_devices()
+    assert cached_names == ["USB Mic", "Virtual Mic"]
+    assert state["events"] == ["terminate", "initialize"] * 2
+
+
+def test_refresh_waits_until_recording_and_queries_finish(fake_refresh) -> None:
+    with audio_devices.audio_device_session():
+        with audio_devices.audio_device_session():
+            assert not audio_devices.refresh_input_devices(force=True)
+        assert not audio_devices.refresh_input_devices()
+    assert fake_refresh["events"] == []
+    assert audio_devices.refresh_input_devices()
+
+
+def test_force_refresh_reloads_unchanged_endpoints(fake_refresh) -> None:
+    assert audio_devices.refresh_input_devices()
+    assert audio_devices.refresh_input_devices(force=True)
+    assert fake_refresh["events"] == ["terminate", "initialize"] * 2
+
+
+def test_periodic_refresh_updates_defaults_even_without_endpoint_name_changes(fake_refresh) -> None:
+    assert audio_devices.refresh_input_devices()
+    assert not audio_devices.refresh_input_devices()
+    fake_refresh["time"] += 30.0
+    assert audio_devices.refresh_input_devices()
+    assert fake_refresh["events"] == ["terminate", "initialize"] * 2
+
+
+def test_refresh_defers_during_custom_playback(fake_refresh, monkeypatch) -> None:
+    stream = SimpleNamespace(closed=False, active=True)
+    fake_refresh["playback"] = stream
+    assert not audio_devices.refresh_input_devices()
+    assert fake_refresh["events"] == []
+    stream.active = False
+    monkeypatch.setattr(audio_devices.sd, "stop", lambda: fake_refresh["events"].append("stop"))
+    assert audio_devices.refresh_input_devices()
+    assert fake_refresh["events"] == ["stop", "terminate", "initialize"]
+
+
+def test_refresh_recovers_after_initialization_failure(fake_refresh, monkeypatch) -> None:
+    initialize = audio_devices.sd._initialize
+
+    def fail():
+        raise RuntimeError("Unavailable audio service")
+
+    monkeypatch.setattr(audio_devices.sd, "_initialize", fail)
+    assert not audio_devices.refresh_input_devices()
+    assert audio_devices._capture_names is None
+    monkeypatch.setattr(audio_devices.sd, "_initialize", initialize)
+    assert audio_devices.refresh_input_devices()
+    assert fake_refresh["events"] == ["terminate", "initialize"]

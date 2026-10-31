@@ -35,6 +35,23 @@ def test_faster_whisper_receives_profile_hotwords():
     assert "initial_prompt" not in captured
 
 
+def test_faster_whisper_preserves_quiet_onset_without_second_vad_pass():
+    audio = np.concatenate([
+        np.full(16000, 0.002, dtype=np.float32),
+        np.full(16000, 0.1, dtype=np.float32),
+    ])
+
+    class FakeModel:
+        def transcribe(self, received, **kwargs):
+            np.testing.assert_array_equal(received, audio)
+            assert kwargs["vad_filter"] is False
+            return [types.SimpleNamespace(text="complete utterance")], None
+
+    backend = FasterWhisperBackend("cpu")
+    backend._model = FakeModel()
+    assert backend.transcribe(audio, "ja", RecognitionConfig()) == "complete utterance"
+
+
 def test_mlx_whisper_receives_profile_terms_as_initial_prompt(monkeypatch):
     captured = {}
 

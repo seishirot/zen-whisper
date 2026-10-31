@@ -578,6 +578,12 @@ service.
 ### Microphone selection
 
 - `recording.microphone = ""` uses the current OS default input.
+- On Windows/Python, capture endpoint changes are checked every two seconds
+  while idle. Devices that become available after startup are rediscovered
+  automatically. `マイク一覧を更新` also rescans devices and the default input;
+  retry after recording or sound playback if the rescan is busy. A periodic
+  rescan every 30 seconds while idle also picks up default-only changes and
+  devices that finish initializing without an endpoint name change.
 - Select `マイク` from the Windows/Python tray menu to save a specific microphone name to `config.toml`. In the macOS native app, select `Microphone` from the menu bar item; the choice is stored in macOS app settings.
 - On Windows/Python, an unavailable configured microphone is retained and
   recording falls back to the OS default input. On macOS native, the saved
@@ -587,6 +593,10 @@ service.
 - `recording.sample_rate` is the app-internal ASR/VAD processing rate and is currently fixed to 16kHz. Devices such as NVIDIA Broadcast may be opened at 48kHz and resampled before ASR.
 - Recording start logs include `configured`, `actual_device`, `name`, `hostapi`, `stream_sr`, `target_sr`, `channels`, and `fallback_used`, so virtual inputs such as NVIDIA Broadcast can be verified in `zen-whisper.log`.
 - Recording completion logs include `rms` and `peak`. Near-silent recordings below `[recording] min_audio_rms` and `min_audio_peak` are discarded before ASR to avoid silence hallucinations.
+- Windows/Python preserves audio from the start of each recording, including
+  quiet speech before the recording VAD detects it. Trailing silence is trimmed,
+  and recordings without detected speech are discarded. Faster-whisper's
+  additional VAD filter is disabled to preserve these onsets.
 
 ### Hotkey format
 

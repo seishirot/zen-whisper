@@ -14,7 +14,7 @@ import numpy as np
 import sounddevice as sd
 from scipy.signal import resample_poly
 
-from src.audio_devices import list_input_devices, resolve_input_device
+from src.audio_devices import audio_device_session, list_input_devices, resolve_input_device
 from src.config import ASR_SAMPLE_RATE, RecordingConfig
 
 logger = logging.getLogger(__name__)
@@ -27,7 +27,6 @@ _VAD_CONFIG_WINDOW_SAMPLES = 512
 _VAD_THRESHOLD = 0.5
 _VAD_MIN_SILENCE_DURATION_SEC = 0.5
 _VAD_MIN_SPEECH_DURATION_SEC = 0.25
-_LEADING_SILENCE_PAD_SEC = 0.3
 _TRAILING_SILENCE_PAD_SEC = 0.5
 
 # VAD モデルキャッシュ（初回ロード後は再利用）
@@ -126,27 +125,10 @@ def _recording_end_sample(
     return min(audio_len, clipped_speech_sample + pad_samples)
 
 
-def _recording_start_sample(
-    audio_len: int,
-    sample_rate: int,
-    first_speech_sample: int | None,
-    leading_pad_sec: float = _LEADING_SILENCE_PAD_SEC,
-) -> int | None:
-    """ASR に渡す録音開始位置を返す。音声未検出なら None。"""
-    if first_speech_sample is None:
-        return None
-
-    clipped_speech_sample = max(0, min(audio_len, int(first_speech_sample)))
-    pad_samples = max(0, int(round(leading_pad_sec * sample_rate)))
-    return max(0, clipped_speech_sample - pad_samples)
-
-
 def _recording_bounds(
     audio_len: int,
     sample_rate: int,
-    first_speech_sample: int | None,
     last_speech_sample: int | None,
-    leading_pad_sec: float = _LEADING_SILENCE_PAD_SEC,
     trailing_pad_sec: float = _TRAILING_SILENCE_PAD_SEC,
 ) -> tuple[int, int] | None:
     """ASR に渡す録音区間を返す。音声未検出なら None。"""
@@ -159,15 +141,9 @@ def _recording_bounds(
     if end_sample is None:
         return None
 
-    start_sample = _recording_start_sample(
-        audio_len,
-        sample_rate,
-        first_speech_sample,
-        leading_pad_sec,
-    )
-    if start_sample is None:
-        start_sample = 0
-    return min(start_sample, end_sample), end_sample
+    # VAD can miss a quiet onset. Keep everything captured before its first
+    # positive decision, including pauses before speech.
+    return 0, end_sample
 
 
 def _finalize_recording_audio(
@@ -175,17 +151,13 @@ def _finalize_recording_audio(
     sample_rate: int,
     min_recording_sec: float,
     last_speech_sample: int | None,
-    first_speech_sample: int | None = None,
-    leading_pad_sec: float = _LEADING_SILENCE_PAD_SEC,
     trailing_pad_sec: float = _TRAILING_SILENCE_PAD_SEC,
 ) -> np.ndarray | None:
-    """録音音声から先頭・末尾無音を除き、ASR に渡す最終音声を返す。"""
+    """録音冒頭を保持し、末尾無音を除いて ASR に渡す音声を返す。"""
     bounds = _recording_bounds(
         len(audio),
         sample_rate,
-        first_speech_sample,
         last_speech_sample,
-        leading_pad_sec,
         trailing_pad_sec,
     )
     if bounds is None:
@@ -281,6 +253,7 @@ def _update_vad_state(
     )
 
 
+@audio_device_session()
 def record(
     cfg: RecordingConfig,
     stop_event: Event,
@@ -431,7 +404,6 @@ def record(
     bounds = _recording_bounds(
         len(raw_audio),
         cfg.sample_rate,
-        first_speech_sample,
         last_speech_sample,
     )
     if bounds is None:
@@ -447,7 +419,6 @@ def record(
         cfg.sample_rate,
         cfg.min_recording_sec,
         last_speech_sample,
-        first_speech_sample,
     )
     asr_duration = max(0, end_sample - start_sample) / cfg.sample_rate
     if audio is None:

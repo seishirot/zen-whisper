@@ -288,7 +288,9 @@ class FasterWhisperBackend:
         transcribe_kwargs: dict[str, object] = {
             "language": language,
             "beam_size": cfg.beam_size,
-            "vad_filter": True,
+            # The recorder already rejects silence-only input. A second VAD
+            # pass can discard quiet onsets preserved by the recorder.
+            "vad_filter": False,
             "no_speech_threshold": cfg.no_speech_threshold,
             "condition_on_previous_text": cfg.condition_on_previous_text,
         }

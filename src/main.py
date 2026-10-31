@@ -40,6 +40,7 @@ from pathlib import Path
 _ROOT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT_DIR))
 
+from src.audio_devices import refresh_input_devices
 from src.config import (
     ENGINE_QWEN3_ASR,
     ENGINE_CRISPASR,
@@ -1494,7 +1495,18 @@ class App:
         # メインスレッドで待機（Ctrl+C またはトレイ終了で抜ける）
         try:
             while not self._exit_event.is_set():
-                self._exit_event.wait(timeout=1.0)
+                if self._exit_event.wait(timeout=2.0):
+                    break
+                # Serialize with toggle/shutdown so a rescan never interrupts
+                # capture or starts after cleanup. The audio lock also protects
+                # menu queries and custom sound playback.
+                with self._lock:
+                    if not self._shutdown and not self._is_recording:
+                        refreshed = refresh_input_devices()
+                    else:
+                        refreshed = False
+                if refreshed:
+                    self.tray.refresh_menu()
         except KeyboardInterrupt:
             logger.info("Ctrl+C で終了します")
         self._cleanup()

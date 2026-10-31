@@ -9,6 +9,27 @@ pytest.importorskip("pystray")
 pytest.importorskip("PIL")
 
 
+@pytest.mark.parametrize("success", [False, True])
+def test_refresh_microphones_rescans_before_rebuilding_menu(monkeypatch, success):
+    import src.tray as tray_module
+
+    events = []
+    app = object.__new__(tray_module.TrayApp)
+    app.refresh_menu = lambda: events.append("menu")
+    app.notify = lambda message: events.append(message)
+
+    def refresh(*, force):
+        assert force
+        events.append("rescan")
+        return success
+
+    monkeypatch.setattr(tray_module, "refresh_input_devices", refresh)
+    app._refresh_microphones(None, None)
+    assert events[0] == "rescan"
+    assert ("menu" in events) == success
+    assert ("更新できません" in events[-1]) == (not success)
+
+
 def test_toggle_startup_notifies_failure_when_state_unchanged(monkeypatch):
     import src.tray as tray_module
 

@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import sounddevice as sd
 
+from src.audio_devices import audio_device_session
 from src.config import FeedbackConfig
 
 # winsound は Windows のみ利用可能。Mac では sounddevice で代替する。
@@ -87,6 +88,7 @@ def _ensure_tones() -> None:
         _stop_tone_array = _generate_tone_array(440, 200)
 
 
+@audio_device_session()
 def _play_tone_sd(tone_array: np.ndarray) -> None:
     """sounddevice でトーンをブロッキング再生する。"""
     sd.play(tone_array, _TONE_SAMPLE_RATE)
@@ -96,6 +98,7 @@ def _play_tone_sd(tone_array: np.ndarray) -> None:
 # ── カスタムサウンド再生 ──────────────────────────────────
 
 
+@audio_device_session()
 def _play_file_async(path: Path, volume: float = 1.0) -> None:
     """soundfile + sounddevice でオーディオファイルを非ブロッキング再生する（fire-and-forget）。"""
     import soundfile as sf

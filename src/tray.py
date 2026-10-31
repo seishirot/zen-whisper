@@ -9,7 +9,12 @@ from enum import Enum
 from PIL import Image, ImageDraw
 from pystray import Icon, Menu, MenuItem
 
-from src.audio_devices import default_input_name, list_microphone_names, microphone_available
+from src.audio_devices import (
+    default_input_name,
+    list_microphone_names,
+    microphone_available,
+    refresh_input_devices,
+)
 from src.asr.crispasr_assets import (
     installation_root,
     manifest as crispasr_manifest,
@@ -267,6 +272,9 @@ class TrayApp:
     def _refresh_microphones(self, icon: Icon, item: MenuItem) -> None:
         """マイク一覧を再取得してメニューを更新する。"""
         logger.info("マイク一覧を更新します（トレイメニュー）")
+        if not refresh_input_devices(force=True):
+            self.notify("マイク一覧を更新できませんでした。録音・再生中は終了後に再試行してください")
+            return
         self.refresh_menu()
         self.notify("マイク一覧を更新しました")
 

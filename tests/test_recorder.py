@@ -58,7 +58,7 @@ def test_finalize_recording_keeps_short_trailing_silence() -> None:
     np.testing.assert_array_equal(result, audio)
 
 
-def test_finalize_recording_trims_leading_and_trailing_silence() -> None:
+def test_finalize_recording_preserves_onset_and_trims_only_trailing_silence() -> None:
     sr = 16000
     audio = np.arange(sr * 10, dtype=np.float32)
 
@@ -66,18 +66,15 @@ def test_finalize_recording_trims_leading_and_trailing_silence() -> None:
         audio,
         sample_rate=sr,
         min_recording_sec=0.5,
-        first_speech_sample=sr * 2,
         last_speech_sample=sr * 5,
     )
 
     assert result is not None
-    expected_start = sr * 2 - int(round(sr * 0.3))
     expected_end = sr * 5 + int(round(sr * 0.5))
-    assert len(result) == expected_end - expected_start
-    np.testing.assert_array_equal(result, audio[expected_start:expected_end])
+    np.testing.assert_array_equal(result, audio[:expected_end])
 
 
-def test_finalize_recording_clamps_leading_trim_to_start() -> None:
+def test_finalize_recording_keeps_recording_start() -> None:
     sr = 16000
     audio = np.arange(sr * 2, dtype=np.float32)
 
@@ -85,7 +82,6 @@ def test_finalize_recording_clamps_leading_trim_to_start() -> None:
         audio,
         sample_rate=sr,
         min_recording_sec=0.5,
-        first_speech_sample=int(sr * 0.1),
         last_speech_sample=sr,
     )
 
@@ -123,7 +119,7 @@ def test_finalize_recording_returns_none_when_trimmed_audio_is_too_short() -> No
     assert result is None
 
 
-def test_finalize_recording_returns_none_when_leading_trimmed_audio_is_too_short() -> None:
+def test_finalize_recording_preserves_quiet_prefix_for_short_detected_speech() -> None:
     sr = 16000
     audio = np.arange(sr * 2, dtype=np.float32)
 
@@ -131,11 +127,11 @@ def test_finalize_recording_returns_none_when_leading_trimmed_audio_is_too_short
         audio,
         sample_rate=sr,
         min_recording_sec=1.0,
-        first_speech_sample=sr,
         last_speech_sample=int(sr * 1.1),
     )
 
-    assert result is None
+    assert result is not None
+    np.testing.assert_array_equal(result, audio[:int(sr * 1.6)])
 
 
 def test_stream_block_samples_matches_vad_chunk_duration() -> None:
@@ -269,7 +265,7 @@ def test_vad_state_tracks_speech_transitions() -> None:
     assert state.last_speech_sample == window * 4
 
 
-def test_record_wires_sherpa_vad_speech_change_callbacks(monkeypatch) -> None:
+def test_record_keeps_quiet_onset_before_delayed_vad_detection(monkeypatch) -> None:
     class FakeVad:
         def __init__(self) -> None:
             self.decisions = [False, True, False]
@@ -277,7 +273,7 @@ def test_record_wires_sherpa_vad_speech_change_callbacks(monkeypatch) -> None:
             self.reset_called = False
 
         def window_size(self) -> int:
-            return 4
+            return 8000
 
         def is_speech(self, samples: np.ndarray) -> bool:
             self.windows.append(samples.copy())
@@ -290,10 +286,11 @@ def test_record_wires_sherpa_vad_speech_change_callbacks(monkeypatch) -> None:
 
     stop_event = Event()
     chunks = [
-        np.full((4, 1), 0.02, dtype=np.float32),
-        np.full((4, 1), 0.02, dtype=np.float32),
-        np.full((4, 1), 0.02, dtype=np.float32),
+        np.full((8000, 1), 0.002, dtype=np.float32),
+        np.full((8000, 1), 0.02, dtype=np.float32),
+        np.full((8000, 1), 0.02, dtype=np.float32),
     ]
+    expected_audio = np.concatenate(chunks)[:, 0]
     fake_vad = FakeVad()
 
     class FakeInputStream:
@@ -350,4 +347,4 @@ def test_record_wires_sherpa_vad_speech_change_callbacks(monkeypatch) -> None:
     assert fake_vad.reset_called
     assert len(fake_vad.windows) == 3
     assert audio is not None
-    np.testing.assert_array_equal(audio, np.full(12, 0.02, dtype=np.float32))
+    np.testing.assert_array_equal(audio, expected_audio)

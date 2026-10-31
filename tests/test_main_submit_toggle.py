@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,35 @@ from src.toml_storage import (
     FileFingerprint,
     MISSING_FILE_FINGERPRINT,
 )
+
+
+@pytest.mark.parametrize("recording", [False, True])
+def test_idle_loop_refreshes_microphones_only_outside_recording(monkeypatch, recording):
+    class ExitEvent:
+        def __init__(self):
+            self.waits = 0
+
+        def is_set(self):
+            return False
+
+        def wait(self, timeout):
+            self.waits += 1
+            return self.waits > 1
+
+    events = []
+    app = App.__new__(App)
+    app._exit_event = ExitEvent()
+    app._lock = threading.Lock()
+    app._shutdown = False
+    app._is_recording = recording
+    app.tray = SimpleNamespace(
+        run_detached=lambda **kwargs: None,
+        refresh_menu=lambda: events.append("menu"),
+    )
+    app._cleanup = lambda: events.append("cleanup")
+    monkeypatch.setattr(main_module, "refresh_input_devices", lambda: events.append("rescan") or True)
+    app.run()
+    assert events == (["cleanup"] if recording else ["rescan", "menu", "cleanup"])
 
 
 class _ReadyTranscriber:

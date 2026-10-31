@@ -3,13 +3,82 @@
 from __future__ import annotations
 
 import logging
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
+from threading import RLock
 
 import sounddevice as sd
 
 from src.platform import is_windows
 
 logger = logging.getLogger(__name__)
+
+_audio_lock = RLock()
+_audio_users = 0
+_capture_names: set[str] | None = None
+_last_refresh_time = 0.0
+_DEVICE_REFRESH_INTERVAL_SEC = 30.0
+
+
+@contextmanager
+def audio_device_session():
+    """Keep device indexes valid until the caller has closed its stream."""
+    global _audio_users
+    with _audio_lock:
+        _audio_users += 1
+    try:
+        yield
+    finally:
+        with _audio_lock:
+            _audio_users -= 1
+
+
+def refresh_input_devices(*, force: bool = False) -> bool:
+    """Refresh Windows PortAudio discovery on changes and periodically while idle.
+
+    Never terminate PortAudio during recording, queries, or custom playback.
+    Busy refreshes are retried by the application's idle loop.
+    """
+    global _capture_names, _last_refresh_time
+    if not is_windows():
+        return force  # Other platforms already refresh via query_devices().
+    if not _audio_lock.acquire(blocking=False):
+        return False
+    try:
+        if _audio_users:
+            return False
+        names = _active_capture_device_names()
+        refresh_due = time.monotonic() - _last_refresh_time >= _DEVICE_REFRESH_INTERVAL_SEC
+        if not force and not refresh_due and sd._initialized and (names is None or names == _capture_names):
+            return False
+        try:
+            playback = sd.get_stream()
+        except RuntimeError:  # No sounddevice convenience playback yet.
+            playback = None
+        if playback is not None and not playback.closed:
+            if playback.active:
+                return False
+            # Do not leave sounddevice's convenience callback holding a stream
+            # pointer that Pa_Terminate would invalidate.
+            sd.stop()
+        # sounddevice exposes no public rescan API. These paired helpers
+        # also maintain its initialization count for shutdown cleanup.
+        if sd._initialized:
+            sd._terminate()
+        sd._initialize()
+        _capture_names = names
+        _last_refresh_time = time.monotonic()
+        logger.info("オーディオデバイス一覧と既定入力を再取得しました")
+        return True
+    except Exception:
+        logger.exception("オーディオデバイス一覧の再初期化に失敗しました")
+        # Leave the snapshot unchanged. The idle loop retries changed devices
+        # and failed initialization; queries report errors until recovery.
+        return False
+    finally:
+        _audio_lock.release()
+
 
 _WINDOWS_HOST_API_PRIORITY = (
     "Windows WASAPI",
@@ -195,6 +264,7 @@ def _default_stream_sample_rate(device: object) -> int | None:
     return sample_rate if sample_rate > 0 else None
 
 
+@audio_device_session()
 def list_input_devices(sample_rate: int | None = None) -> list[InputAudioDevice]:
     """Return all input devices visible to PortAudio."""
     try:
@@ -235,6 +305,7 @@ def list_input_devices(sample_rate: int | None = None) -> list[InputAudioDevice]
     return inputs
 
 
+@audio_device_session()
 def default_input_device(sample_rate: int | None = None) -> InputAudioDevice | None:
     """Return the current OS default input device, if available."""
     default_index = _default_input_index()
@@ -325,6 +396,7 @@ def _filter_active_capture_devices(devices: list[InputAudioDevice]) -> list[Inpu
     ]
 
 
+@audio_device_session()
 def list_microphone_names(sample_rate: int) -> list[str]:
     """Return de-duplicated microphone names that have a usable input candidate."""
     names: list[str] = []
@@ -378,6 +450,7 @@ def _matching_devices(
     return [device for device in devices if _matches_query(device, query)]
 
 
+@audio_device_session()
 def microphone_available(microphone: str, sample_rate: int) -> bool:
     """Return whether the configured microphone can be resolved without fallback."""
     configured = microphone.strip()
@@ -424,6 +497,7 @@ def _default_resolution(configured: str, sample_rate: int, reason: str | None = 
     )
 
 
+@audio_device_session()
 def resolve_input_device(microphone: str, sample_rate: int) -> ResolvedInputDevice:
     """Resolve the configured microphone to a concrete input device.
 
