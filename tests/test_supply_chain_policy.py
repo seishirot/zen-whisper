@@ -7,6 +7,8 @@ from pathlib import Path
 import re
 import tomllib
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[1]
 PROJECTS = (ROOT, ROOT / "macos" / "backend")
@@ -221,3 +223,14 @@ def test_macos_bundle_build_and_install_require_hashes() -> None:
     assert "pip install --no-config" in install
     assert '--require-hashes -r "$REQUIREMENTS"' in install
     assert '--no-deps "$WHEEL"' in install
+
+
+def test_workflow_and_dependabot_files_are_valid_yaml() -> None:
+    yaml = pytest.importorskip("yaml")
+    for path in [*(ROOT / ".github" / "workflows").glob("*.yml"), ROOT / ".github" / "dependabot.yml"]:
+        data = yaml.safe_load(path.read_text(encoding="utf-8"))
+        assert isinstance(data, dict), path.name
+        if path.parent.name == "workflows":
+            for job in data["jobs"].values():
+                for step in job.get("steps", []):
+                    assert isinstance(step.get("run", ""), str), path.name
