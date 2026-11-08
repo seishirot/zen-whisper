@@ -96,6 +96,16 @@ rejects new `ja-en` selections; an existing `reazon_language = "ja-en"` value is
 migrated to pinned `ja` at startup with a warning instead of loading an
 unapproved remote snapshot.
 
+For the experimental Windows CPU backend powered by Haas-ja-v1.0, no extra is
+needed: plain `uv sync --locked` already provides ONNX Runtime. Select
+**エンジン → Haas-ja (CPU)** in the tray or set `engine = "haas-ja"` with
+`device = "cpu"`. The first load downloads the
+`kizuna-intelligence/Haas-ja-v1.0-OneCompression-ONNX` ONNX conversion of
+`third-intelligence/Haas-ja-v1.0` (both Apache-2.0) at a reviewed full commit,
+fetching only the selected encoder (about 0.7 GB for `int8`), and verifies every
+file, including the upstream `LICENSE` and `NOTICE`, against the SHA-256
+manifest. It does not change the default engine.
+
 For Windows-native, non-streaming Qwen3-ASR:
 
 ```bash
@@ -274,7 +284,7 @@ backend.
 | Section | Key settings |
 |---|---|
 | `[hotkey]` | `toggle` — recording hotkey (string or list), `submit_toggle` — stop, paste, then press Enter, `switch_lang` — language switch hotkey |
-| `[recognition]` | `engine` (`whisper`/`reazon-k2`/`qwen3-asr`), `language`, `model_size`, `compute_type`, `device` (`cuda`/`cpu`/`mlx`) |
+| `[recognition]` | `engine` (`whisper`/`reazon-k2`/`haas-ja`/`qwen3-asr`), `language`, `model_size`, `compute_type`, `device` (`cuda`/`cpu`/`mlx`) |
 | `[recording]` | `microphone`, `vad_silence_threshold_sec`, `min_audio_rms`, `min_audio_peak`, `max_recording_sec` |
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |
 | `[enhancement]` | `profile` (a filename from `profiles/`), `postprocessor` (`off`/`dictionary`/preset ID) |
@@ -293,6 +303,14 @@ backend.
   CPU default and can be rolled back to `1` without changing other settings.
   Long audio is split into `reazon_chunk_sec` chunks with
   `reazon_trailing_silence_sec` silence appended to each chunk.
+- `engine = "haas-ja"` (Windows, `device = "cpu"`) runs the Haas-ja-v1.0
+  FastConformer-TDT model with ONNX Runtime's CPU provider and greedy decoding.
+  `haas_precision` is `int8` (recommended) or `int4-onecomp` (smaller, but can be
+  slower on some CPUs); `haas_inference_threads` sets encoder threads. Recordings
+  longer than `haas_chunk_sec` (default 28, range 1-75) are split near the
+  quietest point around each boundary and decoded independently. Latin terms are
+  usually written in lowercase (for example `cpu`); use a dictionary profile if
+  you prefer the original casing. The model was trained on Common Voice data.
 - `engine = "qwen3-asr"` uses Transformers `AutoProcessor` and
   `AutoModelForMultimodalLM` with `Qwen/Qwen3-ASR-1.7B-hf` or
   `Qwen/Qwen3-ASR-0.6B-hf`. It performs Windows-native, non-streaming
@@ -359,8 +377,8 @@ profile can supply recognition hints while the raw ASR result is still pasted:
 - MLX Whisper receives the compact term list as an initial prompt
 - Qwen3-ASR receives the profile context and terms through its Transformers
   chat-template system context
-- Reazon K2 does not consume recognition hints; use dictionary-only or CLI
-  postprocessing when correcting its output
+- Reazon K2 and Haas-ja do not consume recognition hints; use dictionary-only
+  or CLI postprocessing when correcting their output
 
 On Windows/Python, create and edit one profile per scene or project from
 `設定... > プロフィール`. The equivalent local file is

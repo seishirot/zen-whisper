@@ -151,6 +151,27 @@
         "license": "Apache-2.0"
       }
     },
+    "haas_onnx": {
+      "ja": {
+        "repo_id": "kizuna-intelligence/Haas-ja-v1.0-OneCompression-ONNX",
+        "revision": "e46a4b107ffba60336eb3de9745da6f628cfae35",
+        "allow_patterns": ["LICENSE", "NOTICE", "common/decoding.json", "common/frontend.json", "common/joint.onnx", "common/prediction.onnx", "common/tokens.json", "int8/encoder.onnx", "int8/encoder.onnx.data", "int4-onecomp/encoder.onnx", "int4-onecomp/encoder.onnx.data"],
+        "files": {
+          "LICENSE": {"sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30", "size": 11358},
+          "NOTICE": {"sha256": "227881fe324fb72f3fd3760dc325acf5bb8cb54c308f691bd4178bcbd0d74a5f", "size": 2032},
+          "common/decoding.json": {"sha256": "e535e51bed8729c3d1c5acb5d016feae774f8b13160f2dccbcd4841ad6ecd5be", "size": 122},
+          "common/frontend.json": {"sha256": "0e5a2769db71a146f3d12229c1b6cf3399718b0f71bf43221807de05dd2def8c", "size": 377057},
+          "common/joint.onnx": {"sha256": "e54701abe6809dbddf243212b9f4640c4dc1db6d7adc8f6644a55f4e3651fd93", "size": 7892424},
+          "common/prediction.onnx": {"sha256": "db831ff923cb96d4e9fc856fd989fa7ae6714c0541c16a76f25257f25f9a1520", "size": 17155566},
+          "common/tokens.json": {"sha256": "3f8f996ce5cfeca0f6091395d3b030d9e7e8f49f0f775a05673e58185ba1a286", "size": 36037},
+          "int8/encoder.onnx": {"sha256": "8a98a19cb6b8e9a35ff317ab577a0d04522ced1ffb37aa7b20055f0cae0495a5", "size": 3917201},
+          "int8/encoder.onnx.data": {"sha256": "b46ed1174207b22c45cb03cd43aa365492750b0b52b615386b93a3b648eccc97", "size": 634489344},
+          "int4-onecomp/encoder.onnx": {"sha256": "0b817b90f6187bacc5d0a09c3760b4ded4bb450d10b03837c70ded6863b6cc12", "size": 1114166},
+          "int4-onecomp/encoder.onnx.data": {"sha256": "f153731fe6054e5d7d851ac3e8317cd1dbecb9f1a60ebc97d121bc9b35b3dc21", "size": 353733120}
+        },
+        "license": "Apache-2.0"
+      }
+    },
     "reazon_k2": {
       "ja": {
         "repo_id": "reazon-research/reazonspeech-k2-v2",

@@ -26,7 +26,16 @@ ENGINE_WHISPER = "whisper"
 ENGINE_REAZON_K2 = "reazon-k2"
 ENGINE_QWEN3_ASR = "qwen3-asr"
 ENGINE_CRISPASR = "crispasr"
-VALID_ENGINES = (ENGINE_WHISPER, ENGINE_REAZON_K2, ENGINE_QWEN3_ASR, ENGINE_CRISPASR)
+ENGINE_HAAS = "haas-ja"
+VALID_ENGINES = (
+    ENGINE_WHISPER,
+    ENGINE_REAZON_K2,
+    ENGINE_HAAS,
+    ENGINE_QWEN3_ASR,
+    ENGINE_CRISPASR,
+)
+HAAS_PRECISION_CHOICES = ("int8", "int4-onecomp")
+HAAS_MAX_CHUNK_SEC = 75.0
 VALID_DEVICES = ("cuda", "cpu", "mlx")
 ASR_SAMPLE_RATE = 16000
 POSTPROCESSOR_OFF = "off"
@@ -80,6 +89,10 @@ class RecognitionConfig:
     reazon_inference_threads: int = 4
     reazon_chunk_sec: float = 25.0
     reazon_trailing_silence_sec: float = 0.5
+    # Haas-ja-v1.0 (Windows CPU, ONNX Runtime). Chunks are split near quiet points.
+    haas_precision: str = "int8"
+    haas_inference_threads: int = 4
+    haas_chunk_sec: float = 28.0
     qwen3_model: str = QWEN3_MODEL_LARGE  # Qwen3-ASR 使用時のモデル名（既定: 1.7B）
     qwen3_max_new_tokens: int = 256  # Qwen3-ASR 生成トークン上限
     # アテンション実装: "auto"（FA2 があれば使用、無ければ sdpa）/ "sdpa" / "flash_attention_2" / "eager"
@@ -266,6 +279,23 @@ class AppConfig:
             or self.recognition.reazon_trailing_silence_sec < 0
         ):
             warnings.append("reazon_trailing_silence_sec は 0 以上である必要があります")
+        if self.recognition.haas_precision not in HAAS_PRECISION_CHOICES:
+            warnings.append(
+                "haas_precision は 'int8', 'int4-onecomp' のいずれかを指定してください"
+            )
+        if (
+            not isinstance(self.recognition.haas_inference_threads, int)
+            or isinstance(self.recognition.haas_inference_threads, bool)
+            or self.recognition.haas_inference_threads <= 0
+        ):
+            warnings.append("haas_inference_threads は正の整数である必要があります")
+        if (
+            not is_number(self.recognition.haas_chunk_sec)
+            or not 1.0 <= self.recognition.haas_chunk_sec <= HAAS_MAX_CHUNK_SEC
+        ):
+            warnings.append(
+                f"haas_chunk_sec は 1〜{HAAS_MAX_CHUNK_SEC:g} 秒で指定してください"
+            )
         if (
             not isinstance(self.recognition.qwen3_max_new_tokens, int)
             or isinstance(self.recognition.qwen3_max_new_tokens, bool)

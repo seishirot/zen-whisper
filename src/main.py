@@ -44,6 +44,7 @@ from src.audio_devices import refresh_input_devices
 from src.config import (
     ENGINE_QWEN3_ASR,
     ENGINE_CRISPASR,
+    ENGINE_HAAS,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
     POSTPROCESSOR_DICTIONARY,
@@ -384,6 +385,11 @@ class App:
                 recognition.reazon_language,
                 recognition.reazon_precision,
                 recognition.reazon_inference_threads,
+            )
+        if recognition.engine == ENGINE_HAAS:
+            return common + (
+                recognition.haas_precision,
+                recognition.haas_inference_threads,
             )
         if recognition.engine == ENGINE_QWEN3_ASR:
             return common + (
@@ -831,11 +837,16 @@ class App:
         notice = f"プロファイル: {profile.name if profile else 'オフ'}"
         if (
             profile is not None
-            and self.cfg.recognition.engine == ENGINE_REAZON_K2
+            and self.cfg.recognition.engine in (ENGINE_REAZON_K2, ENGINE_HAAS)
             and postprocessor_id == POSTPROCESSOR_OFF
         ):
+            engine_name = (
+                "Reazon K2"
+                if self.cfg.recognition.engine == ENGINE_REAZON_K2
+                else "Haas-ja"
+            )
             notice += (
-                "\nReazon K2 は認識ヒント非対応です。"
+                f"\n{engine_name} は認識ヒント非対応です。"
                 "補正するには辞書置換または CLI 後処理を選んでください。"
             )
         self.tray.notify(notice)

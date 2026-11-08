@@ -26,7 +26,7 @@ src/
   hotkey.py        # グローバルホットキー
   recorder.py      # 録音 + VAD（sounddevice + sherpa-onnx Silero ONNX）
   transcriber.py   # ASRバックエンド選択と共通ログ
-  asr/             # ASR実装（faster-whisper / mlx-whisper / Reazon K2 / Qwen3-ASR）
+  asr/             # ASR実装（faster-whisper / mlx-whisper / Reazon K2 / Haas-ja / Qwen3-ASR / CrispASR）
   paster.py        # クリップボード退避 → ペースト → 復元
   tray.py          # システムトレイ（pystray）
   overlay.py       # フローティングウィジェット（tkinter）
@@ -57,14 +57,20 @@ hotkey.py → sounds.py(開始音) → recorder.py(録音+VAD) → sounds.py(停
 
 ## ASR エンジンと性能（調査メモ 2026-05 / CPU拡張 2026-06 / Qwen native移行 2026-07）
 
-エンジンは `whisper`（既定）, `reazon-k2`, `qwen3-asr`。トレイメニューは
-Whisper (GPU, CPU, MLX) / Reazon K2 / Qwen3-ASR (1.7B, 0.6B) の階層。
+エンジンは `whisper`（既定）, `reazon-k2`, `haas-ja`, `qwen3-asr`, `crispasr`。トレイメニューは
+Whisper (GPU, CPU, MLX) / Reazon K2 / Haas-ja (CPU) / CrispASR / Qwen3-ASR (1.7B, 0.6B) の階層。
 
 - 自動エンジン選択はUX上採用しない。ユーザーがトレイメニューでモデル/実行先を明示的に選ぶ。
 - `reazon-k2`: Windows CPU高速モード。`uv sync --locked --extra reazon` が必要。
   既定precisionは `int8-fp32` で、比較用に `int8` / `fp32` も選択可能。
   長音声は `reazon_chunk_sec` ごとに分割し、末尾に
   `reazon_trailing_silence_sec` の無音を足す。
+- `haas-ja`: Windows CPU実験モード（既定ではない）。通常lockのONNX Runtime
+  CPUExecutionProviderで、`src/model_manifest.json` の `haas_onnx` 固定snapshot
+  （int8 / int4-onecomp、LICENSE・NOTICE含む）を初回ロード時に取得・hash検証する。
+  推論コードは配布元 `haas_cpu` を `src/asr/haas.py` へApache-2.0表記付きで移植し、
+  配布元Pythonコードは実行しない。長音声は `haas_chunk_sec` 付近の最小エネルギー点で
+  分割し、各区間は独立にgreedy TDTデコードする。認識ヒント非対応。
 - `whisper`: Windows は faster-whisper、macOS は MLX。CPU解決時は `compute_type="int8"` と `cpu_threads` を明示する。
 - `qwen3-asr`: Windowsネイティブの非ストリーミング経路。
   Transformers 5.14の `AutoProcessor` + `AutoModelForMultimodalLM` と
@@ -153,7 +159,7 @@ sdpa、19.6秒の合成音声でのnative `-hf`参考実測
 | セクション | 主な設定 |
 |---|---|
 | `[hotkey]` | `toggle`（文字列 or リスト）、`submit_toggle`（停止時に貼り付け後 Enter）、`switch_lang` |
-| `[recognition]` | `engine` (`whisper`/`reazon-k2`/`qwen3-asr`), `language`, `model_size`, `device` (`cuda`/`cpu`/`mlx`), `cpu_threads`, Reazon/Qwen設定 |
+| `[recognition]` | `engine` (`whisper`/`reazon-k2`/`haas-ja`/`qwen3-asr`/`crispasr`), `language`, `model_size`, `device` (`cuda`/`cpu`/`mlx`), `cpu_threads`, Reazon/Qwen設定 |
 | `[recording]` | `microphone`, `vad_silence_threshold_sec`, `max_recording_sec` |
 | `[output]` | `restore_clipboard`, `paste_delay_ms` |
 | `[enhancement]` | `profile`（`profiles/*.toml` のID）、`postprocessor`（`off`/`dictionary`/プリセットID） |

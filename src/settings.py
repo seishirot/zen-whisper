@@ -15,8 +15,10 @@ from tkinter import messagebox, ttk
 from src.config import (
     ENGINE_QWEN3_ASR,
     ENGINE_CRISPASR,
+    ENGINE_HAAS,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
+    HAAS_PRECISION_CHOICES,
     POSTPROCESSOR_DICTIONARY,
     POSTPROCESSOR_OFF,
     QWEN3_MODEL_LARGE,
@@ -214,6 +216,21 @@ CONFIG_FORM_FIELDS: dict[str, tuple[str, str, str]] = {
         "reazon_trailing_silence_sec",
         "Reazon末尾無音",
     ),
+    "recognition.haas_precision": (
+        "recognition",
+        "haas_precision",
+        "Haas精度",
+    ),
+    "recognition.haas_inference_threads": (
+        "recognition",
+        "haas_inference_threads",
+        "Haas推論threads",
+    ),
+    "recognition.haas_chunk_sec": (
+        "recognition",
+        "haas_chunk_sec",
+        "Haasチャンク長",
+    ),
     "recognition.qwen3_model": (
         "recognition",
         "qwen3_model",
@@ -337,6 +354,7 @@ def recognition_selection_text(
         ENGINE_CRISPASR: "CrispASR",
         ENGINE_WHISPER: "Whisper",
         ENGINE_REAZON_K2: "Reazon K2",
+        ENGINE_HAAS: "Haas-ja",
         ENGINE_QWEN3_ASR: "Qwen3-ASR",
     }.get(engine, engine or "未選択")
     language_label = {
@@ -1110,6 +1128,28 @@ class SettingsWindow:
             4,
             "末尾無音 (秒)",
             "recognition.reazon_trailing_silence_sec",
+        )
+
+        haas = self._section(tab, "Haas-ja (CPU)")
+        self._combo_row(
+            haas,
+            0,
+            "精度",
+            "recognition.haas_precision",
+            HAAS_PRECISION_CHOICES,
+            help_text="int8推奨。int4-onecompは省メモリだが遅い場合あり",
+        )
+        self._entry_row(
+            haas,
+            1,
+            "推論threads",
+            "recognition.haas_inference_threads",
+        )
+        self._entry_row(
+            haas,
+            2,
+            "チャンク長 (秒)",
+            "recognition.haas_chunk_sec",
         )
 
         qwen = self._section(tab, "Qwen3-ASR")
@@ -2227,6 +2267,11 @@ class SettingsWindow:
             "recognition.reazon_trailing_silence_sec": str(
                 cfg.recognition.reazon_trailing_silence_sec
             ),
+            "recognition.haas_precision": cfg.recognition.haas_precision,
+            "recognition.haas_inference_threads": str(
+                cfg.recognition.haas_inference_threads
+            ),
+            "recognition.haas_chunk_sec": str(cfg.recognition.haas_chunk_sec),
             "recognition.qwen3_model": cfg.recognition.qwen3_model,
             "recognition.qwen3_max_new_tokens": str(
                 cfg.recognition.qwen3_max_new_tokens
@@ -2530,6 +2575,17 @@ class SettingsWindow:
         cfg.recognition.reazon_trailing_silence_sec = self._float_value(
             "recognition.reazon_trailing_silence_sec",
             "Reazon末尾無音",
+        )
+        cfg.recognition.haas_precision = str(
+            self._vars["recognition.haas_precision"].get()
+        )
+        cfg.recognition.haas_inference_threads = self._int_value(
+            "recognition.haas_inference_threads",
+            "Haas推論threads",
+        )
+        cfg.recognition.haas_chunk_sec = self._float_value(
+            "recognition.haas_chunk_sec",
+            "Haasチャンク長",
         )
         cfg.recognition.qwen3_model = str(
             self._vars["recognition.qwen3_model"].get()

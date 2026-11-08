@@ -28,6 +28,8 @@ PUBLIC = OUTPUTS / "reazon-production/corpus/public/manifest.json"
 PRIVATE = OUTPUTS / "private/realwork-v1/manifest.json"
 PROFILES = {
     "reazon-k2": {"engine": "reazon-k2"},
+    "haas-int8": {"engine": "haas-ja", "haas_precision": "int8"},
+    "haas-int4": {"engine": "haas-ja", "haas_precision": "int4-onecomp"},
     "parakeet-0.6b-q8-tdt": {"engine": "crispasr", "crispasr_model": "parakeet-ja-0.6b-q8", "crispasr_decoder": "tdt"},
     "parakeet-0.6b-q8-ctc": {"engine": "crispasr", "crispasr_model": "parakeet-ja-0.6b-q8", "crispasr_decoder": "ctc"},
     "parakeet-0.6b-f16-tdt": {"engine": "crispasr", "crispasr_model": "parakeet-ja-0.6b-f16", "crispasr_decoder": "tdt"},
@@ -332,8 +334,8 @@ def run(args) -> None:
     from tools.bench_crispasr import normalized
     from tools.bench_reazon_production import _git_output, _physical_core_count, _total_ram_bytes
 
-    if args.device == "cuda" and args.profile == "reazon-k2":
-        raise ValueError("This Reazon K2 profile is CPU-only")
+    if args.device == "cuda" and PROFILES[args.profile]["engine"] in ("reazon-k2", "haas-ja"):
+        raise ValueError("This profile is CPU-only")
     plan = json.loads(args.manifest.read_text(encoding="utf-8"))
     selected = set(plan["selections"][args.selection]) if args.selection in ("smoke", "representative") else None
     items = [
@@ -350,7 +352,8 @@ def run(args) -> None:
         raise ValueError("Choose a new output directory; existing result will not be overwritten")
     cfg = RecognitionConfig(**PROFILES[args.profile], device=args.device, language="ja", cpu_threads=args.threads,
                             reazon_inference_threads=args.threads, reazon_precision="int8-fp32",
-                            reazon_chunk_sec=25, reazon_trailing_silence_sec=0.5, crispasr_gpu_device=args.gpu_device)
+                            reazon_chunk_sec=25, reazon_trailing_silence_sec=0.5, crispasr_gpu_device=args.gpu_device,
+                            haas_inference_threads=args.threads)
     admission = None
     if args.device == "cuda":
         import shutil

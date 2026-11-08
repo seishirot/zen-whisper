@@ -24,6 +24,7 @@ from src.asr.crispasr_assets import (
 from src.config import (
     ENGINE_CRISPASR,
     ENGINE_QWEN3_ASR,
+    ENGINE_HAAS,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
     POSTPROCESSOR_DICTIONARY,
@@ -39,10 +40,11 @@ from src.postprocessing import (
     DATA_DESTINATION_REMOTE,
     PostprocessorPreset,
 )
-from src.platform import is_mac
+from src.platform import is_mac, is_windows
 from src.profiles import Profile
 from src.startup import is_registered, toggle as toggle_startup
 from src.transcriber import (
+    is_haas_available,
     is_qwen3_cuda_available,
     is_reazon_k2_available,
     is_whisper_cuda_available,
@@ -217,6 +219,8 @@ class TrayApp:
             engine = "Whisper"
         elif self._engine == ENGINE_REAZON_K2:
             engine = "Reazon K2"
+        elif self._engine == ENGINE_HAAS:
+            engine = "Haas-ja"
         elif self._engine == ENGINE_CRISPASR:
             engine = f"CrispASR {crispasr_profile_label(self._crispasr_model)}"
         elif self._engine == ENGINE_QWEN3_ASR:
@@ -402,6 +406,10 @@ class TrayApp:
     def _is_reazon_enabled(self, item: MenuItem) -> bool:
         """ReazonSpeech K2 メニュー項目が有効かどうかを返す。"""
         return is_reazon_k2_available() and not is_mac()
+
+    def _is_haas_enabled(self, item: MenuItem) -> bool:
+        """Haas-ja メニュー項目が有効かどうかを返す。"""
+        return is_haas_available() and is_windows()
 
     def _is_whisper_cuda_enabled(self, item: MenuItem) -> bool:
         """Whisper CUDA メニュー項目が有効かどうかを返す。"""
@@ -691,6 +699,14 @@ class TrayApp:
                         checked=self._is_engine(ENGINE_REAZON_K2),
                         radio=True,
                         enabled=self._is_reazon_enabled,
+                    ),
+                    MenuItem(
+                        "Haas-ja (CPU)",
+                        self._set_engine(ENGINE_HAAS, device="cpu"),
+                        checked=self._is_engine(ENGINE_HAAS),
+                        radio=True,
+                        enabled=self._is_haas_enabled,
+                        visible=lambda item: is_windows(),
                     ),
                     MenuItem(
                         "CrispASR",

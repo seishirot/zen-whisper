@@ -12,6 +12,7 @@ from threading import Lock
 import numpy as np
 
 from src.asr.base import ASRBackend, RecognitionHints
+from src.asr.haas import HaasBackend, is_haas_available
 from src.asr.qwen import (
     Qwen3Backend,
     is_qwen3_available,
@@ -29,13 +30,14 @@ from src.config import (
     ASR_SAMPLE_RATE,
     ENGINE_AUTO,
     ENGINE_CRISPASR,
+    ENGINE_HAAS,
     ENGINE_QWEN3_ASR,
     ENGINE_REAZON_K2,
     ENGINE_WHISPER,
     QWEN3_LEGACY_MODELS,
     RecognitionConfig,
 )
-from src.platform import is_mac
+from src.platform import is_mac, is_windows
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +55,8 @@ def available_recognition_engines() -> tuple[str, ...]:
     engines = [ENGINE_WHISPER]
     if not is_mac() and is_reazon_k2_available():
         engines.append(ENGINE_REAZON_K2)
+    if is_windows() and is_haas_available():
+        engines.append(ENGINE_HAAS)
     if not is_mac() and is_qwen3_available():
         engines.append(ENGINE_QWEN3_ASR)
     if not is_mac() and sys.platform == "win32":
@@ -64,7 +68,7 @@ def available_recognition_devices(engine: str) -> tuple[str, ...]:
     """Return execution targets selectable for an engine."""
     if engine == ENGINE_CRISPASR:
         return ("cpu", "cuda") if not is_mac() and sys.platform == "win32" else ()
-    if engine == ENGINE_REAZON_K2:
+    if engine in (ENGINE_REAZON_K2, ENGINE_HAAS):
         return ("cpu",)
     if engine == ENGINE_QWEN3_ASR:
         devices = ["cpu"]
@@ -90,6 +94,11 @@ def recognition_configuration_error(cfg: RecognitionConfig) -> str:
             return (
                 "Reazon K2 が未導入です。uv sync --locked --extra reazon を実行して"
                 "ZenWhisperを再起動してください"
+            )
+        if cfg.engine == ENGINE_HAAS:
+            return (
+                "Haas-ja は Windows の ONNX Runtime 環境でのみ使用できます。"
+                "uv sync --locked を実行してZenWhisperを再起動してください"
             )
         if cfg.engine == ENGINE_QWEN3_ASR:
             return (
@@ -165,6 +174,8 @@ class Transcriber:
             return CrispASRBackend()
         if engine == ENGINE_REAZON_K2:
             return ReazonK2Backend()
+        if engine == ENGINE_HAAS:
+            return HaasBackend()
         if engine == ENGINE_QWEN3_ASR:
             return Qwen3Backend()
         if engine == ENGINE_WHISPER:

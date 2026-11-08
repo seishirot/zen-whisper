@@ -78,6 +78,7 @@ def test_available_recognition_choices_follow_installed_runtime(monkeypatch):
         "is_whisper_cuda_available",
         lambda: False,
     )
+    monkeypatch.setattr(transcriber_module, "is_haas_available", lambda: False)
 
     expected = (ENGINE_WHISPER, ENGINE_QWEN3_ASR)
     if sys.platform == "win32":
@@ -85,6 +86,17 @@ def test_available_recognition_choices_follow_installed_runtime(monkeypatch):
     assert available_recognition_engines() == expected
     assert available_recognition_devices(ENGINE_WHISPER) == ("cpu",)
     assert available_recognition_devices(ENGINE_QWEN3_ASR) == ("cpu",)
+
+
+def test_haas_is_a_windows_cpu_only_engine(monkeypatch):
+    from src.config import ENGINE_HAAS
+
+    monkeypatch.setattr(transcriber_module, "is_haas_available", lambda: True)
+    monkeypatch.setattr(transcriber_module, "is_windows", lambda: True)
+    assert ENGINE_HAAS in available_recognition_engines()
+    assert available_recognition_devices(ENGINE_HAAS) == ("cpu",)
+    monkeypatch.setattr(transcriber_module, "is_windows", lambda: False)
+    assert ENGINE_HAAS not in available_recognition_engines()
 
 
 def test_recognition_configuration_rejects_unavailable_engine(monkeypatch):
