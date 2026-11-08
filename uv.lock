@@ -2448,7 +2448,7 @@ wheels = [
 
 [[package]]
 name = "zen-whisper"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "faster-whisper", marker = "sys_platform == 'win32' or (extra == 'extra-11-zen-whisper-qwen3' and extra == 'extra-11-zen-whisper-qwen3-cuda')" },

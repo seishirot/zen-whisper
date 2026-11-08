@@ -2,6 +2,9 @@
 
 ## What is zen-whisper
 
+> Also follow [AGENTS.md](AGENTS.md): local evaluation data rules, the pre-push
+> privacy gate, and CHANGELOG / versioning rules.
+
 Windows / macOS 対応の完全ローカル音声入力ツール。ホットキーでトグル録音 → Whisper で文字起こし → クリップボード経由でアクティブウィンドウにペースト。
 
 ## Commands

@@ -39,3 +39,27 @@
   gate is a safety net, not a substitute for reviewing the outgoing diff.
 - Keep the repository's existing synthetic audio fixtures distinct from personal
   recordings. Never replace a public fixture with a user's recording.
+
+## Changelog and versioning
+
+- ZenWhisper follows Semantic Versioning. `[project].version` in
+  `pyproject.toml` is the single version source; release tags are `vX.Y.Z`.
+  `macos/backend` has its own independent version.
+- Every user-visible change (feature, behavior or default change, fix,
+  security or dependency change that affects users, deprecation, removal) adds
+  an entry under `## [Unreleased]` in `CHANGELOG.md` in the same commit, using
+  the Keep a Changelog headings (Added, Changed, Deprecated, Removed, Fixed,
+  Security). Purely internal refactors and test-only changes may be skipped;
+  benchmark/developer tooling gets a short entry.
+- Write entries for users: what changed and how to use or roll it back. Never
+  include local evaluation results, private recording content or machine
+  details (see the local data rules above).
+- Choose the next version from the Unreleased notes: MAJOR for removed or
+  incompatible config/behavior, MINOR for new features, PATCH for fixes only.
+- Do not bump versions, create tags, push tags or publish GitHub Releases
+  unless the user asks for a release. To release, run
+  `mise exec -- python -I tools/release.py prepare X.Y.Z`, run the tests,
+  commit `chore(release): vX.Y.Z`, create an annotated tag `vX.Y.Z`, and push
+  the commit and tag only after the user approves the push.
+- `tools/release.py check` and `tests/test_release_metadata.py` verify that
+  `CHANGELOG.md`, `pyproject.toml` and `uv.lock` agree.
