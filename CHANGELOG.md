@@ -42,6 +42,14 @@ The version is `[project].version` in `pyproject.toml`; releases are tagged
 - Distribution metadata declares `MIT AND Apache-2.0` and ships
   `LICENSES/` and `THIRD_PARTY_NOTICES.md`.
 
+### Security
+
+- Update locked dependencies to versions that fix published advisories:
+  Pillow 13.0.0, certifi 2026.10.23, urllib3 2.8.0, anyio 4.14.2,
+  filelock 4.2.6, fsspec 2026.9.0, msgpack 1.2.4, setuptools 84.2.1 and the
+  benchmark-only pyarrow 23.0.1 (root and macOS backend locks). The minimum
+  versions are enforced through `constraint-dependencies`.
+
 ### Fixed
 
 - Model load failures are reported instead of failing silently.

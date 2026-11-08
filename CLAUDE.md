@@ -2,8 +2,10 @@
 
 ## What is zen-whisper
 
-> Also follow [AGENTS.md](AGENTS.md): local evaluation data rules, the pre-push
-> privacy gate, and CHANGELOG / versioning rules.
+Shared agent rules (local evaluation data, pre-push privacy gate, CHANGELOG /
+versioning) live in AGENTS.md and are imported here:
+
+@AGENTS.md
 
 Windows / macOS 対応の完全ローカル音声入力ツール。ホットキーでトグル録音 → Whisper で文字起こし → クリップボード経由でアクティブウィンドウにペースト。
 
