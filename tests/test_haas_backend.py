@@ -171,3 +171,23 @@ def test_config_validation_rejects_invalid_haas_values(field, value, message) ->
 
 def test_default_haas_config_is_valid() -> None:
     assert not [w for w in AppConfig().validate() if "haas" in w]
+
+
+@pytest.mark.parametrize("value", [0, -5.0, 200.0, float("nan"), "28"])
+def test_invalid_chunk_config_is_clamped_instead_of_hanging(value) -> None:
+    backend = HaasBackend()
+    model = _RecordingModel()
+    backend._model = model
+    cfg = RecognitionConfig()
+    cfg.haas_chunk_sec = value
+    audio = np.full(100 * 16000, 0.1, dtype=np.float32)
+
+    backend.transcribe(audio, "ja", cfg)
+
+    assert sum(model.lengths) == len(audio)
+    assert max(model.lengths) <= 78 * 16000
+
+
+def test_split_rejects_non_positive_chunk() -> None:
+    with pytest.raises(ValueError, match="positive"):
+        split_at_quiet_points(np.ones(16000, np.float32), chunk_seconds=0)

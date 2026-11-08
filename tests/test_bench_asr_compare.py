@@ -182,3 +182,33 @@ def test_tracked_lenient_example_is_generic_and_private_list_is_ignored():
     assert {"cpu", "api", "json"} <= set(example)
     relative = bench.LENIENT_TERMS_LOCAL.relative_to(bench.ROOT).as_posix()
     assert subprocess.run(["git", "check-ignore", "-q", relative], cwd=bench.ROOT).returncode == 0
+
+
+def test_bare_man_counts_as_ten_thousand():
+    assert bench.kanji_number("万") == 10000
+    assert bench.kanji_number("一万") == 10000
+
+
+def test_readings_share_text_normalization(tmp_path):
+    terms_file = tmp_path / "terms.toml"
+    terms_file.write_text('[terms]\n"GPU" = ["ジー・ピー・ユー"]\n"CPU" = ["シーピーユー"]\n', encoding="utf-8")
+    terms = bench.load_lenient_terms(terms_file)
+    assert bench.score("GPU", "ジーピーユー", terms)["lenient"]["exact"]
+    assert bench.score("CPU", "シーピーユ", terms)["lenient"]["exact"]
+
+
+@pytest.mark.parametrize("content", ['terms = "x"\n', '[terms]\n"API" = ["a"]\n"api" = ["b"]\n'])
+def test_invalid_lenient_term_files_are_rejected(tmp_path, content):
+    terms_file = tmp_path / "terms.toml"
+    terms_file.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError):
+        bench.load_lenient_terms(terms_file)
+
+
+def test_build_rows_scores_missing_outputs_as_empty():
+    items = [{"id": "a", "corpus": "public", "duration_sec": 1, "reference": "テスト"},
+             {"id": "b", "corpus": "public", "duration_sec": 1, "reference": "テスト"}]
+    rows, missing = bench.build_rows(items, [{"id": "a", "repeat": 0, "text": "テスト", "status": "ok", "elapsed_sec": 0.1}], 1, {})
+    assert missing == 1
+    assert [row["status"] for row in rows] == ["ok", "missing"]
+    assert rows[1]["quality"]["cer"] == 1

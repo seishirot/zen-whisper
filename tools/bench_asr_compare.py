@@ -92,7 +92,7 @@ def kanji_number(text: str) -> int:
             section += (1 if digit is None else digit) * _KANJI_UNITS[char]
             digit = None
         else:  # 万
-            total += (section + (digit or 0)) * 10000
+            total += (section + (digit or 0) or 1) * 10000
             section, digit = 0, None
     return total + section + (digit or 0)
 
@@ -104,6 +104,8 @@ def load_lenient_terms(path: Path | None) -> dict[str, tuple[str, ...]]:
     if path is None:
         return {}
     raw = tomllib.loads(path.read_text(encoding="utf-8")).get("terms", {})
+    if not isinstance(raw, dict):
+        raise ValueError("lenient terms must be a [terms] table")
     terms: dict[str, tuple[str, ...]] = {}
     for term, readings in raw.items():
         if isinstance(readings, str):
@@ -112,10 +114,17 @@ def load_lenient_terms(path: Path | None) -> dict[str, tuple[str, ...]]:
             isinstance(reading, str) and reading.strip() for reading in readings
         ):
             raise ValueError(f"invalid lenient term entry: {term!r}")
-        terms[unicodedata.normalize("NFKC", term).casefold()] = tuple(
-            unicodedata.normalize("NFKC", reading).casefold() for reading in readings
-        )
+        key = _lenient_prepare(term)
+        if key in terms:
+            raise ValueError(f"duplicate lenient term after case folding: {term!r}")
+        terms[key] = tuple(_lenient_prepare(reading) for reading in readings)
     return terms
+
+
+def _lenient_prepare(text: str) -> str:
+    """Shared pre-steps for text and term readings: NFKC, casefold, drop ・/space, optional final ー."""
+    value = re.sub(r"[・\s]", "", unicodedata.normalize("NFKC", text).casefold())
+    return re.sub(r"([ァ-ヴ])ー(?![ァ-ヴー])", r"\1", value)
 
 
 def default_lenient_terms_path() -> Path:
@@ -133,13 +142,12 @@ def lenient_normalized(text: str, terms: dict[str, tuple[str, ...]] | None = Non
     """
     from tools.bench_crispasr import normalized
 
-    value = re.sub(r"[・\s]", "", unicodedata.normalize("NFKC", text).casefold())
+    value = _lenient_prepare(text)
     readings = [(reading, term) for term, values in (terms or {}).items() for reading in values]
     for reading, term in sorted(readings, key=lambda pair: len(pair[0]), reverse=True):
-        value = value.replace(reading.replace(" ", ""), term.replace(" ", ""))
+        value = value.replace(reading, term)
     for variant, canonical in _LENIENT_VARIANTS:
         value = value.replace(variant, canonical)
-    value = re.sub(r"([ァ-ヴ])ー(?![ァ-ヴー])", r"\1", value)
     value = _KANJI_NUMBER.sub(lambda match: str(kanji_number(match.group())), value)
     return normalized(value)
 
@@ -434,6 +442,8 @@ def run(args) -> None:
         if digest(ROOT / item["audio"]) != item["sha256"]:
             raise ValueError("Frozen audio checksum changed")
     output = local_output(args.output)
+    terms_path = args.lenient_terms or default_lenient_terms_path()
+    terms = load_lenient_terms(terms_path)  # fail before inference, not after
     if (output / "summary.json").exists():
         raise ValueError("Choose a new output directory; existing result will not be overwritten")
     cfg = RecognitionConfig(**PROFILES[args.profile], device=args.device, language="ja", cpu_threads=args.threads,
@@ -475,24 +485,9 @@ def run(args) -> None:
     result = json.loads(inference_path.read_text(encoding="utf-8")) if inference_path.exists() else {"status": "failed", "error": "Worker exited before checkpoint", "outputs": []}
     if timeout_error:
         result.update(status="failed", error=timeout_error)
-    by_id = {row["id"]: row for row in items}
-    terms_path = args.lenient_terms or default_lenient_terms_path()
-    terms = load_lenient_terms(terms_path)
-    rows = []
-    for raw in result.pop("outputs"):
-        item = by_id[raw["id"]]
-        row = {key: value for key, value in raw.items() if key != "text"}
-        row.update(corpus=item["corpus"], duration_sec=item["duration_sec"], quality=score(item["reference"], raw["text"], terms))
-        if "last_reference" in item:
-            row["last_sentence_exact"] = normalized(item["last_reference"]) in normalized(raw["text"])
-        rows.append(row)
-    completed_keys = {(row["id"], row["repeat"]) for row in rows}
-    if not args.contention_seconds:
-        for repeat in range(args.repeats):
-            for item in items:
-                if (item["id"], repeat) not in completed_keys:
-                    rows.append({"id": item["id"], "repeat": repeat, "corpus": item["corpus"], "duration_sec": item["duration_sec"], "status": "missing", "elapsed_sec": None, "quality": score(item["reference"], "", terms)})
-                    result["status"] = "failed"
+    rows, missing = build_rows(items, result.pop("outputs"), None if args.contention_seconds else args.repeats, terms)
+    if missing:
+        result["status"] = "failed"
     if admission and set(result.get("gpu_process_uuids", [])) != {admission["uuid"]}:
         result.update(status="failed", error="GPU UUID differs from the admitted device")
     result.update(profile=args.profile, manifest_sha256=digest(args.manifest), rows=rows,
@@ -526,6 +521,35 @@ def lenient_terms_evidence(path: Path, terms: dict) -> dict:
     return {"source": source, "sha256": digest(path), "term_count": len(terms)}
 
 
+def build_rows(items: list[dict], outputs: list[dict], repeats: int | None, terms) -> tuple[list[dict], int]:
+    """Score worker outputs; with ``repeats``, add empty-hypothesis rows for missing results."""
+    from tools.bench_crispasr import normalized
+
+    by_id = {row["id"]: row for row in items}
+    rows = []
+    for raw in outputs:
+        item = by_id.get(raw["id"])
+        if item is None:
+            continue
+        row = {key: value for key, value in raw.items() if key != "text"}
+        row.update(corpus=item["corpus"], duration_sec=item["duration_sec"],
+                   quality=score(item["reference"], raw.get("text", ""), terms))
+        if "last_reference" in item:
+            row["last_sentence_exact"] = normalized(item["last_reference"]) in normalized(raw.get("text", ""))
+        rows.append(row)
+    missing = 0
+    if repeats is not None:
+        completed = {(row["id"], row.get("repeat", 0)) for row in rows}
+        for repeat in range(repeats):
+            for item in items:
+                if (item["id"], repeat) not in completed:
+                    missing += 1
+                    rows.append({"id": item["id"], "repeat": repeat, "corpus": item["corpus"],
+                                 "duration_sec": item["duration_sec"], "status": "missing", "elapsed_sec": None,
+                                 "quality": score(item["reference"], "", terms)})
+    return rows, missing
+
+
 def rescore(args) -> None:
     """Recompute strict and lenient quality for retained runs; never overwrites summary.json."""
     plan = json.loads(args.manifest.read_text(encoding="utf-8"))
@@ -538,15 +562,16 @@ def rescore(args) -> None:
         if not inference.exists():
             print(json.dumps({"run": run_dir.name, "status": "skipped", "reason": "no retained inference.local.json"}), flush=True)
             continue
-        rows = []
-        for raw in json.loads(inference.read_text(encoding="utf-8"))["outputs"]:
-            item = by_id.get(raw["id"])
-            if item is None:
-                continue
-            rows.append({"id": raw["id"], "repeat": raw.get("repeat", 0), "corpus": item["corpus"],
-                         "duration_sec": item["duration_sec"], "status": raw.get("status", "ok"),
-                         "elapsed_sec": raw.get("elapsed_sec"),
-                         "quality": score(item["reference"], raw.get("text", ""), terms)})
+        request_path, summary_path = run_dir / "request.local.json", run_dir / "summary.json"
+        request = json.loads(request_path.read_text(encoding="utf-8")) if request_path.exists() else {}
+        summary = json.loads(summary_path.read_text(encoding="utf-8")) if summary_path.exists() else {}
+        jobs = [job["id"] for job in request.get("jobs", [])]
+        items = [by_id[job] for job in jobs if job in by_id]
+        outputs = json.loads(inference.read_text(encoding="utf-8"))["outputs"]
+        if not items:
+            items = [by_id[raw["id"]] for raw in outputs if raw["id"] in by_id]
+        repeats = None if request.get("contention_seconds") else summary.get("repeats", request.get("repeats", 1))
+        rows, _missing = build_rows(items, outputs, repeats, terms)
         aggregates = {corpus: summarize([row for row in rows if row["corpus"] == corpus])
                       for corpus in sorted({row["corpus"] for row in rows})}
         write_json(run_dir / "rescored.json", {

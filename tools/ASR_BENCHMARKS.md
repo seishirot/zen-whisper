@@ -72,7 +72,9 @@ Git-ignored. Otherwise the generic tracked
 [`lenient_terms.example.toml`](lenient_terms.example.toml) is used. Use
 `--lenient-terms` to choose another file. Summaries record the file's source
 class, SHA-256 and term count, but not its contents. Because the readings are
-chosen by hand, report lenient CER as indicative, together with strict CER.
+chosen by hand, report lenient CER as indicative, together with strict CER. The
+rules also apply to ordinary words (for example 十分 becomes 10分 on both
+sides), which can occasionally equate different meanings.
 
 Runs that retained transcripts (`--retain-transcripts`) can be re-scored
 without inference. This writes `rescored.json` next to the run and never

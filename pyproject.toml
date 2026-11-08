@@ -3,7 +3,8 @@ name = "zen-whisper"
 version = "1.0.0"
 description = "Fully local voice-to-text input tool powered by Whisper"
 readme = "README.md"
-license = "MIT"
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSE", "LICENSES/*", "THIRD_PARTY_NOTICES.md"]
 authors = [
     { name = "seishirot", email = "217049440+seishirot@users.noreply.github.com" },
 ]

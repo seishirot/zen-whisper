@@ -308,9 +308,10 @@ backend.
   `haas_precision` is `int8` (recommended) or `int4-onecomp` (smaller, but can be
   slower on some CPUs); `haas_inference_threads` sets encoder threads. Recordings
   longer than `haas_chunk_sec` (default 28, range 1-75) are split near the
-  quietest point around each boundary and decoded independently. Latin terms are
-  usually written in lowercase (for example `cpu`); use a dictionary profile if
-  you prefer the original casing. The model was trained on Common Voice data.
+  quietest point around each boundary and decoded independently. The casing
+  or script of Latin terms may differ from the spelling you prefer; use a
+  dictionary profile to normalize them. The upstream model card lists Common
+  Voice among its training data, so do not judge it on Common Voice clips alone.
 - `engine = "qwen3-asr"` uses Transformers `AutoProcessor` and
   `AutoModelForMultimodalLM` with `Qwen/Qwen3-ASR-1.7B-hf` or
   `Qwen/Qwen3-ASR-0.6B-hf`. It performs Windows-native, non-streaming
@@ -658,4 +659,6 @@ To use custom start/stop sounds instead of generated tones:
 
 ## License
 
-[MIT](LICENSE)
+[MIT](LICENSE). Third-party components, including the Apache-2.0 code
+adapted for the Haas-ja backend, are listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

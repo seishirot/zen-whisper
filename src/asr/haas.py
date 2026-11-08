@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0 AND MIT
+# Portions adapted from haas_cpu (Apache-2.0, modified); see THIRD_PARTY_NOTICES.md.
 """Haas-ja-v1.0 CPU backend using the pinned OneCompression ONNX bundle.
 
 The feature extraction, TDT greedy decoding, detokenization and quiet-point
@@ -22,7 +24,7 @@ from pathlib import Path
 import numpy as np
 
 from src.asr.base import RecognitionHints, load_with_timeout
-from src.config import ASR_SAMPLE_RATE, RecognitionConfig
+from src.config import ASR_SAMPLE_RATE, HAAS_MAX_CHUNK_SEC, RecognitionConfig
 from src.model_provenance import download_verified_snapshot, model_source
 
 logger = logging.getLogger(__name__)
@@ -236,6 +238,8 @@ def split_at_quiet_points(
 ) -> list[tuple[int, int]]:
     """Split long audio near the quietest 100 ms window around each boundary."""
     step = int(chunk_seconds * sample_rate)
+    if step <= 0:
+        raise ValueError("chunk_seconds must be positive")
     search = int(search_seconds * sample_rate)
     window = int(window_seconds * sample_rate)
     bounds: list[tuple[int, int]] = []
@@ -347,6 +351,18 @@ def _load_pinned_haas_model(
     return _HaasModel(snapshot, precision, num_threads)
 
 
+def _effective_chunk_sec(value: object) -> float:
+    """Clamp an invalid config value instead of hanging or exceeding the encoder limit."""
+    default = RecognitionConfig().haas_chunk_sec
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not np.isfinite(value):
+        logger.warning("haas_chunk_sec が不正なため既定値 %.1f 秒を使用します", default)
+        return default
+    clamped = min(max(float(value), 1.0), HAAS_MAX_CHUNK_SEC)
+    if clamped != value:
+        logger.warning("haas_chunk_sec=%s を %.1f 秒に補正します (範囲: 1〜%g)", value, clamped, HAAS_MAX_CHUNK_SEC)
+    return clamped
+
+
 class HaasBackend:
     """CPU backend for Haas-ja-v1.0 (FastConformer-TDT, ONNX Runtime)."""
 
@@ -400,12 +416,13 @@ class HaasBackend:
         audio = np.asarray(audio, dtype=np.float32).reshape(-1)
         if audio.size < _MIN_SAMPLES or not np.any(audio):
             return ""
-        bounds = split_at_quiet_points(audio, chunk_seconds=cfg.haas_chunk_sec)
+        chunk_sec = _effective_chunk_sec(cfg.haas_chunk_sec)
+        bounds = split_at_quiet_points(audio, chunk_seconds=chunk_sec)
         logger.info(
             "Haas-ja 転写条件: precision=%s, threads=%d, chunk_sec=%.1f, chunks=%d, join=none",
             cfg.haas_precision,
             cfg.haas_inference_threads,
-            cfg.haas_chunk_sec,
+            chunk_sec,
             len(bounds),
         )
         parts = [
