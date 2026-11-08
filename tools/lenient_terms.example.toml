@@ -1,0 +1,19 @@
+# Generic term readings for the lenient CER in tools/bench_asr_compare.py.
+#
+# Lenient scoring treats a listed term and its readings as equal (for example
+# "CPU", "cpu" and "シーピーユー"), in both the reference and the hypothesis.
+# Keep this tracked file generic. Put a list derived from your own recordings
+# in the Git-ignored tools/bench_outputs/private/lenient-terms.local.toml,
+# which is used automatically when it exists.
+
+[terms]
+"AI" = ["エーアイ"]
+"API" = ["エーピーアイ"]
+"CPU" = ["シーピーユー"]
+"GPU" = ["ジーピーユー"]
+"HTTP" = ["エイチティーティーピー"]
+"JSON" = ["ジェイソン"]
+"Python" = ["パイソン"]
+"GitHub" = ["ギットハブ"]
+"Kubernetes" = ["クバネティス", "クーベネティス"]
+"Codex" = ["コーデックス"]

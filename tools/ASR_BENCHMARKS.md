@@ -50,6 +50,38 @@ Different checkpoints or decoding settings prevent a runtime-only comparison.
 Equal aggregate CER does not establish identical text. Sampled VRAM counters
 may miss brief peaks and do not necessarily include cold loading.
 
+### Strict and lenient CER
+
+Every run reports two CERs side by side; keep both when comparing models.
+
+- **Strict** (`corpus_cer`): NFKC, lowercase, and removal of punctuation,
+  symbols and whitespace. Writing a term in another script (`Codex` versus
+  `コーデックス`) or numerals in kanji (`三十` versus `30`) counts as an error.
+- **Lenient** (`lenient_corpus_cer`): strict normalization, plus treating a
+  listed term and its readings as equal (`CPU` / `cpu` / `シーピーユー`), kanji
+  numerals as Arabic digits, a final katakana long-vowel mark as optional
+  (`メモリー` / `メモリ`) and a few orthographic variants (`下さい` / `ください`)
+  as equal. The same transform is applied to the reference and the hypothesis.
+  Near-miss spellings in either script still count as errors. This is closer to
+  dictation for an AI assistant, where either script is acceptable.
+
+Term readings come from TOML (`[terms]` with `"Codex" = ["コーデックス"]`).
+When `tools/bench_outputs/private/lenient-terms.local.toml` exists, it is used
+automatically. Keep any list derived from personal references there: it is
+Git-ignored. Otherwise the generic tracked
+[`lenient_terms.example.toml`](lenient_terms.example.toml) is used. Use
+`--lenient-terms` to choose another file. Summaries record the file's source
+class, SHA-256 and term count, but not its contents. Because the readings are
+chosen by hand, report lenient CER as indicative, together with strict CER.
+
+Runs that retained transcripts (`--retain-transcripts`) can be re-scored
+without inference. This writes `rescored.json` next to the run and never
+overwrites `summary.json`:
+
+```powershell
+mise exec -- uv run --no-sync python -X utf8 tools/bench_asr_compare.py rescore --manifest tools/bench_outputs/crispasr/local-eval/frozen.local.json --run tools/bench_outputs/crispasr/local-eval/reazon-cpu tools/bench_outputs/crispasr/local-eval/qwen-cuda
+```
+
 The comparison runner restricts output to `tools/bench_outputs/`; the CrispASR
 smoke runner enforces the same boundary. Keep redirected console logs there as
 well. A publication requires a separately prepared public-only artifact review;

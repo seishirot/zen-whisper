@@ -138,3 +138,47 @@ def test_empty_selection_intersection_does_not_expand_to_other_inputs(monkeypatc
                            selection="representative", corpora=["public"])
     with pytest.raises(ValueError, match="No selected inputs"):
         bench.run(args)
+
+
+def test_lenient_cer_accepts_script_case_and_numeral_variants(tmp_path):
+    terms_file = tmp_path / "terms.toml"
+    terms_file.write_text('[terms]\n"CPU" = ["シーピーユー"]\n"JSON" = ["ジェイソン"]\n', encoding="utf-8")
+    terms = bench.load_lenient_terms(terms_file)
+    reference = "CPUでJSONを30秒ごとに保存して下さい。メモリーも確認します"
+    hypothesis = "シーピーユーでジェイソンを三十秒ごとに保存してください メモリも確認します"
+    quality = bench.score(reference, hypothesis, terms)
+    assert quality["cer"] > 0
+    assert quality["lenient"]["edits"] == 0
+    assert quality["lenient"]["exact"]
+
+
+def test_lenient_cer_still_counts_misrecognized_terms():
+    terms = {"github": ("ギットハブ",)}
+    quality = bench.score("GitHubを開く", "ギターハブを開く", terms)
+    assert quality["lenient"]["edits"] > 0
+
+
+def test_kanji_numbers_convert_compound_values():
+    assert bench.kanji_number("八千八十") == 8080
+    assert bench.kanji_number("二百") == 200
+    assert bench.kanji_number("九十五") == 95
+    assert bench.kanji_number("三万五千") == 35000
+
+
+def test_summary_reports_strict_and_lenient_side_by_side():
+    terms = {"api": ("エーピーアイ",)}
+    rows = [{"status": "ok", "elapsed_sec": 1, "duration_sec": 1,
+             "quality": bench.score("APIを呼ぶ", "エーピーアイを呼ぶ", terms)}]
+    result = bench.summarize(rows)
+    assert result["corpus_cer"] > 0
+    assert result["lenient_corpus_cer"] == 0
+    assert result["lenient_exact_count"] == 1
+
+
+def test_tracked_lenient_example_is_generic_and_private_list_is_ignored():
+    import subprocess
+
+    example = bench.load_lenient_terms(bench.LENIENT_TERMS_EXAMPLE)
+    assert {"cpu", "api", "json"} <= set(example)
+    relative = bench.LENIENT_TERMS_LOCAL.relative_to(bench.ROOT).as_posix()
+    assert subprocess.run(["git", "check-ignore", "-q", relative], cwd=bench.ROOT).returncode == 0

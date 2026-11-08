@@ -26,6 +26,10 @@ sys.path.insert(0, str(ROOT))
 OUTPUTS = ROOT / "tools/bench_outputs"
 PUBLIC = OUTPUTS / "reazon-production/corpus/public/manifest.json"
 PRIVATE = OUTPUTS / "private/realwork-v1/manifest.json"
+# Term readings for lenient scoring. A personal list derived from private
+# references stays in the ignored local file; the tracked example is generic.
+LENIENT_TERMS_LOCAL = OUTPUTS / "private/lenient-terms.local.toml"
+LENIENT_TERMS_EXAMPLE = ROOT / "tools/lenient_terms.example.toml"
 PROFILES = {
     "reazon-k2": {"engine": "reazon-k2"},
     "haas-int8": {"engine": "haas-ja", "haas_precision": "int8"},
@@ -70,13 +74,86 @@ def retained_tokens(reference: str, hypothesis: str, pattern: str, *, fold: bool
     return {"expected": sum(expected.values()), "retained": sum((expected & actual).values())}
 
 
-def score(reference: str, hypothesis: str) -> dict:
+_KANJI_DIGITS = {c: i for i, c in enumerate("〇一二三四五六七八九")} | {"零": 0}
+_KANJI_UNITS = {"十": 10, "百": 100, "千": 1000}
+_KANJI_NUMBER = re.compile(r"[〇零一二三四五六七八九十百千万]+")
+# Orthographic variants that do not change meaning for dictation use.
+_LENIENT_VARIANTS = (("下さい", "ください"), ("頂く", "いただく"), ("頂き", "いただき"))
+
+
+def kanji_number(text: str) -> int:
+    """Convert a run of kanji numerals (up to 万) to an integer."""
+    total = section = 0
+    digit = None
+    for char in text:
+        if char in _KANJI_DIGITS:
+            digit = _KANJI_DIGITS[char] if digit is None else digit * 10 + _KANJI_DIGITS[char]
+        elif char in _KANJI_UNITS:
+            section += (1 if digit is None else digit) * _KANJI_UNITS[char]
+            digit = None
+        else:  # 万
+            total += (section + (digit or 0)) * 10000
+            section, digit = 0, None
+    return total + section + (digit or 0)
+
+
+def load_lenient_terms(path: Path | None) -> dict[str, tuple[str, ...]]:
+    """Read ``[terms] "Codex" = ["コーデックス"]``; return casefolded term -> readings."""
+    import tomllib
+
+    if path is None:
+        return {}
+    raw = tomllib.loads(path.read_text(encoding="utf-8")).get("terms", {})
+    terms: dict[str, tuple[str, ...]] = {}
+    for term, readings in raw.items():
+        if isinstance(readings, str):
+            readings = [readings]
+        if not term.strip() or not isinstance(readings, list) or not readings or not all(
+            isinstance(reading, str) and reading.strip() for reading in readings
+        ):
+            raise ValueError(f"invalid lenient term entry: {term!r}")
+        terms[unicodedata.normalize("NFKC", term).casefold()] = tuple(
+            unicodedata.normalize("NFKC", reading).casefold() for reading in readings
+        )
+    return terms
+
+
+def default_lenient_terms_path() -> Path:
+    return LENIENT_TERMS_LOCAL if LENIENT_TERMS_LOCAL.exists() else LENIENT_TERMS_EXAMPLE
+
+
+def lenient_normalized(text: str, terms: dict[str, tuple[str, ...]] | None = None) -> str:
+    """Strict normalization plus script/numeral/orthography equivalences.
+
+    A listed term's reading becomes the term itself (so CPU, cpu and
+    シーピーユー compare equal), kanji numerals become Arabic digits, a final
+    katakana long-vowel mark is dropped (メモリー/メモリ) and a few orthographic
+    variants are unified. Near-miss spellings still cost edits. The same
+    transform is applied to reference and hypothesis.
+    """
+    from tools.bench_crispasr import normalized
+
+    value = re.sub(r"[・\s]", "", unicodedata.normalize("NFKC", text).casefold())
+    readings = [(reading, term) for term, values in (terms or {}).items() for reading in values]
+    for reading, term in sorted(readings, key=lambda pair: len(pair[0]), reverse=True):
+        value = value.replace(reading.replace(" ", ""), term.replace(" ", ""))
+    for variant, canonical in _LENIENT_VARIANTS:
+        value = value.replace(variant, canonical)
+    value = re.sub(r"([ァ-ヴ])ー(?![ァ-ヴー])", r"\1", value)
+    value = _KANJI_NUMBER.sub(lambda match: str(kanji_number(match.group())), value)
+    return normalized(value)
+
+
+def score(reference: str, hypothesis: str, terms: dict[str, tuple[str, ...]] | None = None) -> dict:
     from tools.bench_crispasr import normalized, edit_distance
     from tools.bench_reazon_production import edit_breakdown
 
     expected, actual = normalized(reference), normalized(hypothesis)
     edits = edit_distance(expected, actual)
     breakdown = edit_breakdown(expected, actual)
+    lenient_expected = lenient_normalized(reference, terms)
+    lenient_actual = lenient_normalized(hypothesis, terms)
+    lenient_edits = edit_distance(lenient_expected, lenient_actual)
     latin = r"[A-Za-z][A-Za-z0-9]*(?:[._+/-][A-Za-z0-9]+)*"
     numeric = r"[0-9]+(?:[.,][0-9]+)*|[〇零一二三四五六七八九十百千万億兆]+"
     return {
@@ -87,6 +164,10 @@ def score(reference: str, hypothesis: str) -> dict:
         "latin_surface": retained_tokens(reference, hypothesis, latin),
         "latin_casefold": retained_tokens(reference, hypothesis, latin, fold=True),
         "numeric_surface": retained_tokens(reference, hypothesis, numeric),
+        "lenient": {
+            "reference_chars": len(lenient_expected), "edits": lenient_edits,
+            "cer": lenient_edits / max(1, len(lenient_expected)), "exact": lenient_expected == lenient_actual,
+        },
     }
 
 
@@ -110,6 +191,11 @@ def summarize(rows: list[dict]) -> dict:
         "median_rtf": statistics.median(row["elapsed_sec"] / row["duration_sec"] for row in usable) if usable else None,
         "p95_rtf": percentile95(row["elapsed_sec"] / row["duration_sec"] for row in usable),
     }
+    lenient = [q["lenient"] for q in quality if "lenient" in q]
+    if lenient:
+        result["lenient_corpus_cer"] = sum(q["edits"] for q in lenient) / max(1, sum(q["reference_chars"] for q in lenient))
+        result["lenient_mean_clip_cer"] = statistics.mean(q["cer"] for q in lenient)
+        result["lenient_exact_count"] = sum(q["exact"] for q in lenient)
     for name in ("latin_surface", "latin_casefold", "numeric_surface"):
         expected = sum(q[name]["expected"] for q in quality)
         retained = sum(q[name]["retained"] for q in quality)
@@ -390,11 +476,13 @@ def run(args) -> None:
     if timeout_error:
         result.update(status="failed", error=timeout_error)
     by_id = {row["id"]: row for row in items}
+    terms_path = args.lenient_terms or default_lenient_terms_path()
+    terms = load_lenient_terms(terms_path)
     rows = []
     for raw in result.pop("outputs"):
         item = by_id[raw["id"]]
         row = {key: value for key, value in raw.items() if key != "text"}
-        row.update(corpus=item["corpus"], duration_sec=item["duration_sec"], quality=score(item["reference"], raw["text"]))
+        row.update(corpus=item["corpus"], duration_sec=item["duration_sec"], quality=score(item["reference"], raw["text"], terms))
         if "last_reference" in item:
             row["last_sentence_exact"] = normalized(item["last_reference"]) in normalized(raw["text"])
         rows.append(row)
@@ -403,7 +491,7 @@ def run(args) -> None:
         for repeat in range(args.repeats):
             for item in items:
                 if (item["id"], repeat) not in completed_keys:
-                    rows.append({"id": item["id"], "repeat": repeat, "corpus": item["corpus"], "duration_sec": item["duration_sec"], "status": "missing", "elapsed_sec": None, "quality": score(item["reference"], "")})
+                    rows.append({"id": item["id"], "repeat": repeat, "corpus": item["corpus"], "duration_sec": item["duration_sec"], "status": "missing", "elapsed_sec": None, "quality": score(item["reference"], "", terms)})
                     result["status"] = "failed"
     if admission and set(result.get("gpu_process_uuids", [])) != {admission["uuid"]}:
         result.update(status="failed", error="GPU UUID differs from the admitted device")
@@ -416,6 +504,7 @@ def run(args) -> None:
                                "cpu": platform.processor(), "physical_cores": _physical_core_count(),
                                "logical_cores": os.cpu_count(), "total_ram_bytes": _total_ram_bytes()},
                   gpu_admission=admission,
+                  lenient_terms=lenient_terms_evidence(terms_path, terms),
                   selection=args.selection, repeats=args.repeats,
                   aggregates={corpus: summarize([row for row in rows if row["corpus"] == corpus]) for corpus in sorted({row["corpus"] for row in rows})})
     for check in ("silence", "empty"):
@@ -427,6 +516,45 @@ def run(args) -> None:
     print(json.dumps({"profile": args.profile, "status": result["status"], "aggregates": result["aggregates"], "output": str(output)}, ensure_ascii=False), flush=True)
     if code or result["status"] != "passed":
         raise SystemExit(1)
+
+
+def lenient_terms_evidence(path: Path, terms: dict) -> dict:
+    """Record which term file was used without copying its (possibly private) contents."""
+    resolved = path.resolve()
+    source = ("local-private" if resolved == LENIENT_TERMS_LOCAL.resolve()
+              else "tracked-example" if resolved == LENIENT_TERMS_EXAMPLE.resolve() else "custom")
+    return {"source": source, "sha256": digest(path), "term_count": len(terms)}
+
+
+def rescore(args) -> None:
+    """Recompute strict and lenient quality for retained runs; never overwrites summary.json."""
+    plan = json.loads(args.manifest.read_text(encoding="utf-8"))
+    by_id = {row["id"]: row for row in plan["items"]}
+    terms_path = args.lenient_terms or default_lenient_terms_path()
+    terms = load_lenient_terms(terms_path)
+    for run_dir in args.run:
+        run_dir = local_output(run_dir)
+        inference = run_dir / "inference.local.json"
+        if not inference.exists():
+            print(json.dumps({"run": run_dir.name, "status": "skipped", "reason": "no retained inference.local.json"}), flush=True)
+            continue
+        rows = []
+        for raw in json.loads(inference.read_text(encoding="utf-8"))["outputs"]:
+            item = by_id.get(raw["id"])
+            if item is None:
+                continue
+            rows.append({"id": raw["id"], "repeat": raw.get("repeat", 0), "corpus": item["corpus"],
+                         "duration_sec": item["duration_sec"], "status": raw.get("status", "ok"),
+                         "elapsed_sec": raw.get("elapsed_sec"),
+                         "quality": score(item["reference"], raw.get("text", ""), terms)})
+        aggregates = {corpus: summarize([row for row in rows if row["corpus"] == corpus])
+                      for corpus in sorted({row["corpus"] for row in rows})}
+        write_json(run_dir / "rescored.json", {
+            "manifest_sha256": digest(args.manifest), "runner_sha256": digest(Path(__file__)),
+            "lenient_terms": lenient_terms_evidence(terms_path, terms), "rows": rows, "aggregates": aggregates})
+        print(json.dumps({"run": run_dir.name, "status": "rescored", **{
+            corpus: {"corpus_cer": round(agg["corpus_cer"], 4), "lenient_corpus_cer": round(agg["lenient_corpus_cer"], 4)}
+            for corpus, agg in aggregates.items()}}, ensure_ascii=False), flush=True)
 
 
 def main():
@@ -448,6 +576,12 @@ def main():
     execute.add_argument("--retain-transcripts", action="store_true")
     execute.add_argument("--timeout", type=int, default=900)
     execute.add_argument("--output", type=Path, required=True)
+    execute.add_argument("--lenient-terms", type=Path,
+                         help="TOML term readings for lenient CER (default: local private file, else tracked example)")
+    again = commands.add_parser("rescore", help="recompute strict and lenient quality for retained runs")
+    again.add_argument("--manifest", type=Path, required=True)
+    again.add_argument("--run", type=Path, nargs="+", required=True)
+    again.add_argument("--lenient-terms", type=Path)
     child = commands.add_parser("worker")
     child.add_argument("request", type=Path)
     args = parser.parse_args()
@@ -455,6 +589,8 @@ def main():
         parser.error("Contention requires --affinity-cpus 4 and --device cpu")
     if args.command == "freeze":
         freeze(args.manifest)
+    elif args.command == "rescore":
+        rescore(args)
     elif args.command == "worker":
         raise SystemExit(worker(args.request))
     else:
