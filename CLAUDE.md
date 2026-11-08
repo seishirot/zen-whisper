@@ -2,11 +2,6 @@
 
 ## What is zen-whisper
 
-Shared agent rules (local evaluation data, pre-push privacy gate, CHANGELOG /
-versioning) live in AGENTS.md and are imported here:
-
-@AGENTS.md
-
 Windows / macOS 対応の完全ローカル音声入力ツール。ホットキーでトグル録音 → Whisper で文字起こし → クリップボード経由でアクティブウィンドウにペースト。
 
 ## Commands
@@ -132,6 +127,11 @@ local扱いのCLIでcommand/environmentを変えた場合は送信先をunknown�
 既存値は候補へ混ぜず警告付きで表示する。長いタブは縦スクロール可能にする。
 モデル読込の閾値超過は警告であり、停止不能な
 ネイティブロードを裏に残して次の重量モデルを並行ロードしてはならない。
+
+Qwen extras のPyTorchは2026-11にセキュリティ対応で2.10→2.13へ更新した。
+CPUとCUDA（RTX 2070 SUPER, cu126）でTransformers経路を再確認済み。cu126ビルドは
+sm_120（RTX 50系）のカーネルを含まないため、RTX 50系では2.10同様に動かない。
+以下は2.10時点の測定。
 
 Windows RTX 3090、PyTorch 2.10.0+cu126、Transformers 5.14.1、bf16、
 sdpa、19.6秒の合成音声でのnative `-hf`参考実測

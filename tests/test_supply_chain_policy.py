@@ -69,6 +69,9 @@ def test_dependabot_delays_new_uv_releases_for_both_projects() -> None:
     assert 'directory: "/security/build-audit"' in dependabot
     assert dependabot.count("default-days: 7") == 3
     assert 'package-ecosystem: "github-actions"' in dependabot
+    # Only security updates open PRs; routine version updates are disabled.
+    assert dependabot.count("\n    open-pull-requests-limit: 0") == 4
+    assert "open-pull-requests-limit: 5" not in dependabot
 
 
 def test_audit_exceptions_are_owned_explainable_and_unexpired() -> None:

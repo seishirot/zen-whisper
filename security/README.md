@@ -27,8 +27,13 @@ missing lockfile is an error instead of an implicit dependency resolution.
 - CI audits each shipped project/platform lock and uploads the JSON evidence.
 - External GitHub Actions are fixed to full commit SHAs and run with read-only
   repository permissions.
-- Dependabot proposes weekly uv-lock updates after a seven-day cooldown and
-  checks GitHub Actions updates weekly.
+- Dependabot alerts and security updates are enabled. Security update PRs use
+  the seven-day cooldown; routine version-update PRs are disabled
+  (`open-pull-requests-limit: 0`), so non-security updates are applied
+  deliberately with the procedures below.
+- GitHub secret scanning with push protection, the local pre-push gate
+  (`tools/check_publish_safety.py` plus gitleaks) and the Secret scan workflow
+  guard against publishing credentials or local data.
 
 These controls reduce exposure to newly published or replaced dependencies.
 They do not detect unknown malware, prove that upstream source is benign, or

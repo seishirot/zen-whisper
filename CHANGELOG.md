@@ -49,6 +49,11 @@ The version is `[project].version` in `pyproject.toml`; releases are tagged
   filelock 4.2.6, fsspec 2026.9.0, msgpack 1.2.4, setuptools 84.2.1 and the
   benchmark-only pyarrow 23.0.1 (root and macOS backend locks). The minimum
   versions are enforced through `constraint-dependencies`.
+- The optional Qwen3-ASR extras (`qwen3`, `qwen3-cuda`) now use PyTorch 2.13
+  instead of 2.10, which removes the remaining PyTorch advisory exceptions.
+  The Transformers path was re-checked on CPU and on CUDA (Turing GPU). The
+  `qwen3-cuda` build is CUDA 12.6, which does not include kernels for
+  RTX 50-series (sm_120) GPUs, as before.
 
 ### Fixed
 
