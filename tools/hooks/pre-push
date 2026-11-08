@@ -1,0 +1,24 @@
+#!/bin/sh
+# ZenWhisper pre-push gate: privacy check, then gitleaks on outgoing commits.
+# Install per clone: mise exec -- python -I tools/check_publish_safety.py install-hook
+# Emergency bypass (not recommended): git push --no-verify
+set -eu
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+updates=$(cat)
+zero=0000000000000000000000000000000000000000
+
+printf '%s\n' "$updates" | mise exec -- python -I tools/check_publish_safety.py pre-push
+
+printf '%s\n' "$updates" | while read -r local_ref local_sha remote_ref remote_sha; do
+    [ -n "${local_sha:-}" ] || continue
+    [ "$local_sha" = "$zero" ] && continue
+    if [ "$remote_sha" = "$zero" ]; then
+        log_opts="$local_sha --not --remotes"
+    else
+        log_opts="$remote_sha..$local_sha"
+    fi
+    echo "gitleaks: scanning $log_opts" >&2
+    mise exec -- gitleaks git --no-banner --redact --log-opts="$log_opts" .
+done

@@ -29,5 +29,13 @@
 - Inspect every outgoing commit, not only the current working tree. If personal
   data entered unpublished commits, remove it from the outgoing history before
   pushing. A later deletion commit does not remove it from earlier commits.
+- Run the pre-push gate before publishing. Install it once per clone with
+  `mise exec -- python -I tools/check_publish_safety.py install-hook`; it scans
+  outgoing commits for local-only paths, text copied from local private
+  references, e-mail addresses, user-profile paths, host/user names, GPU UUIDs and
+  entries in the ignored `tools/bench_outputs/private/publish-denylist.local.txt`,
+  then runs gitleaks (pinned in `.mise.toml`). `check` scans `@{upstream}..HEAD`
+  manually. Do not bypass it with `--no-verify`; fix the history instead. The
+  gate is a safety net, not a substitute for reviewing the outgoing diff.
 - Keep the repository's existing synthetic audio fixtures distinct from personal
   recordings. Never replace a public fixture with a user's recording.

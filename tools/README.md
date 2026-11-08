@@ -12,6 +12,7 @@ Gitで追跡するのはスクリプト・公開用の手順・人工テスト�
 
 | ファイル | 用途 |
 |---|---|
+| `check_publish_safety.py` | push前の個人情報ゲート。送信予定コミットのローカル専用パス、private原稿の転記、メール・ユーザーパス・ホスト名・GPU UUID・ローカル拒否リストを検査。`install-hook`で`tools/hooks/pre-push`（gitleaks込み）を導入 |
 | `prepare_public_asr_corpus.py` | 固定Common Voice 8.0日本語test artifactを検証downloadし、30件以上の16kHz mono WAVとduration／境界compositeをlocal-onlyで生成 |
 | `prepare_private_asr_corpus.py` | ユーザー実録音を上書きせず、長い無音で20件へ分割して原稿・変換条件・SHA-256を固定したlocal-only realwork-v1を生成 |
 | `bench_reazon_production.py` | 現行Reazonのproduction-equivalent条件、単発入力長、thread、chunk境界、license/moduleをlocal-only・別process guard付きで測定 |
