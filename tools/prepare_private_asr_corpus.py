@@ -20,6 +20,24 @@ import soundfile as sf
 
 
 HERE = Path(__file__).resolve().parent
+
+
+def _decode_source(source: Path) -> np.ndarray:
+    """Decode to 16 kHz mono float32 with faster-whisper (M4A etc.).
+
+    faster-whisper is a Windows-only dependency; elsewhere only 16 kHz WAV/FLAC
+    sources readable by soundfile are accepted.
+    """
+    try:
+        from faster_whisper.audio import decode_audio
+    except ImportError:
+        audio, rate = sf.read(source, dtype="float32", always_2d=True)
+        if rate != SAMPLE_RATE:
+            raise ValueError(
+                f"{source.name}: {rate} Hz input needs faster-whisper for resampling"
+            ) from None
+        return np.ascontiguousarray(audio.mean(axis=1), dtype=np.float32)
+    return np.asarray(decode_audio(str(source), sampling_rate=SAMPLE_RATE), np.float32)
 DEFAULT_SOURCE = HERE / "bench_outputs" / "private" / "Recording (3).m4a"
 DEFAULT_OUTPUT = HERE / "bench_outputs" / "private" / "realwork-v1"
 SAMPLE_RATE = 16_000
@@ -172,9 +190,7 @@ def prepare(
     if manifest_path.exists() and not overwrite:
         raise FileExistsError(f"{manifest_path} exists; pass --overwrite")
 
-    from faster_whisper.audio import decode_audio  # Windows-only dependency
-
-    audio = np.asarray(decode_audio(str(source), sampling_rate=SAMPLE_RATE), np.float32)
+    audio = _decode_source(source)
     spans, detection = detect_utterances(audio)
     invalid_exclusions = [
         index for index in exclude_detected_indices if index < 1 or index > len(spans)

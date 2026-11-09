@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -628,7 +629,18 @@ def test_sound_toggle_persists_under_config_revision_lock(monkeypatch):
     assert app._settings_revision == 1
 
 
-@pytest.mark.parametrize("engine", ["whisper", "crispasr"])
+@pytest.mark.parametrize(
+    "engine",
+    [
+        "whisper",
+        pytest.param(
+            "crispasr",
+            marks=pytest.mark.skipif(
+                sys.platform != "win32", reason="CrispASR config is Windows-only"
+            ),
+        ),
+    ],
+)
 def test_settings_save_applies_live_and_marks_restart_fields(monkeypatch, engine):
     app = _make_settings_app()
     app.cfg.recognition.engine = engine
