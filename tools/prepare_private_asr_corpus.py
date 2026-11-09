@@ -17,7 +17,6 @@ from pathlib import Path
 
 import numpy as np
 import soundfile as sf
-from faster_whisper.audio import decode_audio
 
 
 HERE = Path(__file__).resolve().parent
@@ -172,6 +171,8 @@ def prepare(
         raise FileNotFoundError(source)
     if manifest_path.exists() and not overwrite:
         raise FileExistsError(f"{manifest_path} exists; pass --overwrite")
+
+    from faster_whisper.audio import decode_audio  # Windows-only dependency
 
     audio = np.asarray(decode_audio(str(source), sampling_rate=SAMPLE_RATE), np.float32)
     spans, detection = detect_utterances(audio)
