@@ -49,3 +49,33 @@ for test_file, dependency in _GUARDED_MODULES.items():
         importlib.import_module(dependency)
     except Exception:
         collect_ignore.append(test_file)
+
+
+def _install_sounddevice_stub() -> None:
+    """Let app modules import where PortAudio cannot initialize (headless CI).
+
+    Tests that need real audio are already ignored above; the stub fails loudly
+    if any remaining test actually tries to use audio.
+    """
+    stub = types.ModuleType("sounddevice")
+
+    class PortAudioError(Exception):
+        pass
+
+    def _unavailable(*_args, **_kwargs):
+        raise PortAudioError("sounddevice is unavailable in this test environment")
+
+    stub.PortAudioError = PortAudioError
+    stub.default = types.SimpleNamespace(device=(None, None), samplerate=None, channels=None)
+    stub._initialized = 0
+    for name in ("query_devices", "query_hostapis", "check_input_settings", "InputStream",
+                 "play", "stop", "wait", "get_stream", "_initialize", "_terminate"):
+        setattr(stub, name, _unavailable)
+    sys.modules["sounddevice"] = stub
+
+
+if "sounddevice" not in sys.modules:
+    try:
+        importlib.import_module("sounddevice")
+    except Exception:
+        _install_sounddevice_stub()
