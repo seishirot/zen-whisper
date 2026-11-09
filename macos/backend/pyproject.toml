@@ -36,6 +36,8 @@ zen-whisper-mac-backend = "zen_whisper_mac_backend.server:main"
 required-version = "==0.11.32"
 preview-features = ["audit-command", "json-output", "malware-check"]
 exclude-newer = "1 week"
+# Minimum versions for transitive dependencies with published advisories.
+# Raise a floor here when fixing a Dependabot security alert (security/README.md).
 constraint-dependencies = [
     "anyio>=4.14.2",
     "certifi>=2026.10.18",
