@@ -96,6 +96,8 @@ zen-whisper-submit-toggle = "src.launcher:submit_toggle_main"
 required-version = "==0.11.32"
 preview-features = ["audit-command", "json-output", "malware-check"]
 exclude-newer = "1 week"
+# Minimum versions for transitive dependencies with published advisories.
+# Raise a floor here when fixing a Dependabot security alert (security/README.md).
 constraint-dependencies = [
     "anyio>=4.14.2",
     "certifi>=2026.10.18",
