@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import sys
 import threading
 import time
@@ -10,6 +11,7 @@ import tkinter as tk
 from collections.abc import Callable
 
 from src.config import OverlayConfig
+from src.platform import is_windows
 from src.tray import TrayState
 
 logger = logging.getLogger(__name__)
@@ -68,6 +70,42 @@ def _get_active_monitor_rect() -> tuple[int, int, int, int]:
         return get_active_monitor_rect()
     else:
         return (0, 0, 1920, 1080)
+
+
+def _get_nearest_monitor_rect(
+    rect: tuple[int, int, int, int],
+) -> tuple[int, int, int, int] | None:
+    """矩形に最も近いモニターのワークエリアを返す。判定できない環境では None。"""
+    if is_windows():
+        from src.platform.windows import get_nearest_monitor_rect
+        return get_nearest_monitor_rect(rect)
+    return None
+
+
+# 左上基準の "+X+Y" のみ扱う（負座標は "+-100" 形式）。右下基準の "-X" は対象外。
+_GEOMETRY_RE = re.compile(r"^\d+x\d+\+(-?\d+)\+(-?\d+)$")
+
+
+def _parse_geometry_position(geometry: str) -> tuple[int, int] | None:
+    """Tk の geometry 文字列 ("WxH+X+Y") からウィンドウ左上座標を取り出す。"""
+    match = _GEOMETRY_RE.match(geometry.strip())
+    if match is None:
+        return None
+    return (int(match.group(1)), int(match.group(2)))
+
+
+def _clamp_into_work_area(
+    x: int,
+    y: int,
+    width: int,
+    height: int,
+    work: tuple[int, int, int, int],
+) -> tuple[int, int]:
+    """ウィンドウ全体がワークエリアに収まるよう、最小限の移動量で座標を補正する。"""
+    left, top, right, bottom = work
+    x = max(left, min(x, right - width))
+    y = max(top, min(y, bottom - height))
+    return (x, y)
 
 
 def _setup_overlay_window(root: tk.Tk) -> None:
@@ -230,6 +268,38 @@ class OverlayIndicator:
         y = bottom - _HEIGHT - 60  # タスクバー/Dock の少し上
         self._root.geometry(f"{_WIDTH}x{_HEIGHT}+{x}+{y}")
 
+    def _place_for_show(self) -> None:
+        """表示前に位置を決める。初回は既定位置、以降は画面外なら画面内へ戻す。"""
+        if not self._positioned:
+            self._position_on_active_monitor()
+            self._positioned = True
+            return
+        self._ensure_on_screen()
+
+    def _ensure_on_screen(self) -> None:
+        """モニター構成の変化やドラッグで画面外に出たウィジェットを最寄りモニター内へ戻す。"""
+        if self._root is None:
+            return
+        # 非表示中は winfo_x/y が実位置を返さないことがあるため、geometry 文字列から読む
+        try:
+            position = _parse_geometry_position(self._root.geometry())
+        except tk.TclError:
+            logger.debug("オーバーレイ位置の取得に失敗しました", exc_info=True)
+            return
+        if position is None:
+            return
+        x, y = position
+        work = _get_nearest_monitor_rect((x, y, x + _WIDTH, y + _HEIGHT))
+        if work is None:
+            return
+        new_x, new_y = _clamp_into_work_area(x, y, _WIDTH, _HEIGHT, work)
+        if (new_x, new_y) != (x, y):
+            logger.info(
+                "オーバーレイが画面外にあったため移動しました: (%d, %d) -> (%d, %d)",
+                x, y, new_x, new_y,
+            )
+            self._root.geometry(f"{_WIDTH}x{_HEIGHT}+{new_x}+{new_y}")
+
     def _start_recording_timer(self) -> None:
         """録音経過タイマーを開始する。"""
         if self._root is None or self._body_canvas is None or self._label_id is None:
@@ -285,9 +355,7 @@ class OverlayIndicator:
             label = _STATE_LABELS.get(state, "")
 
             if _is_recording_state(state):
-                if not self._positioned:
-                    self._position_on_active_monitor()
-                    self._positioned = True
+                self._place_for_show()
                 self._draw_mic_icon(_MIC_CX, _CONTENT_CY, color)
                 self._start_recording_timer()
                 self._root.deiconify()
@@ -302,9 +370,7 @@ class OverlayIndicator:
                     self._positioned = False
             else:
                 self._stop_recording_timer()
-                if not self._positioned:
-                    self._position_on_active_monitor()
-                    self._positioned = True
+                self._place_for_show()
                 self._draw_mic_icon(_MIC_CX, _CONTENT_CY, color)
                 self._body_canvas.itemconfig(self._label_id, text=label, fill="#FFFFFF")
                 self._root.deiconify()

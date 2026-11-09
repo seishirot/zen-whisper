@@ -287,6 +287,30 @@ def unregister_startup() -> bool:
 
 # ── オーバーレイ（Win32 ウィンドウ属性）───────────────
 
+_MONITOR_DEFAULTTONEAREST = 2
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [
+        ("cbSize", ctypes.wintypes.DWORD),
+        ("rcMonitor", ctypes.wintypes.RECT),
+        ("rcWork", ctypes.wintypes.RECT),
+        ("dwFlags", ctypes.wintypes.DWORD),
+    ]
+
+
+def _monitor_work_rect(hmon: int) -> tuple[int, int, int, int]:
+    """モニターハンドルのワークエリア (left, top, right, bottom) を返す。"""
+    mi = _MONITORINFO()
+    mi.cbSize = ctypes.sizeof(_MONITORINFO)
+    if not ctypes.windll.user32.GetMonitorInfoW(
+        ctypes.wintypes.HMONITOR(hmon), ctypes.byref(mi),
+    ):
+        raise OSError("GetMonitorInfoW failed")
+    rc = mi.rcWork
+    return (rc.left, rc.top, rc.right, rc.bottom)
+
+
 def get_active_monitor_rect() -> tuple[int, int, int, int]:
     """アクティブウィンドウがあるモニターのワークエリア (left, top, right, bottom) を返す。"""
     try:
@@ -295,24 +319,36 @@ def get_active_monitor_rect() -> tuple[int, int, int, int]:
         if not hwnd:
             hwnd = user32.GetDesktopWindow()
 
-        hmon = user32.MonitorFromWindow(hwnd, 2)  # MONITOR_DEFAULTTONEAREST
-
-        class MONITORINFO(ctypes.Structure):
-            _fields_ = [
-                ("cbSize", ctypes.wintypes.DWORD),
-                ("rcMonitor", ctypes.wintypes.RECT),
-                ("rcWork", ctypes.wintypes.RECT),
-                ("dwFlags", ctypes.wintypes.DWORD),
-            ]
-
-        mi = MONITORINFO()
-        mi.cbSize = ctypes.sizeof(MONITORINFO)
-        user32.GetMonitorInfoW(hmon, ctypes.byref(mi))
-        rc = mi.rcWork
-        return (rc.left, rc.top, rc.right, rc.bottom)
+        hmon = user32.MonitorFromWindow(hwnd, _MONITOR_DEFAULTTONEAREST)
+        return _monitor_work_rect(hmon)
     except Exception:
         logger.debug("モニター情報の取得に失敗、フォールバック", exc_info=True)
         return (0, 0, 1920, 1080)
+
+
+def get_nearest_monitor_rect(
+    rect: tuple[int, int, int, int],
+) -> tuple[int, int, int, int] | None:
+    """矩形に最も近いモニターのワークエリアを返す。取得できなければ None。
+
+    画面外に置き去りになった矩形でも、最寄りの実在モニターが返る。
+    """
+    try:
+        left, top, right, bottom = rect
+        win_rect = ctypes.wintypes.RECT(left, top, right, bottom)
+        user32 = ctypes.windll.user32
+        user32.MonitorFromRect.argtypes = [
+            ctypes.POINTER(ctypes.wintypes.RECT),
+            ctypes.wintypes.DWORD,
+        ]
+        user32.MonitorFromRect.restype = ctypes.wintypes.HMONITOR
+        hmon = user32.MonitorFromRect(ctypes.byref(win_rect), _MONITOR_DEFAULTTONEAREST)
+        if not hmon:
+            return None
+        return _monitor_work_rect(hmon)
+    except Exception:
+        logger.debug("最寄りモニター情報の取得に失敗しました", exc_info=True)
+        return None
 
 
 def setup_overlay_window(root: tk.Tk) -> None:

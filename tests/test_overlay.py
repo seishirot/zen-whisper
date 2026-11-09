@@ -49,6 +49,15 @@ class _FakeRoot:
         self.cancelled = []
         self.deiconify_count = 0
         self.lift_count = 0
+        self.current_geometry = "110x68+100+100"
+        self.geometry_calls = []
+
+    def geometry(self, new_geometry=None):
+        if new_geometry is None:
+            return self.current_geometry
+        self.geometry_calls.append(new_geometry)
+        self.current_geometry = new_geometry
+        return ""
 
     def after(self, delay_ms, callback):
         if delay_ms == 0:
@@ -169,6 +178,107 @@ class TestRecordingTimer:
             1,
             {"text": expected_label, "fill": expected_fill},
         )
+
+
+class TestOffscreenRecovery:
+    """画面外に出たウィジェットを表示時に戻すテスト。"""
+
+    @pytest.mark.parametrize(
+        ("geometry", "expected"),
+        [
+            ("110x68+100+200", (100, 200)),
+            ("110x68+-500+200", (-500, 200)),
+            ("110x68+100+-30", (100, -30)),
+            ("110x68-10+200", None),
+            ("garbage", None),
+        ],
+    )
+    def test_parse_geometry_position(self, geometry, expected):
+        assert overlay_module._parse_geometry_position(geometry) == expected
+
+    @pytest.mark.parametrize(
+        ("x", "y", "expected"),
+        [
+            (100, 100, (100, 100)),  # 収まっていれば動かさない
+            (-500, 100, (0, 100)),  # 左に外れた
+            (1900, 100, (1810, 100)),  # 右にはみ出した
+            (100, 1070, (100, 972)),  # 下（タスクバー）にはみ出した
+            (100, -40, (100, 0)),  # 上に外れた
+        ],
+    )
+    def test_clamp_into_work_area(self, x, y, expected):
+        work = (0, 0, 1920, 1040)
+        assert overlay_module._clamp_into_work_area(x, y, 110, 68, work) == expected
+
+    def test_offscreen_widget_is_moved_back_when_shown(self, monkeypatch):
+        overlay = _make_overlay_for_timer_tests()
+        overlay._root.current_geometry = "110x68+-3000+500"
+        requested = []
+
+        def fake_nearest(rect):
+            requested.append(rect)
+            return (0, 0, 1920, 1040)
+
+        monkeypatch.setattr(overlay_module, "_get_nearest_monitor_rect", fake_nearest)
+        monkeypatch.setattr(overlay_module.time, "monotonic", lambda: 100.0)
+
+        overlay.set_state(TrayState.RECORDING)
+
+        assert requested == [(-3000, 500, -2890, 568)]
+        assert overlay._root.geometry_calls == ["110x68+0+500"]
+        assert overlay._root.deiconify_count == 1
+
+    def test_onscreen_widget_keeps_user_position(self, monkeypatch):
+        overlay = _make_overlay_for_timer_tests()
+        overlay._root.current_geometry = "110x68+300+400"
+        monkeypatch.setattr(
+            overlay_module, "_get_nearest_monitor_rect", lambda rect: (0, 0, 1920, 1040),
+        )
+
+        overlay.set_state(TrayState.TRANSCRIBING)
+
+        assert overlay._root.geometry_calls == []
+
+    def test_unknown_monitor_leaves_position_untouched(self, monkeypatch):
+        overlay = _make_overlay_for_timer_tests()
+        overlay._root.current_geometry = "110x68+-3000+500"
+        monkeypatch.setattr(overlay_module, "_get_nearest_monitor_rect", lambda rect: None)
+
+        overlay.set_state(TrayState.TRANSCRIBING)
+
+        assert overlay._root.geometry_calls == []
+
+    def test_first_show_uses_default_position(self, monkeypatch):
+        overlay = _make_overlay_for_timer_tests()
+        overlay._positioned = False
+        monkeypatch.setattr(
+            overlay_module, "_get_active_monitor_rect", lambda: (0, 0, 1920, 1040),
+        )
+        nearest_calls = []
+        monkeypatch.setattr(
+            overlay_module,
+            "_get_nearest_monitor_rect",
+            lambda rect: nearest_calls.append(rect),
+        )
+
+        overlay.set_state(TrayState.TRANSCRIBING)
+
+        assert overlay._root.geometry_calls == ["110x68+905+912"]
+        assert overlay._positioned is True
+        assert nearest_calls == []
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Win32 API")
+class TestNearestMonitorRectWindows:
+    def test_far_offscreen_rect_maps_to_real_monitor(self):
+        from src.platform.windows import get_nearest_monitor_rect
+
+        work = get_nearest_monitor_rect((-100000, -100000, -99890, -99932))
+
+        assert work is not None
+        left, top, right, bottom = work
+        assert right > left
+        assert bottom > top
 
 
 class TestFontFamily:
