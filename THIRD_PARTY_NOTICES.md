@@ -3,9 +3,9 @@
 ZenWhisper is licensed under the MIT License ([LICENSE](LICENSE)). The
 components below are distributed under their own terms.
 
-## haas_cpu inference code (in `src/asr/haas.py`)
+## haas_cpu inference code (in `src/asr/haas.py` and `macos/backend/src/zen_whisper_mac_backend/haas.py`)
 
-Parts of `src/asr/haas.py` (log-mel frontend, TDT greedy decoding, SentencePiece
+Parts of `src/asr/haas.py` and its macOS port (log-mel frontend, TDT greedy decoding, SentencePiece
 byte-fallback detokenizer and quiet-point splitting) are adapted from the
 `haas_cpu` package in
 [kizuna-intelligence/Haas-ja-v1.0-OneCompression-ONNX](https://huggingface.co/kizuna-intelligence/Haas-ja-v1.0-OneCompression-ONNX/tree/e46a4b107ffba60336eb3de9745da6f628cfae35)
