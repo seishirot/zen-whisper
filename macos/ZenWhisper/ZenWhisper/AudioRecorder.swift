@@ -1,16 +1,33 @@
-import AVFoundation
+import AudioToolbox
+import CoreAudio
 import Foundation
 
-enum AudioRecorderError: Error {
+enum AudioRecorderError: Error, CustomStringConvertible {
     case microphoneUnavailable
     case outputFormatUnavailable
     case alreadyRecording
     case notRecording
+    case audioUnitFailed(step: String, status: OSStatus)
+
+    var description: String {
+        switch self {
+        case .microphoneUnavailable:
+            return "Microphone unavailable"
+        case .outputFormatUnavailable:
+            return "Microphone audio format unavailable"
+        case .alreadyRecording:
+            return "Already recording"
+        case .notRecording:
+            return "Not recording"
+        case .audioUnitFailed(let step, let status):
+            return "Microphone audio unit failed (\(step)): OSStatus \(status)"
+        }
+    }
 }
 
 final class AudioRecorder {
     private let paths: AppPaths
-    private let engine = AVAudioEngine()
+    private var capture: HALInputCapture?
     private var outputURL: URL?
     private var startDate: Date?
     private let captureQueue = DispatchQueue(label: "com.seishirot.zenwhisper.audio-capture")
@@ -25,7 +42,7 @@ final class AudioRecorder {
     }
 
     var isRecording: Bool {
-        engine.isRunning
+        capture != nil
     }
 
     var elapsed: TimeInterval {
@@ -41,31 +58,16 @@ final class AudioRecorder {
         }
         try paths.createPrivateDirectory(paths.recordings)
         let url = paths.recordings.appendingPathComponent("zw_tmp_\(UUID().uuidString).wav")
-        let input = engine.inputNode
-        try AudioDeviceManager.applyInputDevice(uid: deviceUID, to: input)
-        let inputFormat = input.outputFormat(forBus: 0)
-        guard inputFormat.channelCount > 0, inputFormat.sampleRate > 0 else {
+        // Resolve the device first and bind the audio unit to it before it is
+        // initialized, so the system default input (e.g. a Bluetooth headset)
+        // is never opened when another microphone is selected.
+        guard let deviceID = try AudioDeviceManager.resolveInputDeviceID(uid: deviceUID) else {
             throw AudioRecorderError.microphoneUnavailable
-        }
-        guard inputFormat.commonFormat == .pcmFormatFloat32 else {
-            throw AudioRecorderError.outputFormatUnavailable
         }
 
         let recordingID = UUID()
-        captureQueue.sync {
-            self.recordingID = recordingID
-            self.inputSampleRate = inputFormat.sampleRate
-            self.chunks = []
-            self.recentRMS = 0
-            self.lastSpeechDate = nil
-        }
-
-        input.removeTap(onBus: 0)
-        input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
+        let capture = try HALInputCapture(deviceID: deviceID) { [weak self] samples in
             guard let self else { return }
-            guard let samples = Self.monoFloatSamples(from: buffer) else {
-                return
-            }
             self.captureQueue.async {
                 if self.recordingID == recordingID {
                     self.chunks.append(samples)
@@ -77,34 +79,49 @@ final class AudioRecorder {
             }
         }
 
+        captureQueue.sync {
+            self.recordingID = recordingID
+            self.inputSampleRate = capture.sampleRate
+            self.chunks = []
+            self.recentRMS = 0
+            self.lastSpeechDate = nil
+        }
+
         outputURL = url
         startDate = Date()
-        engine.prepare()
-        try engine.start()
+        do {
+            try capture.start()
+        } catch {
+            capture.dispose()
+            captureQueue.sync { self.recordingID = nil }
+            outputURL = nil
+            startDate = nil
+            throw error
+        }
+        self.capture = capture
     }
 
     func stop() throws -> RecordingResult {
-        guard isRecording, let outputURL else {
+        guard let capture, let outputURL else {
             throw AudioRecorderError.notRecording
         }
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
-        let capture = captureQueue.sync {
-            let capture = Capture(sampleRate: inputSampleRate, chunks: chunks)
+        capture.dispose()
+        self.capture = nil
+        let captured = captureQueue.sync {
+            let captured = Capture(sampleRate: inputSampleRate, chunks: chunks)
             recordingID = nil
             chunks = []
             recentRMS = 0
             lastSpeechDate = nil
-            return capture
+            return captured
         }
         startDate = nil
         self.outputURL = nil
-        let samples = capture.flattenedSamples
+        let samples = captured.flattenedSamples
         let isEmptyAudio = RMSAnalyzer.isEmptyAudio(samples: samples)
         try Self.writeWav16kMonoPCM16(
             samples: samples,
-            sourceSampleRate: capture.sampleRate,
+            sourceSampleRate: captured.sampleRate,
             to: outputURL
         )
         return RecordingResult(
@@ -118,9 +135,8 @@ final class AudioRecorder {
     @discardableResult
     func cancel() -> String? {
         let url = outputURL
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        engine.reset()
+        capture?.dispose()
+        capture = nil
         captureQueue.sync {
             recordingID = nil
             chunks = []
@@ -160,43 +176,6 @@ final class AudioRecorder {
             shouldAutoStop: shouldAutoStop,
             reachedMaxDuration: reachedMaxDuration
         )
-    }
-
-    private static func monoFloatSamples(from buffer: AVAudioPCMBuffer) -> [Float]? {
-        guard let channels = buffer.floatChannelData else {
-            return nil
-        }
-        let frameCount = Int(buffer.frameLength)
-        let channelCount = Int(buffer.format.channelCount)
-        guard frameCount > 0, channelCount > 0 else {
-            return []
-        }
-
-        var samples = [Float](repeating: 0, count: frameCount)
-        if buffer.format.isInterleaved {
-            let interleaved = channels[0]
-            for frame in 0..<frameCount {
-                var sum: Float = 0
-                for channel in 0..<channelCount {
-                    sum += interleaved[frame * channelCount + channel]
-                }
-                samples[frame] = sum / Float(channelCount)
-            }
-        } else {
-            for channel in 0..<channelCount {
-                let data = channels[channel]
-                for frame in 0..<frameCount {
-                    samples[frame] += data[frame]
-                }
-            }
-            if channelCount > 1 {
-                let divisor = Float(channelCount)
-                for frame in 0..<frameCount {
-                    samples[frame] /= divisor
-                }
-            }
-        }
-        return samples
     }
 
     private static func writeWav16kMonoPCM16(

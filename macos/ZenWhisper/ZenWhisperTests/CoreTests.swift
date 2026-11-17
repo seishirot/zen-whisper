@@ -547,6 +547,23 @@ final class CoreTests: XCTestCase {
         )
     }
 
+    func testHALInputCaptureDownmixesInterleavedChannelsToMono() {
+        let stereo: [Float] = [0.2, 0.4, -1.0, 1.0, 0.5, 0.0]
+        let mono = stereo.withUnsafeBufferPointer {
+            HALInputCapture.monoSamples($0.baseAddress!, frames: 3, channels: 2)
+        }
+        XCTAssertEqual(mono.count, 3)
+        XCTAssertEqual(mono[0], 0.3, accuracy: 1e-6)
+        XCTAssertEqual(mono[1], 0.0, accuracy: 1e-6)
+        XCTAssertEqual(mono[2], 0.25, accuracy: 1e-6)
+
+        let single: [Float] = [0.1, -0.2]
+        let passthrough = single.withUnsafeBufferPointer {
+            HALInputCapture.monoSamples($0.baseAddress!, frames: 2, channels: 1)
+        }
+        XCTAssertEqual(passthrough, single)
+    }
+
     func testRMSAnalyzer() {
         XCTAssertTrue(RMSAnalyzer.isEmptyAudio(samples: [0, 0, 0]))
         XCTAssertFalse(RMSAnalyzer.isEmptyAudio(samples: [0.02, 0, 0]))

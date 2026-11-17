@@ -5,6 +5,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUDIO_RECORDER = REPO_ROOT / "macos/ZenWhisper/ZenWhisper/AudioRecorder.swift"
+HAL_INPUT_CAPTURE = REPO_ROOT / "macos/ZenWhisper/ZenWhisper/HALInputCapture.swift"
 
 
 def test_audio_recorder_does_not_write_avaudiofile_from_realtime_tap() -> None:
@@ -14,8 +15,14 @@ def test_audio_recorder_does_not_write_avaudiofile_from_realtime_tap() -> None:
     assert "AVAudioConverter" not in text
     assert "write(from:" not in text
     assert "writeWav16kMonoPCM16" in text
-    assert "input.installTap" in text
-    assert "AudioDeviceManager.applyInputDevice" in text
+    assert "AVAudioEngine" not in text
+    assert "HALInputCapture(deviceID: deviceID)" in text
+    assert "AudioDeviceManager.resolveInputDeviceID" in text
+
+    capture = HAL_INPUT_CAPTURE.read_text(encoding="utf-8")
+    assert "AVAudioFile" not in capture
+    assert "write(to:" not in capture
+    assert "kAudioOutputUnitProperty_SetInputCallback" in capture
 
 
 def test_audio_recorder_writes_16khz_mono_pcm16_wav_header() -> None:

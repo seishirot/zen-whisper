@@ -164,7 +164,7 @@ def test_microphone_menu_lists_devices_and_recorder_uses_selected_uid() -> None:
     assert 'NSMenuItem(title: "System Default", action: #selector(selectMicrophone(_:))' in status_controller
     assert "onSelectMicrophone?(uid.isEmpty ? nil : uid)" in status_controller
     assert "func start(deviceUID: String? = nil) throws" in recorder
-    assert "try AudioDeviceManager.applyInputDevice(uid: deviceUID, to: input)" in recorder
+    assert "try AudioDeviceManager.resolveInputDeviceID(uid: deviceUID)" in recorder
     assert "var microphoneDeviceUID: String?" in settings
     assert 'static let microphoneDeviceUID = "microphoneDeviceUID"' in settings
     assert "defaults.string(forKey: Key.microphoneDeviceUID)" in settings
