@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import ast
 import json
+import importlib.util
 import sys
 from pathlib import Path
+from types import ModuleType
 
 import numpy as np
 import pytest
@@ -88,7 +90,15 @@ class _FakeModel:
         return f"[{len(self.segments)}]"
 
 
+def _stub_onnxruntime_if_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The adapter checks for onnxruntime before loading; the root test job
+    # does not install the macOS mlx extra, and these tests never run ONNX.
+    if importlib.util.find_spec("onnxruntime") is None:
+        monkeypatch.setitem(sys.modules, "onnxruntime", ModuleType("onnxruntime"))
+
+
 def _install_fake_model(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[object]:
+    _stub_onnxruntime_if_missing(monkeypatch)
     loads: list[object] = []
 
     def fake_snapshot(engine_id: str, model_id: str) -> str:
@@ -171,6 +181,7 @@ def test_adapter_load_failure_is_model_unavailable(monkeypatch: pytest.MonkeyPat
     def failing_snapshot(engine_id: str, model_id: str) -> str:
         raise RegistryError(f"Model file hash mismatch: {model_id}/int8/encoder.onnx")
 
+    _stub_onnxruntime_if_missing(monkeypatch)
     monkeypatch.setattr(adapters_module, "_pinned_model_snapshot", failing_snapshot)
 
     with pytest.raises(AdapterError) as error:
