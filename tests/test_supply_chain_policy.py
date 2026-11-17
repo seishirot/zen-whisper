@@ -169,6 +169,9 @@ def test_github_actions_are_immutable_and_least_privilege() -> None:
     assert "uv sync --project macos/backend --locked --extra mlx --extra dev" in workflow
     assert '--require-hashes -r "$RUNNER_TEMP/requirements-mlx.txt"' in workflow
     assert "project: security/build-audit" in workflow
+    # Weekly run keeps the lock audit current while main is unchanged.
+    assert 'schedule:\n    - cron: "0 0 * * 1"' in workflow
+    assert "workflow_dispatch:" in workflow
 
 
 def test_bootstrap_docs_do_not_pipe_network_content_to_a_shell() -> None:
