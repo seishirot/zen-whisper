@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Weekly run so advisories published while main is unchanged are caught by
+  # our own uv audit, independent of Dependabot alert timing.
+  schedule:
+    - cron: "0 0 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read

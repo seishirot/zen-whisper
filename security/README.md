@@ -25,6 +25,9 @@ missing lockfile is an error instead of an implicit dependency resolution.
   to ignore discovered `pyproject.toml`/`uv.toml` files before installing the
   verified wheel with `--no-deps`.
 - CI audits each shipped project/platform lock and uploads the JSON evidence.
+  The Tests workflow also runs weekly (Monday 00:00 UTC) and on demand, so
+  advisories published while `main` is unchanged are caught without waiting
+  for a push or for Dependabot alerts.
 - External GitHub Actions are fixed to full commit SHAs and run with read-only
   repository permissions.
 - Dependabot alerts and security updates are enabled. Security update PRs use
