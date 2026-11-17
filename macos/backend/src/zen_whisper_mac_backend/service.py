@@ -470,6 +470,12 @@ class BackendService:
                 self._active_enhancement_process = None
 
     def _adapter(self, engine_id: str) -> ASRAdapter:
+        # Requests run one at a time on the ASR worker, so releasing the other
+        # engines' models here cannot race a transcription that is using them.
+        for other_id, other in self._adapters.items():
+            unload = getattr(other, "unload", None)
+            if other_id != engine_id and callable(unload):
+                unload()
         adapter = self._adapters.get(engine_id)
         if adapter is None:
             adapter = make_adapter(engine_id)

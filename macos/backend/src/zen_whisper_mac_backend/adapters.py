@@ -10,6 +10,7 @@ import gc
 import hashlib
 import inspect
 import logging
+import os
 import re
 import sys
 from collections.abc import Mapping
@@ -26,7 +27,7 @@ AdapterErrorKind = Literal["model_unavailable", "audio_unreadable"]
 _ADAPTER_ERROR_KINDS = {"model_unavailable", "audio_unreadable"}
 _MODEL_ID_TOKEN_PREFIX = "__ZW_PUBLIC_MODEL_ID_"
 _PUBLIC_MODEL_ID_RE = re.compile(
-    r"\b(?:mlx-community|Qwen|openai|Blaizzy)/[A-Za-z0-9][A-Za-z0-9._-]*\b"
+    r"\b(?:mlx-community|Qwen|openai|Blaizzy|kizuna-intelligence)/[A-Za-z0-9][A-Za-z0-9._-]*\b"
 )
 _PUBLIC_MODEL_ID_PRIVATE_SUFFIX_RE = re.compile(
     rf"({_MODEL_ID_TOKEN_PREFIX}\d+__);\s*"
@@ -323,11 +324,85 @@ class MlxQwen3AsrAdapter:
         return self._model
 
 
+class HaasJaAdapter:
+    """Haas-ja-v1.0 (FastConformer-TDT) on the ONNX Runtime CPU provider.
+
+    Japanese only; profile hints are not supported, so the adapter exposes no
+    ``transcribe_with_hints``.
+    """
+
+    engine_id = "haas-ja"
+
+    def __init__(self) -> None:
+        self._loaded_model_id: str | None = None
+        self._model: object | None = None
+
+    def preload(self, model_id: str, language: str) -> None:
+        self._ensure_model(model_id)
+
+    def unload(self) -> None:
+        """Release the ONNX sessions when the service switches to another engine."""
+        if self._model is None:
+            return
+        self._model = None
+        self._loaded_model_id = None
+        gc.collect()
+
+    def transcribe(self, audio_path: Path, model_id: str, language: str) -> str:
+        model = self._ensure_model(model_id)
+        try:
+            audio = _load_wav_float32_mono_16k(audio_path)
+        except AdapterError:
+            raise
+        except Exception as exc:
+            raise AdapterError("Could not read WAV audio", kind="audio_unreadable") from exc
+        if not np.isfinite(audio).all():
+            raise AdapterError("WAV audio contains non-finite samples", kind="audio_unreadable")
+        from zen_whisper_mac_backend.haas import transcribe_audio
+
+        try:
+            return transcribe_audio(model.transcribe_segment, audio)
+        except Exception as exc:  # pragma: no cover - depends on ONNX Runtime/model IO
+            raise AdapterError(
+                "Haas-ja transcribe failed",
+                diagnostic=_safe_exception_summary(exc),
+            ) from exc
+
+    def _ensure_model(self, model_id: str):
+        if self._model is not None and self._loaded_model_id == model_id:
+            return self._model
+        try:
+            import onnxruntime  # noqa: F401
+        except Exception as exc:  # pragma: no cover - depends on optional install
+            raise AdapterError("onnxruntime is required for Haas-ja") from exc
+        from zen_whisper_mac_backend.haas import HaasModel
+
+        self.unload()
+        try:
+            snapshot = Path(_pinned_model_snapshot(self.engine_id, model_id))
+            model = HaasModel(snapshot, threads=_haas_threads())
+        except Exception as exc:  # pragma: no cover - depends on ONNX Runtime/model IO
+            raise AdapterError(
+                "Haas-ja unavailable",
+                diagnostic=_safe_exception_summary(exc),
+            ) from exc
+        self._model = model
+        self._loaded_model_id = model_id
+        return model
+
+
+def _haas_threads() -> int:
+    """Encoder threads: the Windows-validated 4, capped by available cores."""
+    return max(1, min(4, os.cpu_count() or 1))
+
+
 def make_adapter(engine_id: str) -> ASRAdapter:
     if engine_id == "mlx-whisper":
         return MlxWhisperAdapter()
     if engine_id == "mlx-qwen3-asr":
         return MlxQwen3AsrAdapter()
+    if engine_id == "haas-ja":
+        return HaasJaAdapter()
     if engine_id == "dummy":
         return DummyAdapter()
     raise AdapterError(f"Unsupported engine: {engine_id}")

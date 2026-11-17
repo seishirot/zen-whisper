@@ -8,7 +8,7 @@ Local-first voice-to-text input tool. Toggle recording with a hotkey, transcribe
 
 - **Hotkey toggle recording** — press to start, press again to stop (or auto-stop on silence via VAD)
 - **Local ASR transcription** — no data leaves your machine after models are installed
-- **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper or Transformers-native Qwen3-ASR) and macOS native menu bar app (Apple Silicon/mlx-whisper and MLX Qwen3-ASR)
+- **Cross-platform** — Windows (CPU/Reazon K2 or faster-whisper, CUDA/faster-whisper or Transformers-native Qwen3-ASR) and macOS native menu bar app (Apple Silicon/mlx-whisper, MLX Qwen3-ASR, or Haas-ja on the CPU)
 - **Domain profiles** — reusable project context, preferred spellings, pronunciations, and exact error mappings
 - **Optional CLI cleanup** — generic shell-free presets, including Codex, Claude Code, and Kiro CLI (remote) plus Ollama (loopback local)
 - **Tray / menu bar** — runs in the background with a Windows tray icon or macOS menu bar item showing recording state
@@ -238,8 +238,8 @@ Use the Windows tray icon or macOS menu bar item to:
 - Select microphone input, or refresh the microphone list after devices change
 - Select ASR engine/model. The Windows parent items show the current language,
   engine, and device directly. Windows Python supports
-  Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper and
-  MLX Qwen3-ASR entries.
+  Whisper/Reazon K2/Qwen3-ASR entries; macOS native supports MLX Whisper,
+  MLX Qwen3-ASR, and Haas-ja (CPU) entries.
 - Open `Settings…` to edit the native macOS app settings in one window. The
   existing menu items remain available for quick changes and stay synchronized
   with the window.
@@ -326,10 +326,18 @@ without a visible GPU are disabled in the menu.
 
 ### macOS Native Recognition Model Menu
 
-The macOS native app uses MLX models and stores its selection in macOS app
-settings instead of `config.toml`. Choose `Recognition Model` from the menu bar
-item to select MLX Whisper or MLX Qwen3-ASR. It intentionally does not include
-the Windows/Python CPU, CUDA, or Reazon K2 menu entries.
+The macOS native app uses MLX models plus the ONNX Runtime Haas-ja model and
+stores its selection in macOS app settings instead of `config.toml`. Choose
+`Recognition Model` from the menu bar item to select MLX Whisper, MLX Qwen3-ASR,
+or Haas-ja (CPU). It intentionally does not include the Windows/Python CUDA,
+Reazon K2, or CrispASR menu entries.
+
+Haas-ja on macOS is Japanese only and uses the same pinned
+`kizuna-intelligence/Haas-ja-v1.0-OneCompression-ONNX` snapshot as Windows,
+limited to the `int8` encoder (about 0.7 GB, SHA-256 verified on first load).
+It runs on the CPU with up to 4 encoder threads, splits recordings longer than
+28 seconds near quiet points, and does not consume profile recognition hints.
+Switching to another engine releases its ONNX sessions.
 
 ### macOS Native Settings Window
 

@@ -59,6 +59,7 @@ hotkey.py → sounds.py(開始音) → recorder.py(録音+VAD) → sounds.py(停
 
 エンジンは `whisper`（既定）, `reazon-k2`, `haas-ja`, `qwen3-asr`, `crispasr`。トレイメニューは
 Whisper (GPU, CPU, MLX) / Reazon K2 / Haas-ja (CPU) / CrispASR / Qwen3-ASR (1.7B, 0.6B) の階層。
+macOSネイティブ版は MLX Whisper / MLX Qwen3-ASR / Haas-ja (CPU) を選べる。
 
 - 自動エンジン選択はUX上採用しない。ユーザーがトレイメニューでモデル/実行先を明示的に選ぶ。
 - `reazon-k2`: Windows CPU高速モード。`uv sync --locked --extra reazon` が必要。
@@ -71,6 +72,10 @@ Whisper (GPU, CPU, MLX) / Reazon K2 / Haas-ja (CPU) / CrispASR / Qwen3-ASR (1.7B
   推論コードは配布元 `haas_cpu` を `src/asr/haas.py` へApache-2.0表記付きで移植し、
   配布元Pythonコードは実行しない。長音声は `haas_chunk_sec` 付近の最小エネルギー点で
   分割し、各区間は独立にgreedy TDTデコードする。認識ヒント非対応。
+  macOSネイティブ版（`macos/backend`）でも `haas-ja` を日本語専用・int8のみで提供する。
+  rootの `src` はimportできないため推論部は `zen_whisper_mac_backend/haas.py` に複製し、
+  `tests/macos/test_haas_backend.py` のASTパリティテストでWindows版との一致を保つ。
+  onnxruntimeは `mlx` extraに含める（インストーラが単一のrequirementsを出力するため）。
 - `whisper`: Windows は faster-whisper、macOS は MLX。CPU解決時は `compute_type="int8"` と `cpu_threads` を明示する。
 - `qwen3-asr`: Windowsネイティブの非ストリーミング経路。
   Transformers 5.14の `AutoProcessor` + `AutoModelForMultimodalLM` と

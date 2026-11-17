@@ -103,7 +103,10 @@ final class SettingsEditorStateTests: XCTestCase {
             launchAtLoginStatus: .disabled
         )
 
-        XCTAssertEqual(state.baselineSettings, authoritative)
+        XCTAssertEqual(
+            state.baselineSettings,
+            SettingsEditorState.normalized(authoritative, using: registry)
+        )
         XCTAssertEqual(state.draftSettings.hotkey, .controlOptionCommandSpace)
         XCTAssertEqual(state.draftSettings.language, "en")
         XCTAssertEqual(

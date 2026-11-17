@@ -2,7 +2,8 @@
 name = "zen-whisper-mac-backend"
 version = "0.1.0"
 description = "macOS native backend for zen-whisper"
-license = "MIT"
+license = "MIT AND Apache-2.0"
+license-files = ["LICENSES/*", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "numpy>=1.26",
@@ -10,10 +11,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# On-device ASR runtimes installed by the app. onnxruntime runs Haas-ja on the
+# CPU; it is not an MLX package but shares this extra so the installer and CI
+# keep exporting a single requirements file.
 mlx = [
     "huggingface-hub>=1.21,<2",
     "mlx-whisper>=0.4,<1.0",
     "mlx-audio>=0.4,<0.5",
+    "onnxruntime>=1.23,<2",
 ]
 dev = [
     "pytest>=9.0.3",
