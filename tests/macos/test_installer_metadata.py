@@ -247,6 +247,16 @@ def test_installer_resolves_swift_with_xcrun() -> None:
     assert "\nswift build " not in install_app
 
 
+def test_installer_copies_the_executable_swiftpm_just_built() -> None:
+    install_app = INSTALL_APP.read_text(encoding="utf-8")
+
+    # Searching .build picked a stale binary left by another SwiftPM build
+    # system, so the installed app silently missed newer changes.
+    assert "--arch arm64 --show-bin-path)" in install_app
+    assert 'EXECUTABLE="$SWIFT_BIN_DIR/zen-whisper"' in install_app
+    assert '-path "*/release/zen-whisper"' not in install_app
+
+
 def test_install_app_packages_bundled_postprocessor_catalog() -> None:
     install_app = INSTALL_APP.read_text(encoding="utf-8")
     catalog_store = (
