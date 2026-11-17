@@ -40,8 +40,16 @@ struct ModelRegistry: Decodable, Equatable {
     }
 
     static func loadDefault() throws -> ModelRegistry {
+        // `.copy("Resources")` keeps the folder, and newer SwiftPM build
+        // systems place it under the bundle's resource root, so probe that
+        // subdirectory as well (same as the postprocessor catalog lookup).
         let url = Bundle.main.url(forResource: "model_registry", withExtension: "json")
             ?? Bundle.module.url(forResource: "model_registry", withExtension: "json")
+            ?? Bundle.module.url(
+                forResource: "model_registry",
+                withExtension: "json",
+                subdirectory: "Resources"
+            )
         guard let url else {
             throw RegistryError.missingResource
         }
