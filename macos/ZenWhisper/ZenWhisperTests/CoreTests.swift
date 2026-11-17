@@ -469,11 +469,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreDropsDuplicateSubmitHotkey() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         defaults.set("shift+space", forKey: "hotkey")
         defaults.set("keycode:\(UInt32(kVK_Space)):\(UInt32(shiftKey)):Custom Space", forKey: "submitHotkey")
 
@@ -486,11 +482,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreRemovesLegacyUnverifiedPasteFallback() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         defaults.set(true, forKey: "allowUnverifiedPasteFallback")
         let store = SettingsStore(defaults: defaults, registry: registry)
         let settings = store.load()
@@ -503,11 +495,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreMigratesLegacyClipboardRestoreModeToSafeKeepMode() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         defaults.set(
             OutputMode.pasteRestoreClipboard.rawValue,
             forKey: "outputMode"
@@ -530,11 +518,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreNeverPersistsLegacyClipboardRestoreMode() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         let store = SettingsStore(defaults: defaults, registry: registry)
         var settings = store.load()
         settings.outputMode = .pasteRestoreClipboard
