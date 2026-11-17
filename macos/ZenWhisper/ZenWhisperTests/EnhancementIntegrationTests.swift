@@ -88,9 +88,7 @@ final class EnhancementRequestResolverTests: XCTestCase {
     }
 
     func testSettingsStoreRoundTripsEnhancementSelection() throws {
-        let suiteName = "ZenWhisper.EnhancementIntegrationTests.\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let defaults = InMemoryUserDefaults()
         let registry = try ModelRegistry.loadDefault()
         let store = SettingsStore(defaults: defaults, registry: registry)
         var settings = store.load()

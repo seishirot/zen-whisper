@@ -1,5 +1,4 @@
 import AudioToolbox
-import AVFoundation
 import CoreAudio
 import Foundation
 
@@ -11,14 +10,11 @@ struct AudioInputDevice: Equatable {
 
 enum AudioDeviceError: Error, CustomStringConvertible {
     case selectedInputDeviceUnavailable(String)
-    case couldNotApplyInputDevice(OSStatus)
 
     var description: String {
         switch self {
         case .selectedInputDeviceUnavailable(let uid):
             return "Selected microphone is unavailable: \(uid)"
-        case .couldNotApplyInputDevice(let status):
-            return "Could not select microphone: OSStatus \(status)"
         }
     }
 }
@@ -80,34 +76,21 @@ enum AudioDeviceManager {
         return inputDevices().first { $0.id == deviceID }
     }
 
-    static func applyInputDevice(uid: String?, to inputNode: AVAudioInputNode) throws {
-        let targetDeviceID: AudioDeviceID
+    /// Resolves the capture device before any audio unit is created.
+    ///
+    /// The device must be chosen up front: opening an I/O unit against the
+    /// system default input first (as `AVAudioEngine.inputNode` does) makes
+    /// macOS switch a Bluetooth headset that is the default input into its
+    /// low-quality hands-free profile, even if another device is selected
+    /// afterwards.
+    static func resolveInputDeviceID(uid: String?) throws -> AudioDeviceID? {
         if let uid, !uid.isEmpty {
             guard let deviceID = deviceID(forUID: uid) else {
                 throw AudioDeviceError.selectedInputDeviceUnavailable(uid)
             }
-            targetDeviceID = deviceID
-        } else {
-            guard let defaultDevice = defaultInputDevice() else {
-                return
-            }
-            targetDeviceID = defaultDevice.id
+            return deviceID
         }
-        var deviceID = targetDeviceID
-        guard let audioUnit = inputNode.audioUnit else {
-            throw AudioDeviceError.couldNotApplyInputDevice(-1)
-        }
-        let status = AudioUnitSetProperty(
-            audioUnit,
-            kAudioOutputUnitProperty_CurrentDevice,
-            kAudioUnitScope_Global,
-            0,
-            &deviceID,
-            UInt32(MemoryLayout<AudioDeviceID>.size)
-        )
-        guard status == noErr else {
-            throw AudioDeviceError.couldNotApplyInputDevice(status)
-        }
+        return defaultInputDevice()?.id
     }
 
     private static func allAudioDeviceIDs() -> [AudioDeviceID] {

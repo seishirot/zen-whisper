@@ -469,11 +469,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreDropsDuplicateSubmitHotkey() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         defaults.set("shift+space", forKey: "hotkey")
         defaults.set("keycode:\(UInt32(kVK_Space)):\(UInt32(shiftKey)):Custom Space", forKey: "submitHotkey")
 
@@ -486,11 +482,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreRemovesLegacyUnverifiedPasteFallback() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         defaults.set(true, forKey: "allowUnverifiedPasteFallback")
         let store = SettingsStore(defaults: defaults, registry: registry)
         let settings = store.load()
@@ -503,11 +495,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreMigratesLegacyClipboardRestoreModeToSafeKeepMode() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         defaults.set(
             OutputMode.pasteRestoreClipboard.rawValue,
             forKey: "outputMode"
@@ -530,11 +518,7 @@ final class CoreTests: XCTestCase {
 
     func testSettingsStoreNeverPersistsLegacyClipboardRestoreMode() throws {
         let registry = try ModelRegistry.loadDefault()
-        let suiteName = "zen-whisper-tests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
+        let defaults = InMemoryUserDefaults()
         let store = SettingsStore(defaults: defaults, registry: registry)
         var settings = store.load()
         settings.outputMode = .pasteRestoreClipboard
@@ -545,6 +529,23 @@ final class CoreTests: XCTestCase {
             defaults.string(forKey: "outputMode"),
             OutputMode.pasteKeepClipboard.rawValue
         )
+    }
+
+    func testHALInputCaptureDownmixesInterleavedChannelsToMono() {
+        let stereo: [Float] = [0.2, 0.4, -1.0, 1.0, 0.5, 0.0]
+        let mono = stereo.withUnsafeBufferPointer {
+            HALInputCapture.monoSamples($0.baseAddress!, frames: 3, channels: 2)
+        }
+        XCTAssertEqual(mono.count, 3)
+        XCTAssertEqual(mono[0], 0.3, accuracy: 1e-6)
+        XCTAssertEqual(mono[1], 0.0, accuracy: 1e-6)
+        XCTAssertEqual(mono[2], 0.25, accuracy: 1e-6)
+
+        let single: [Float] = [0.1, -0.2]
+        let passthrough = single.withUnsafeBufferPointer {
+            HALInputCapture.monoSamples($0.baseAddress!, frames: 2, channels: 1)
+        }
+        XCTAssertEqual(passthrough, single)
     }
 
     func testRMSAnalyzer() {

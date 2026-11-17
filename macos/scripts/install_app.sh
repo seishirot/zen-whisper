@@ -235,7 +235,11 @@ BACKEND_CODE_HASH="$(PYTHONSAFEPATH=1 "$PYTHON_PATH" -P "$BACKEND_DIR/src/zen_wh
 SWIFT_PATH="$(/usr/bin/xcrun --find swift 2>/dev/null || true)"
 [[ -x "$SWIFT_PATH" ]] || fail "Swift toolchain is required. Check xcode-select -p."
 "$SWIFT_PATH" build -c release --package-path "$SWIFT_DIR" --arch arm64
-EXECUTABLE="$(/usr/bin/find "$SWIFT_DIR/.build" -path "*/release/zen-whisper" -type f -perm -111 | /usr/bin/head -n 1)"
+# Ask SwiftPM where it wrote this build. Searching .build can pick up a stale
+# binary left by a different SwiftPM build system (e.g. arm64-apple-macosx/release
+# versus out/Products/Release).
+SWIFT_BIN_DIR="$("$SWIFT_PATH" build -c release --package-path "$SWIFT_DIR" --arch arm64 --show-bin-path)"
+EXECUTABLE="$SWIFT_BIN_DIR/zen-whisper"
 [[ -x "$EXECUTABLE" ]] || fail "Swift executable not found"
 /bin/cp "$EXECUTABLE" "$APP_STAGING/Contents/MacOS/zen-whisper"
 
