@@ -1048,6 +1048,8 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(plist["ProgramArguments"] as? [String], ["/usr/bin/open", LoginItemManager.appPath])
         XCTAssertEqual(plist["RunAtLoad"] as? Bool, true)
         XCTAssertEqual(launchctlCalls.map { $0.first }, ["bootout", "bootstrap"])
+        XCTAssertEqual(launchctlCalls.first, ["bootout", manager.serviceTarget])
+        XCTAssertEqual(manager.serviceTarget, "gui/\(getuid())/\(LoginItemManager.label)")
 
         try manager.setEnabled(false)
 
