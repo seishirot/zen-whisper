@@ -208,9 +208,16 @@ struct LoginItemManager {
         }
     }
 
+    var serviceTarget: String {
+        "\(launchDomain())/\(Self.label)"
+    }
+
     private func bootoutIfLoaded() throws {
+        // Boot out by service target, not plist path: on macOS 26 a path-based
+        // bootout of an unloaded service fails with the ambiguous
+        // "Boot-out failed: 5: Input/output error" instead of "3: No such process".
         do {
-            try launchctl(["bootout", launchDomain(), plistURL.path])
+            try launchctl(["bootout", serviceTarget])
         } catch LoginItemError.launchctlFailed(let message) where Self.isBenignBootoutFailure(message) {
             return
         }

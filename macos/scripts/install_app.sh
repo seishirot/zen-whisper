@@ -339,7 +339,7 @@ remove_legacy_python_launch_agent() {
   local cleanup_ok=1
   local bootout_error
   bootout_error="$(mktemp "${TMPDIR:-/tmp}/zen-whisper-launchctl-bootout.XXXXXX")"
-  if /bin/launchctl bootout "gui/$(/usr/bin/id -u)" "$plist" >/dev/null 2>"$bootout_error"; then
+  if /bin/launchctl bootout "gui/$(/usr/bin/id -u)/${label}" >/dev/null 2>"$bootout_error"; then
     :
   else
     local bootout_status=$?
@@ -347,7 +347,7 @@ remove_legacy_python_launch_agent() {
     bootout_output="$(cat "$bootout_error")"
     if ! launchctl_failure_is_benign "$bootout_output"; then
       cleanup_ok=0
-      echo "install_app.sh: warning: legacy LaunchAgent bootout failed: $(launchctl_failure_detail bootout "$bootout_status" "$bootout_output" "gui/$(/usr/bin/id -u) $plist")" >&2
+      echo "install_app.sh: warning: legacy LaunchAgent bootout failed: $(launchctl_failure_detail bootout "$bootout_status" "$bootout_output" "gui/$(/usr/bin/id -u)/${label}")" >&2
     fi
   fi
   /bin/rm -f "$bootout_error"
